@@ -63,11 +63,10 @@ def setup_integrals(
     alphas, coeffs = basis.create_cgtos()
     dev = basis.device
     index = (
-        basis.ihelp
-        if basis.ihelp.device == dev
-        else basis.ihelp.to(device=dev)
+        basis.ihelp if basis.ihelp.device == dev else basis.ihelp.to(device=dev)
     )
-    pair_plan = prepare(index, dev, dtype=alphas[0].dtype)
+    dtype = alphas[0].dtype if alphas else basis.slater.dtype
+    pair_plan = prepare(index, dev, dtype=dtype)
     return PytorchIntegralSetup(
         index=index,
         alphas=tuple(alphas),

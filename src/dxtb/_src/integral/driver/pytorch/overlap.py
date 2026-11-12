@@ -40,8 +40,8 @@ def build_overlap(
     return assemble_matrix(
         get_kernel(setup.algorithm),
         None,
-        list(setup.alphas),
-        list(setup.coeffs),
+        setup.alphas,
+        setup.coeffs,
         positions,
         plan=setup.pair_plan,
     )[0]

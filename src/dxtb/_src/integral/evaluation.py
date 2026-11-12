@@ -26,31 +26,18 @@ from dxtb._src.basis.bas import Basis
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.integral.driver.libcint import (
     LibcintIntegralSetup,
-    build_dipole_libcint,
-    build_overlap_libcint,
-    build_quadrupole_libcint,
-    prepare_libcint,
-    setup_libcint,
 )
-from dxtb._src.integral.driver.pytorch.multipole import (
-    build_dipole as build_dipole_pytorch,
+from dxtb._src.integral.driver.libcint import (
+    evaluate_moments as evaluate_libcint_moments,
 )
-from dxtb._src.integral.driver.pytorch.multipole import (
-    build_quadrupole as build_quadrupole_pytorch,
-)
-from dxtb._src.integral.driver.pytorch.overlap import (
-    build_overlap as build_overlap_pytorch,
-)
-from dxtb._src.integral.driver.pytorch.setup import (
+from dxtb._src.integral.driver.libcint import setup_libcint
+from dxtb._src.integral.driver.pytorch import (
     PytorchIntegralSetup,
-    setup_integrals,
 )
-from dxtb._src.integral.types.dipole import shift_dipole_origin
-from dxtb._src.integral.types.quadrupole import (
-    make_quadrupole_traceless,
-    reduce_quadrupole_9_to_6,
-    shift_quadrupole_origin,
+from dxtb._src.integral.driver.pytorch import (
+    evaluate_moments as evaluate_pytorch_moments,
 )
+from dxtb._src.integral.driver.pytorch import setup_integrals
 from dxtb._src.param import ParamModule
 from dxtb._src.typing import Tensor
 from dxtb._src.utils.tensors import normalize_device
@@ -165,120 +152,53 @@ def setup_integral_evaluation(
             "setup_integral_evaluation requires a single System "
             "(batch_mode == 0)."
         )
+    if driver_type not in (
+        labels.INTDRIVER_PYTORCH,
+        labels.INTDRIVER_LIBCINT,
+    ):
+        raise ValueError(f"Unknown integral driver '{driver_type}'.")
 
     target_device = numbers.device if device is None else device
     target_dtype = par.dtype if dtype is None else dtype
-
-    if driver_type == labels.INTDRIVER_PYTORCH:
-        backend_numbers = (
-            numbers
-            if numbers.device == target_device
-            else numbers.to(device=target_device)
-        )
-        backend_ihelp = (
-            ihelp
-            if ihelp.device == target_device
-            else ihelp.to(device=target_device)
-        )
-        basis = Basis(
-            backend_numbers,
-            par,
-            backend_ihelp,
-            device=target_device,
-            dtype=target_dtype,
-        )
-        pytorch_setup = setup_integrals(
-            basis,
-            **({} if algorithm is None else {"algorithm": algorithm}),
-        )
-        return IntegralSetup(
-            driver_type=driver_type,
-            intlevel=intlevel,
-            logical_device=target_device,
-            backend=pytorch_setup,
-        )
-
-    if driver_type != labels.INTDRIVER_LIBCINT:
-        raise ValueError(f"Unknown integral driver '{driver_type}'.")
-
-    libcint_device = (
-        torch.device("cpu") if force_cpu_for_libcint else target_device
+    backend_device = (
+        torch.device("cpu")
+        if driver_type == labels.INTDRIVER_LIBCINT and force_cpu_for_libcint
+        else target_device
     )
+
     backend_numbers = (
         numbers
-        if numbers.device == libcint_device
-        else numbers.to(device=libcint_device)
+        if numbers.device == backend_device
+        else numbers.to(device=backend_device)
     )
     backend_ihelp = (
         ihelp
-        if ihelp.device == libcint_device
-        else ihelp.to(device=libcint_device)
+        if ihelp.device == backend_device
+        else ihelp.to(device=backend_device)
     )
     basis = Basis(
         backend_numbers,
         par,
         backend_ihelp,
-        device=libcint_device,
+        device=backend_device,
         dtype=target_dtype,
     )
+
+    backend: PytorchIntegralSetup | LibcintIntegralSetup
+    if driver_type == labels.INTDRIVER_PYTORCH:
+        backend = setup_integrals(
+            basis,
+            **({} if algorithm is None else {"algorithm": algorithm}),
+        )
+    else:
+        backend = setup_libcint(basis, force_cpu=force_cpu_for_libcint)
+
     return IntegralSetup(
         driver_type=driver_type,
         intlevel=intlevel,
         logical_device=target_device,
-        backend=setup_libcint(basis, force_cpu=force_cpu_for_libcint),
+        backend=backend,
     )
-
-
-def _evaluate_pytorch_moments(
-    backend: PytorchIntegralSetup,
-    positions: Tensor,
-    intlevel: int,
-) -> tuple[Tensor, Tensor | None, Tensor | None, IndexHelper]:
-    """Evaluate normalized overlap and ket-centered moments with PyTorch."""
-    overlap = build_overlap_pytorch(backend, positions)
-    ihelp = backend.index
-    dipole = None
-    quadrupole = None
-
-    if intlevel >= labels.INTLEVEL_DIPOLE:
-        raw_dipole = build_dipole_pytorch(backend, positions)
-        orbital_positions = ihelp.spread_atom_to_orbital(
-            positions, dim=-2, extra=True
-        )
-        dipole = shift_dipole_origin(raw_dipole, overlap, orbital_positions)
-        if intlevel >= labels.INTLEVEL_QUADRUPOLE:
-            raw_quadrupole = build_quadrupole_pytorch(backend, positions)
-            quadrupole = shift_quadrupole_origin(
-                reduce_quadrupole_9_to_6(raw_quadrupole),
-                raw_dipole,
-                overlap,
-                orbital_positions,
-            )
-            quadrupole = make_quadrupole_traceless(quadrupole)
-
-    return overlap, dipole, quadrupole, ihelp
-
-
-def _evaluate_libcint_moments(
-    backend: LibcintIntegralSetup,
-    positions: Tensor,
-    intlevel: int,
-) -> tuple[Tensor, Tensor | None, Tensor | None, IndexHelper]:
-    """Evaluate normalized overlap and ket-centered moments with libcint."""
-    call_data = prepare_libcint(backend, positions)
-    overlap = build_overlap_libcint(call_data)
-    dipole = None
-    quadrupole = None
-
-    if intlevel >= labels.INTLEVEL_DIPOLE:
-        # tad-libcint 0.4 returns native ket-centered j/jj moments;
-        # jj is already packed as xx, yx, yy, zx, zy, zz.
-        dipole = build_dipole_libcint(call_data)
-        if intlevel >= labels.INTLEVEL_QUADRUPOLE:
-            raw_quadrupole = build_quadrupole_libcint(call_data)
-            quadrupole = make_quadrupole_traceless(raw_quadrupole)
-
-    return overlap, dipole, quadrupole, call_data.index
 
 
 def build_integral_matrices(
@@ -298,15 +218,17 @@ def build_integral_matrices(
     if setup.driver_type == labels.INTDRIVER_PYTORCH:
         if setup.pytorch is None:
             raise RuntimeError("PyTorch integral setup is missing.")
-        overlap, dipole, quadrupole, ihelp = _evaluate_pytorch_moments(
+        overlap, dipole, quadrupole = evaluate_pytorch_moments(
             setup.pytorch, positions, setup.intlevel
         )
+        ihelp = setup.pytorch.index
     elif setup.driver_type == labels.INTDRIVER_LIBCINT:
         if setup.libcint is None:
             raise RuntimeError("libcint integral setup is missing.")
-        overlap, dipole, quadrupole, ihelp = _evaluate_libcint_moments(
+        overlap, dipole, quadrupole = evaluate_libcint_moments(
             setup.libcint, positions, setup.intlevel
         )
+        ihelp = setup.libcint.index
     else:
         raise ValueError(f"Unknown integral driver '{setup.driver_type}'.")
 

@@ -18,12 +18,11 @@
 Driver: Libcint
 ===============
 
-Setup Node and call-local inputs for `libcint`-based integrals.
+Setup Node and evaluation-boundary basis construction for `libcint` integrals.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
@@ -32,42 +31,54 @@ from tad_mctc.tree import Node, child, context
 from dxtb import IndexHelper
 from dxtb._src.basis.bas import (
     Basis,
-    create_libcint_cgtos_from_data,
-    create_libcint_from_data,
+    ShellLayout,
+    build_shell_layout,
+    create_libcint_from_layout,
 )
-from dxtb._src.typing import Any, Literal, Tensor
+from dxtb._src.typing import Tensor
 
 if TYPE_CHECKING:
     from dxtb._src.exlibs import libcint
 
 __all__ = [
-    "LibcintCallData",
     "LibcintIntegralSetup",
-    "prepare_libcint",
     "setup_libcint",
 ]
 
 
 class LibcintIntegralSetup(Node):
-    """Transform-visible setup for single-System libcint evaluation."""
+    """Immutable, transform-visible setup for single-System libcint evaluation."""
 
-    numbers: Tensor = child(keep_dtype=True)
-    unique: Tensor = child(keep_dtype=True)
-    ngauss: Tensor = child(keep_dtype=True)
-    pqn: Tensor = child(keep_dtype=True)
-    slater: Tensor = child()
-    valence: Tensor = child(keep_dtype=True)
     index: IndexHelper = child()
-    sto: Literal["gfn1", "gfn2"] = context(default="gfn2")
+    numbers: Tensor = child(keep_dtype=True)
+    alphas: tuple[Tensor, ...] = child()
+    coeffs: tuple[Tensor, ...] = child()
+    active_atoms: Tensor | None = child(default=None, keep_dtype=True)
+    shell_layout: ShellLayout = context()
     force_cpu: bool = context(default=True)
 
     def _validate(self) -> None:
         if self.index.batch_mode != 0:
             raise ValueError("Libcint setup requires one single System.")
-        if self.force_cpu and self.numbers.device.type != "cpu":
-            raise ValueError(
-                "force_cpu=True requires CPU-resident libcint setup tensors."
-            )
+        if self.force_cpu:
+            tensors: list[Tensor] = [
+                self.numbers,
+                *self.alphas,
+                *self.coeffs,
+                self.index.shells_per_atom,
+                self.index.shells_to_ushell,
+                self.index.angular,
+                self.index.ushells_per_unique,
+                self.index.unique_angular,
+                self.index.shells_to_atom,
+                self.index.orbitals_to_shell,
+            ]
+            if self.active_atoms is not None:
+                tensors.append(self.active_atoms)
+            if any(tensor.device.type != "cpu" for tensor in tensors):
+                raise ValueError(
+                    "force_cpu=True requires CPU-resident libcint setup tensors."
+                )
 
     def _convert_child(
         self,
@@ -80,33 +91,23 @@ class LibcintIntegralSetup(Node):
             device = torch.device("cpu")
         return super()._convert_child(name, value, device, dtype)
 
-    def create_libcint_cgtos(
-        self,
-    ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
-        """Construct differentiable CGTO values from captured Slater data."""
-        return create_libcint_cgtos_from_data(
-            self.unique,
-            self.index.ushells_per_unique,
-            self.ngauss,
-            self.pqn,
-            self.index.unique_angular,
-            self.slater,
-            self.valence,
-            self.sto,
-        )
-
     def create_libcint(
         self, positions: Tensor
     ) -> tuple[libcint.Basis, libcint.Structure]:
-        """Create a call-local basis and structure from captured data."""
-        alphas, coeffs = self.create_libcint_cgtos()
-        return create_libcint_from_data(
-            self.numbers,
-            self.unique,
-            self.index.ushells_per_unique,
-            self.index.unique_angular,
-            alphas,
-            coeffs,
+        """Construct call-local libcint basis and structure for ``positions``."""
+        if self.force_cpu and positions.device.type != "cpu":
+            positions = positions.to(device=torch.device("cpu"))
+
+        numbers = self.numbers
+        if self.active_atoms is not None:
+            numbers = numbers.index_select(0, self.active_atoms)
+            positions = positions.index_select(-2, self.active_atoms)
+
+        return create_libcint_from_layout(
+            numbers,
+            self.shell_layout,
+            self.alphas,
+            self.coeffs,
             positions,
         )
 
@@ -143,39 +144,28 @@ def setup_libcint(
             "force_cpu=True requires CPU-resident libcint setup tensors."
         )
 
-    return LibcintIntegralSetup(
-        numbers=basis.numbers.clone(),
-        unique=basis.unique.clone(),
-        ngauss=basis.ngauss.clone(),
-        pqn=basis.pqn.clone(),
-        slater=basis.slater.clone(),
-        valence=basis.valence.clone(),
-        index=ihelp,
-        sto=basis.sto,
-        force_cpu=force_cpu,
+    alphas, coeffs = basis.create_cgtos()
+    shell_layout = build_shell_layout(
+        basis.unique, ihelp.ushells_per_unique, ihelp.unique_angular
     )
 
+    numbers = basis.numbers.clone()
+    active_atoms: Tensor | None = None
+    if numbers.device.type != "meta":
+        num_list = [int(v) for v in numbers.detach().cpu().reshape(-1).tolist()]
+        if any(z <= 0 for z in num_list):
+            active_atoms = torch.tensor(
+                [idx for idx, z in enumerate(num_list) if z > 0],
+                dtype=torch.long,
+                device=numbers.device,
+            )
 
-@dataclass(frozen=True, eq=False)
-class LibcintCallData:
-    """Call-local libcint basis, structure, and index helper for one system."""
-
-    basis: Any
-    structure: Any
-    index: IndexHelper
-
-
-def prepare_libcint(
-    setup: LibcintIntegralSetup,
-    positions: Tensor,
-) -> LibcintCallData:
-    """Build call-local libcint basis and structure from setup and positions."""
-    if setup.force_cpu and positions.device.type != "cpu":
-        positions = positions.to(device=torch.device("cpu"))
-
-    libcint_basis, structure = setup.create_libcint(positions)
-    return LibcintCallData(
-        basis=libcint_basis,
-        structure=structure,
-        index=setup.index,
+    return LibcintIntegralSetup(
+        index=ihelp,
+        numbers=numbers,
+        alphas=tuple(alphas),
+        coeffs=tuple(coeffs),
+        active_atoms=active_atoms,
+        shell_layout=shell_layout,
+        force_cpu=force_cpu,
     )

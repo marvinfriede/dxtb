@@ -15,8 +15,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Implementation: Overlap
-=======================
+Implementation: Overlap (Libcint)
+=================================
 
 Overlap implementation based on `libcint`.
 """
@@ -25,17 +25,21 @@ from __future__ import annotations
 
 from dxtb._src.typing import Tensor
 
-from .driver import LibcintCallData
+from .driver import LibcintIntegralSetup
 
-__all__ = ["build_overlap_libcint"]
+__all__ = ["build_overlap", "build_overlap_libcint"]
 
 
-def build_overlap_libcint(call_data: LibcintCallData) -> Tensor:
-    """Build the overlap matrix from call-local libcint data."""
-    if not isinstance(call_data, LibcintCallData):
-        raise TypeError("Expected call-local LibcintCallData.")
-
+def build_overlap(
+    setup: LibcintIntegralSetup,
+    positions: Tensor,
+) -> Tensor:
+    """Build the normalized overlap matrix from setup data and positions."""
     # pylint: disable=import-outside-toplevel
     from dxtb._src.exlibs import libcint
 
-    return libcint.overlap(call_data.basis, call_data.structure)
+    basis, structure = setup.create_libcint(positions)
+    return libcint.overlap(basis, structure)
+
+
+build_overlap_libcint = build_overlap

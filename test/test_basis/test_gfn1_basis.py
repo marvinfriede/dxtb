@@ -29,6 +29,7 @@ Verifies:
 from __future__ import annotations
 
 import copy
+
 import pytest
 import torch
 
@@ -267,26 +268,36 @@ def test_custom_param_sto_selection() -> None:
 
 
 def test_basis_construction_and_export() -> None:
-    """Verify Basis methods (create_cgtos, create_libcint_cgtos, to_bse) use sto."""
-    # Fe (Z=26, 4s/4p) and Rb (Z=37, 5s/5p)
-    numbers = torch.tensor([26, 37], device=DEVICE)
+    """Verify Basis CGTO expansion, backend setups, and BSE export use sto."""
+    from dxtb._src.exlibs.available import has_libcint
+    from dxtb._src.integral.driver.pytorch import setup_integrals
+
+    # Fe (Z=26, 4s/4p) and Rb (Z=37, 5s/5p) in unsorted atom order
+    numbers = torch.tensor([37, 26], device=DEVICE)
     ih = IndexHelper.from_numbers(numbers, GFN1_XTB)
     b_gfn1 = Basis(numbers, GFN1_XTB, ih)
-    b_gfn2 = Basis(numbers, GFN2_XTB, IndexHelper.from_numbers(numbers, GFN2_XTB))
+    b_gfn2 = Basis(
+        numbers, GFN2_XTB, IndexHelper.from_numbers(numbers, GFN2_XTB)
+    )
 
     assert b_gfn1.sto == "gfn1"
     assert b_gfn2.sto == "gfn2"
 
-    # PyTorch CGTOs
-    alphas_pt, coeffs_pt = b_gfn1.create_cgtos()
+    alphas_ref, coeffs_ref = b_gfn1.create_cgtos()
+    pt_setup = setup_integrals(b_gfn1)
+    for a_ref, a_pt in zip(alphas_ref, pt_setup.alphas):
+        torch.testing.assert_close(a_ref, a_pt, atol=0.0, rtol=0.0)
+    for c_ref, c_pt in zip(coeffs_ref, pt_setup.coeffs):
+        torch.testing.assert_close(c_ref, c_pt, atol=0.0, rtol=0.0)
 
-    # Libcint CGTOs via Basis
-    alphas_lc, coeffs_lc = b_gfn1.create_libcint_cgtos()
+    if has_libcint:
+        from dxtb._src.integral.driver.libcint import setup_libcint
 
-    for a_pt, a_lc in zip(alphas_pt, alphas_lc):
-        torch.testing.assert_close(a_pt, a_lc, atol=0.0, rtol=0.0)
-    for c_pt, c_lc in zip(coeffs_pt, coeffs_lc):
-        torch.testing.assert_close(c_pt, c_lc, atol=0.0, rtol=0.0)
+        lc_setup = setup_libcint(b_gfn1.cpu(), force_cpu=True)
+        for a_ref, a_lc in zip(alphas_ref, lc_setup.alphas):
+            torch.testing.assert_close(a_ref.cpu(), a_lc, atol=0.0, rtol=0.0)
+        for c_ref, c_lc in zip(coeffs_ref, lc_setup.coeffs):
+            torch.testing.assert_close(c_ref.cpu(), c_lc, atol=0.0, rtol=0.0)
 
     # BSE Export
     nwchem_txt = b_gfn1.to_bse(qcformat="nwchem")

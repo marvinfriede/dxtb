@@ -27,6 +27,7 @@ import torch
 
 from dxtb import Calculator
 from dxtb._src.basis.bas import Basis
+from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Literal, Tensor
 
 from ..conftest import DEVICE
@@ -48,7 +49,7 @@ def energy_of_scaled_exponents(
 
     def patched(self):
         alphas, coeffs = original(self)
-        return [a * scale for a in alphas], coeffs
+        return tuple(a * scale for a in alphas), coeffs
 
     Basis.create_cgtos = patched  # type: ignore[method-assign]
     try:
@@ -65,29 +66,33 @@ def energy_of_scaled_exponents(
         Basis.create_cgtos = original  # type: ignore[method-assign]
 
 
+@pytest.mark.parametrize("driver", ["pytorch", "libcint"])
 @pytest.mark.parametrize(
     "gfn, name", [("gfn1", "LiH"), ("gfn1", "H2O"), ("gfn2", "LiH")]
 )
 def test_exponent_gradient_matches_fd(
-    gfn: Literal["gfn1", "gfn2"], name: str
+    driver: str, gfn: Literal["gfn1", "gfn2"], name: str
 ) -> None:
+    """Analytical SCF exponent gradients match finite differences on drivers."""
+    if driver == "libcint" and not has_libcint:
+        pytest.skip("libcint not available")
     dd: DD = {"dtype": torch.double, "device": DEVICE}
     numbers = samples[name]["numbers"].to(DEVICE)
     positions = samples[name]["positions"].to(**dd)
 
     scale = torch.tensor(1.0, **dd, requires_grad=True)
     energy = energy_of_scaled_exponents(
-        gfn, numbers, positions, scale, "pytorch", dd
+        gfn, numbers, positions, scale, driver, dd
     )
     (grad,) = torch.autograd.grad(energy, scale)
 
     step = 1e-4
     plus = energy_of_scaled_exponents(
-        gfn, numbers, positions, torch.tensor(1.0 + step, **dd), "pytorch", dd
+        gfn, numbers, positions, torch.tensor(1.0 + step, **dd), driver, dd
     )
     minus = energy_of_scaled_exponents(
-        gfn, numbers, positions, torch.tensor(1.0 - step, **dd), "pytorch", dd
+        gfn, numbers, positions, torch.tensor(1.0 - step, **dd), driver, dd
     )
     grad_fd = (plus - minus) / (2 * step)
 
-    assert torch.allclose(grad, grad_fd, atol=1e-6, rtol=1e-5)
+    torch.testing.assert_close(grad, grad_fd, atol=1e-6, rtol=1e-5)

@@ -142,3 +142,27 @@ def test_format_contraction_fail() -> None:
 
     with pytest.raises(ValueError):
         format_contraction(shells, ngauss)
+
+
+@pytest.mark.parametrize("xtb_version", ["gfn1", "gfn2"])
+def test_export_multiatom_unsorted(
+    xtb_version: Literal["gfn1", "gfn2"],
+) -> None:
+    """Multi-atom unsorted BSE export matches concatenated element blocks."""
+    dd: DD = {"dtype": torch.double, "device": torch.device("cpu")}
+    par = get_param_module(xtb_version, **dd)
+
+    numbers = torch.tensor([26, 1, 8, 1], device=dd["device"])
+    bas_multi = Basis(
+        numbers, par, IndexHelper.from_numbers(numbers, par), **dd
+    )
+
+    expected_blocks = []
+    for z in (1, 8, 26):
+        z_t = torch.tensor([z], device=dd["device"])
+        bas_z = Basis(z_t, par, IndexHelper.from_numbers(z_t, par), **dd)
+        expected_blocks.append(bas_z.to_bse(qcformat="nwchem").rstrip())
+
+    assert bas_multi.to_bse(qcformat="nwchem").rstrip() == "\n".join(
+        expected_blocks
+    )

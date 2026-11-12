@@ -33,7 +33,6 @@ from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.libcint import (
     LibcintIntegralSetup,
     build_overlap_libcint,
-    prepare_libcint,
     setup_libcint,
 )
 from dxtb._src.integral.evaluation import (
@@ -91,22 +90,21 @@ def test_libcint_setup_node_schema_snapshot_and_conversion(
     assert core.index is basis.ihelp
 
     leaves = _leaves(core)
-    assert len(leaves) == 18
+    expected_n_shells = 4 if method == "gfn1" else 3
+    assert len(core.alphas) == expected_n_shells
+    assert len(core.coeffs) == expected_n_shells
+    assert len(leaves) == 13 + 2 * expected_n_shells
     assert all(leaf.device.type == "cpu" for leaf in leaves)
-    assert core.slater.dtype == torch.float64
-    for name in ("numbers", "unique", "ngauss", "pqn", "valence"):
-        assert getattr(core, name).dtype in (
-            torch.int32,
-            torch.int64,
-            torch.uint8,
-            torch.bool,
-        )
+    assert all(a.dtype == torch.float64 for a in core.alphas)
+    assert all(c.dtype == torch.float64 for c in core.coeffs)
+    assert core.numbers.dtype in (torch.int32, torch.int64)
+    assert core.active_atoms is None
 
     flat, spec = tree_flatten(core)
     rebuilt = tree_unflatten(flat, spec)
     assert type(rebuilt) is LibcintIntegralSetup
     assert rebuilt.force_cpu is force_cpu
-    assert rebuilt.sto == basis.sto
+    assert rebuilt.shell_layout == core.shell_layout
     assert torch.equal(rebuilt.index.shells_to_atom, core.index.shells_to_atom)
     assert torch.equal(
         rebuilt.index.orbitals_to_shell, core.index.orbitals_to_shell
@@ -120,24 +118,29 @@ def test_libcint_setup_node_schema_snapshot_and_conversion(
         assert converted.force_cpu is force_cpu
     target_device = "cpu" if force_cpu else "meta"
     assert all(leaf.device.type == target_device for leaf in _leaves(meta))
-    assert f32.slater.dtype == torch.float32
-    assert f64.slater.dtype == torch.float64
+    assert all(a.dtype == torch.float32 for a in f32.alphas)
+    assert all(c.dtype == torch.float32 for c in f32.coeffs)
+    assert all(a.dtype == torch.float64 for a in f64.alphas)
+    assert all(c.dtype == torch.float64 for c in f64.coeffs)
     assert f32.numbers.dtype == numbers.dtype
     assert f32.index.angular.dtype == core.index.angular.dtype
 
     stacked = stack((core, core))
     assert type(stacked) is LibcintIntegralSetup
-    assert stacked.slater.shape[0] == 2
+    assert stacked.alphas[0].shape[0] == 2
+    assert stacked.coeffs[0].shape[0] == 2
     assert stacked.index.shells_to_atom.shape[0] == 2
 
-    # The Node owns cloned basis tensors rather than aliasing Basis storage.
-    old_slater = core.slater.clone()
-    old_pqn = core.pqn.clone()
+    # The Node owns precomputed CGTO tensors rather than aliasing Basis.slater.
+    old_alphas = tuple(a.clone() for a in core.alphas)
+    old_coeffs = tuple(c.clone() for c in core.coeffs)
     with torch.no_grad():
         basis.slater.add_(0.5)
         basis.pqn.add_(1)
-    assert torch.equal(core.slater, old_slater)
-    assert torch.equal(core.pqn, old_pqn)
+    for cur_a, ref_a in zip(core.alphas, old_alphas):
+        assert torch.equal(cur_a, ref_a)
+    for cur_c, ref_c in zip(core.coeffs, old_coeffs):
+        assert torch.equal(cur_c, ref_c)
 
 
 @pytest.mark.parametrize("method", ["gfn0", "gfn1", "gfn2"])
@@ -228,16 +231,15 @@ def test_libcint_core_basis_keeps_slater_parameter_graph(method: str) -> None:
     parameter = dict(par.named_parameters())[parameter_name]
     parameter.requires_grad_(True)
     basis, setup = _basis_and_setup(numbers, par, force_cpu=True)
-    alphas, coeffs = setup.create_libcint_cgtos()
-    objective = sum(alpha.square().sum() for alpha in alphas) + sum(
-        coeff.square().sum() for coeff in coeffs
+    objective = sum(alpha.square().sum() for alpha in setup.alphas) + sum(
+        coeff.square().sum() for coeff in setup.coeffs
     )
-    gradient = torch.autograd.grad(objective, parameter)[0]
+    gradient = torch.autograd.grad(objective, parameter, retain_graph=True)[0]
     assert torch.isfinite(gradient).all()
     assert gradient.abs().sum() > 0
 
     positions = samples["H2O"]["positions"].to(dtype=torch.float64)
-    core_overlap = build_overlap_libcint(prepare_libcint(setup, positions))
+    core_overlap = build_overlap_libcint(setup, positions)
     direct_overlap = libcint.overlap(*basis.create_libcint(positions))
     core_gradient = torch.autograd.grad(
         core_overlap.square().sum(), parameter, retain_graph=True
@@ -256,7 +258,7 @@ def test_libcint_node_preserves_higher_angular_shell_order() -> None:
     positions = samples["SiH4"]["positions"].to(dtype=torch.float64)
     par = ParamModule(GFN2_XTB, dtype=positions.dtype)
     basis, core = _basis_and_setup(numbers, par, force_cpu=True)
-    core_overlap = build_overlap_libcint(prepare_libcint(core, positions))
+    core_overlap = build_overlap_libcint(core, positions)
     direct_overlap = libcint.overlap(*basis.create_libcint(positions))
     assert core_overlap.shape == direct_overlap.shape
     torch.testing.assert_close(core_overlap, direct_overlap)
@@ -298,7 +300,7 @@ def test_setup_libcint_rejects_non_cpu_force_cpu_source() -> None:
 
 
 def test_libcint_setup_node_is_used_by_system_and_call_data_is_local() -> None:
-    """Single-System setup owns a Node while call data remain call-local."""
+    """Single-System setup owns a Node while libcint objects are call-local."""
     numbers = samples["H2"]["numbers"]
     positions = samples["H2"]["positions"].to(dtype=torch.float64)
     calc = Calculator(
@@ -310,18 +312,70 @@ def test_libcint_setup_node_is_used_by_system_and_call_data_is_local() -> None:
     setup = calc.system.integral_setup
     assert setup is not None and setup.libcint is not None
     assert type(setup.libcint) is LibcintIntegralSetup
-    call1 = prepare_libcint(setup.libcint, positions)
-    call2 = prepare_libcint(setup.libcint, positions)
-    assert call1 is not call2
-    assert call1.basis is not call2.basis
-    assert call1.structure is not call2.structure
-    assert call1.index is setup.libcint.index
+    basis1, struct1 = setup.libcint.create_libcint(positions)
+    basis2, struct2 = setup.libcint.create_libcint(positions)
+    assert basis1 is not basis2
+    assert struct1 is not struct2
 
     converted = setup.to(device="meta", dtype=torch.float32)
     assert converted.libcint is not None
     assert type(converted.libcint) is LibcintIntegralSetup
     assert all(leaf.device.type == "cpu" for leaf in _leaves(converted.libcint))
-    assert converted.libcint.slater.dtype == torch.float32
+    assert all(a.dtype == torch.float32 for a in converted.libcint.alphas)
+    assert all(c.dtype == torch.float32 for c in converted.libcint.coeffs)
+
+
+def test_libcint_eval_does_not_reexpand_cgtos_and_builds_basis_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CGTO expansion runs once in setup and libcint.Basis once per moment eval."""
+    import dxtb._src.basis.bas as bas_mod
+
+    numbers = samples["SiH4"]["numbers"]
+    positions = samples["SiH4"]["positions"].to(dtype=torch.float64)
+    par = ParamModule(GFN2_XTB, dtype=positions.dtype)
+    ihelp = IndexHelper.from_numbers(numbers, par)
+
+    s2g_calls = 0
+    lc_basis_calls = 0
+    orig_s2g = bas_mod.slater_to_gauss
+    orig_lc_basis = libcint.Basis
+
+    def wrapped_s2g(*args: Any, **kwargs: Any) -> Any:
+        nonlocal s2g_calls
+        s2g_calls += 1
+        return orig_s2g(*args, **kwargs)
+
+    def wrapped_lc_basis(*args: Any, **kwargs: Any) -> Any:
+        nonlocal lc_basis_calls
+        lc_basis_calls += 1
+        return orig_lc_basis(*args, **kwargs)
+
+    monkeypatch.setattr(bas_mod, "slater_to_gauss", wrapped_s2g)
+    monkeypatch.setattr(libcint, "Basis", wrapped_lc_basis)
+
+    isetup = setup_integral_evaluation(
+        numbers,
+        par,
+        ihelp,
+        driver_type=labels.INTDRIVER_LIBCINT,
+        intlevel=labels.INTLEVEL_QUADRUPOLE,
+    )
+    assert isetup is not None and isetup.libcint is not None
+    assert s2g_calls == len(isetup.libcint.alphas)
+    assert lc_basis_calls == 0
+
+    calc = Calculator(
+        numbers,
+        GFN2_XTB,
+        dtype=positions.dtype,
+        opts={"verbosity": 0, "int_driver": labels.INTDRIVER_LIBCINT},
+    )
+    s2g_calls = 0
+    lc_basis_calls = 0
+    build_integral_matrices(isetup, calc.system.h0_setup, positions, 0.0)
+    assert s2g_calls == 0
+    assert lc_basis_calls == 1
 
 
 @pytest.mark.parametrize("name", ["H2O", "SiH4"])
@@ -435,3 +489,128 @@ def test_libcint_full_singlepoint_matches_pytorch(
         atol=2.0e-8,
         rtol=2.0e-8,
     )
+
+
+def test_zero_padded_single_system_moments_match_unpadded_on_both_drivers() -> (
+    None
+):
+    """Zero-padded Z=0 slots evaluate cleanly and match unpadded moments."""
+    from dxtb._src.integral.driver.libcint import (
+        evaluate_moments as evaluate_libcint_moments,
+    )
+    from dxtb._src.integral.driver.pytorch import (
+        evaluate_moments as evaluate_pytorch_moments,
+    )
+    from dxtb._src.integral.driver.pytorch import (
+        setup_integrals as setup_pytorch,
+    )
+
+    par = ParamModule(GFN2_XTB, dtype=torch.float64)
+    nums_ref = torch.tensor([8, 1])
+    pos_ref = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.8]], dtype=torch.float64
+    )
+    ih_ref = IndexHelper.from_numbers(nums_ref, par)
+    bas_ref = Basis(nums_ref, par, ih_ref, dtype=torch.float64)
+    ovlp_ref, dip_ref, quad_ref = evaluate_pytorch_moments(
+        setup_pytorch(bas_ref), pos_ref, labels.INTLEVEL_QUADRUPOLE
+    )
+
+    nums_pad = torch.tensor([8, 1, 0])
+    pos_pad = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.8], [9.0, -4.0, 2.0]],
+        dtype=torch.float64,
+    )
+    ih_pad = IndexHelper.from_numbers(nums_pad, par)
+    bas_pad = Basis(nums_pad, par, ih_pad, dtype=torch.float64)
+
+    ovlp_pt, dip_pt, quad_pt = evaluate_pytorch_moments(
+        setup_pytorch(bas_pad), pos_pad, labels.INTLEVEL_QUADRUPOLE
+    )
+    lc_setup = setup_libcint(bas_pad, force_cpu=True)
+    assert lc_setup.active_atoms is not None
+    ovlp_lc, dip_lc, quad_lc = evaluate_libcint_moments(
+        lc_setup, pos_pad, labels.INTLEVEL_QUADRUPOLE
+    )
+
+    for actual_o, actual_d, actual_q in (
+        (ovlp_pt, dip_pt, quad_pt),
+        (ovlp_lc, dip_lc, quad_lc),
+    ):
+        assert actual_d is not None and dip_ref is not None
+        assert actual_q is not None and quad_ref is not None
+        torch.testing.assert_close(actual_o, ovlp_ref, atol=1e-12, rtol=1e-12)
+        torch.testing.assert_close(actual_d, dip_ref, atol=1e-12, rtol=1e-12)
+        torch.testing.assert_close(actual_q, quad_ref, atol=1e-12, rtol=1e-12)
+
+
+def test_independent_backward_passes_and_functional_slater_jacrev() -> None:
+    """Reusable setups support independent backward passes and jacrev."""
+    from torch.func import jacrev
+
+    numbers = samples["H2O"]["numbers"]
+    pos1 = samples["H2O"]["positions"].to(dtype=torch.float64)
+    pos2 = pos1.clone()
+    pos2[1, 2] += 0.11
+
+    for driver in (labels.INTDRIVER_PYTORCH, labels.INTDRIVER_LIBCINT):
+        calc = Calculator(
+            numbers,
+            GFN2_XTB,
+            dtype=torch.float64,
+            opts={"verbosity": 0, "int_driver": driver},
+        )
+        isetup = calc.system.integral_setup
+        h0_setup = calc.system.h0_setup
+        assert isetup is not None and h0_setup is not None
+
+        p1 = pos1.clone().requires_grad_(True)
+        m1, _ = build_integral_matrices(isetup, h0_setup, p1, 0.0)
+        assert m1.quadrupole is not None
+        (m1.overlap.square().sum() + m1.quadrupole.square().sum()).backward()
+        assert p1.grad is not None and torch.isfinite(p1.grad).all()
+
+        p2 = pos2.clone().requires_grad_(True)
+        m2, _ = build_integral_matrices(isetup, h0_setup, p2, 0.0)
+        assert m2.quadrupole is not None
+        (m2.overlap.square().sum() + m2.quadrupole.square().sum()).backward()
+        assert p2.grad is not None and torch.isfinite(p2.grad).all()
+
+    par = ParamModule(GFN1_XTB, dtype=torch.float64)
+    param_key = "parameter_tree.element.H.slater.param"
+    h_slater = dict(par.named_parameters())[param_key].detach().clone()
+
+    def cgtos_for_slater(slater_val: torch.Tensor) -> torch.Tensor:
+        """Sum of squared H/O CGTO tensors under functional parameter call."""
+        return _functional_cgto_loss(par, param_key, slater_val, numbers)
+
+    jac = jacrev(cgtos_for_slater)(h_slater)
+    assert jac.shape == h_slater.shape
+    assert torch.isfinite(jac).all()
+    assert jac.abs().sum() > 0
+
+
+def _functional_cgto_loss(
+    par: ParamModule,
+    param_key: str,
+    slater_val: torch.Tensor,
+    numbers: torch.Tensor,
+) -> torch.Tensor:
+    """Functional CGTO objective wrt ``param_key`` via ``torch.nn.utils.stateless``."""
+    from torch.func import functional_call
+
+    class _Runner(torch.nn.Module):
+        def __init__(self, mod: ParamModule) -> None:
+            super().__init__()
+            self.mod = mod
+
+        def forward(self) -> torch.Tensor:
+            ih = IndexHelper.from_numbers(numbers, self.mod)
+            bas = Basis(numbers, self.mod, ih, dtype=torch.float64)
+            lc = setup_libcint(bas, force_cpu=True)
+            return sum(a.square().sum() for a in lc.alphas) + sum(
+                c.square().sum() for c in lc.coeffs
+            )
+
+    runner = _Runner(par)
+    return functional_call(runner, {f"mod.{param_key}": slater_val}, ())

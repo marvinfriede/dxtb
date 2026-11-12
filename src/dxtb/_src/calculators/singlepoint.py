@@ -232,9 +232,7 @@ class _SystemInteractionData(InteractionListCache):
     ) -> None:
         super().__init__()
         self.d4sc_setup = d4sc_setup
-        self.scf_kinds = (
-            {} if scf_kinds is None else scf_kinds
-        )
+        self.scf_kinds = {} if scf_kinds is None else scf_kinds
 
 
 def _interaction_data(
@@ -348,12 +346,8 @@ def _floating_setup_tensor(system: System) -> Tensor | None:
         return system.h0_setup.hscale
 
     setup = system.integral_setup
-    if setup is None:
-        return None
-    if setup.pytorch is not None and setup.pytorch.alphas:
-        return setup.pytorch.alphas[0]
-    if setup.libcint is not None:
-        return setup.libcint.slater
+    if setup is not None and setup.backend is not None and setup.backend.alphas:
+        return setup.backend.alphas[0]
     return None
 
 

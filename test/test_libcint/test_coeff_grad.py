@@ -31,7 +31,6 @@ from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.libcint import (
     build_overlap_libcint,
-    prepare_libcint,
     setup_libcint,
 )
 from dxtb._src.typing import DD, Callable, Tensor
@@ -152,9 +151,7 @@ def gradchecker_batch(name1: str, name2: str, gfn: Param) -> tuple[
             setup = setup_libcint(
                 Basis(nums_active, par, ihelp, **dd), force_cpu=False
             )
-            matrices.append(
-                build_overlap_libcint(prepare_libcint(setup, pos_active))
-            )
+            matrices.append(build_overlap_libcint(setup, pos_active))
         return pack(matrices)
 
     return func, slater

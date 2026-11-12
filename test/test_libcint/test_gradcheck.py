@@ -30,7 +30,6 @@ from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.libcint import (
     build_overlap_libcint,
-    prepare_libcint,
     setup_libcint,
 )
 from dxtb._src.typing import DD, Callable, Tensor
@@ -142,9 +141,7 @@ def gradchecker_batch(
         matrices = []
         for setup_b, p_b, m_b in zip(setups, p, mask):
             pos_b = torch.masked_select(p_b, m_b).reshape((-1, 3))
-            matrices.append(
-                build_overlap_libcint(prepare_libcint(setup_b, pos_b))
-            )
+            matrices.append(build_overlap_libcint(setup_b, pos_b))
         return pack(matrices)
 
     return func, pos

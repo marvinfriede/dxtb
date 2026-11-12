@@ -134,7 +134,7 @@ def prepare(
     ang_np = np.asarray(_to_ints(ihelp.angular))
     ush_np = np.asarray(_to_ints(ihelp.shells_to_ushell))
     nsh = ang_np.shape[0]
-    nsph_np = 2 * ang_np + 1
+    nsph_np = np.where(ang_np >= 0, 2 * ang_np + 1, 0)
     off_np = np.cumsum(nsph_np) - nsph_np
 
     nao = int(nsph_np.sum())
@@ -147,7 +147,8 @@ def prepare(
 
     # ordered shell pairs with bra >= ket
     bra_np, ket_np = np.tril_indices(nsh)
-    key_np = ush_np[bra_np] * (int(ush_np.max()) + 1) + ush_np[ket_np]
+    max_ush = int(ush_np.max()) + 1 if nsh > 0 else 1
+    key_np = ush_np[bra_np] * max_ush + ush_np[ket_np]
 
     classes: list[PairClass] = []
     for k in np.unique(key_np).tolist():
@@ -155,14 +156,14 @@ def prepare(
         first = int(cls_np[0])
         ib_np, jk_np = bra_np[cls_np], ket_np[cls_np]
         lb, lk = int(ang_np[bra_np[first]]), int(ang_np[ket_np[first]])
+        if lb < 0 or lk < 0:
+            continue
 
         rows = (
-            off_np[ib_np][:, None, None]
-            + np.arange(2 * lb + 1)[None, :, None]
+            off_np[ib_np][:, None, None] + np.arange(2 * lb + 1)[None, :, None]
         )
         cols = (
-            off_np[jk_np][:, None, None]
-            + np.arange(2 * lk + 1)[None, None, :]
+            off_np[jk_np][:, None, None] + np.arange(2 * lk + 1)[None, None, :]
         )
         idx = rows * nao + cols  # broadcasts to (npairs, nb, nk)
 
@@ -215,7 +216,10 @@ def _resolve_plan(
 
 
 def _normalized(
-    kernel: Kernel1D, plan: PairPlan, alphas: list[Tensor], coeffs: list[Tensor]
+    kernel: Kernel1D,
+    plan: PairPlan,
+    alphas: Sequence[Tensor],
+    coeffs: Sequence[Tensor],
 ) -> list[Tensor]:
     """
     Contraction coefficients scaled to exactly unit self-overlap of every
@@ -231,6 +235,9 @@ def _normalized(
     """
     out = []
     for l, a, c in zip(plan.unique_angular, alphas, coeffs):
+        if l < 0:
+            out.append(c)
+            continue
         vec0 = torch.zeros((1, 3), dtype=a.dtype, device=a.device)
         s = assemble_overlap_1d(kernel, (l, l), (a, a), (c, c), vec0)
         # reciprocal square root with a clamp; `eps` is a Python float so
@@ -264,8 +271,8 @@ def _mirror(
 def assemble_matrix(
     kernel: Kernel1D,
     ihelp: IndexHelper | None,
-    alphas: list[Tensor],
-    coeffs: list[Tensor],
+    alphas: Sequence[Tensor],
+    coeffs: Sequence[Tensor],
     positions: Tensor,
     components: tuple[tuple[int, int, int], ...] | None = None,
     origin: Tensor | None = None,
@@ -585,8 +592,8 @@ def _screen(
 def select_pairs(
     kernel: Kernel1D,
     ihelp: IndexHelper | None,
-    alphas: list[Tensor],
-    coeffs: list[Tensor],
+    alphas: Sequence[Tensor],
+    coeffs: Sequence[Tensor],
     positions: Tensor,
     threshold: float,
     origin: Tensor | None = None,

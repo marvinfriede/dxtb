@@ -34,10 +34,18 @@ from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint, has_pyscf
 from dxtb._src.integral.driver.libcint import (
+    build_dipole_libcint,
     build_multipole_libcint,
-    prepare_libcint,
+    build_quadrupole_libcint,
     setup_libcint,
 )
+from dxtb._src.integral.driver.pytorch import (
+    build_dipole as build_dipole_pytorch,
+)
+from dxtb._src.integral.driver.pytorch import (
+    build_quadrupole as build_quadrupole_pytorch,
+)
+from dxtb._src.integral.driver.pytorch import setup_integrals as setup_pytorch
 from dxtb._src.integral.types.quadrupole import (
     _reduce_9_to_6,
     make_quadrupole_traceless,
@@ -45,7 +53,7 @@ from dxtb._src.integral.types.quadrupole import (
     shift_quadrupole_origin,
 )
 from dxtb._src.param import ParamModule
-from dxtb._src.typing import Any, DD, Tensor
+from dxtb._src.typing import DD, Any, Tensor
 
 if has_pyscf is True:
     from dxtb._src.exlibs.pyscf.mol import M
@@ -83,8 +91,7 @@ def libcint_moment(
     """Multipole integral from normalized libcint shells."""
     ihelp = IndexHelper.from_numbers(numbers, par)
     setup = setup_libcint(Basis(numbers, par, ihelp, **dd), force_cpu=True)
-    call_data = prepare_libcint(setup, positions)
-    return build_multipole_libcint(call_data, intstring)
+    return build_multipole_libcint(setup, positions, intstring)
 
 
 @pytest.mark.skipif(
@@ -421,3 +428,30 @@ def test_fail_reduce_uplo(dtype: torch.dtype) -> None:
     qpint = torch.zeros(9, 2, 2, **dd)
     with pytest.raises(ValueError):
         _reduce_9_to_6(qpint, uplo="X")  # type: ignore
+
+
+@pytest.mark.skipif(
+    has_libcint is False, reason="libcint interface not installed"
+)
+@pytest.mark.parametrize("gfn", ["gfn1", "gfn2"])
+def test_standalone_origin_centered_builders_match_pytorch(gfn: str) -> None:
+    """Standalone origin-centered dipole (3) and quadrupole (9) match PyTorch."""
+    dd: DD = {"dtype": torch.double, "device": torch.device("cpu")}
+    par = get_param_module(gfn, **dd)
+    numbers = samples["SiH4"]["numbers"].to(dd["device"])
+    positions = samples["SiH4"]["positions"].to(**dd)
+
+    ihelp = IndexHelper.from_numbers(numbers, par)
+    bas = Basis(numbers, par, ihelp, **dd)
+    pt_setup = setup_pytorch(bas)
+    lc_setup = setup_libcint(bas, force_cpu=True)
+
+    dip_pt = build_dipole_pytorch(pt_setup, positions)
+    dip_lc = build_dipole_libcint(lc_setup, positions)
+    assert dip_lc.shape == (3, ihelp.nao, ihelp.nao)
+    torch.testing.assert_close(dip_lc, dip_pt, atol=1e-12, rtol=1e-12)
+
+    quad_pt = build_quadrupole_pytorch(pt_setup, positions)
+    quad_lc = build_quadrupole_libcint(lc_setup, positions)
+    assert quad_lc.shape == (9, ihelp.nao, ihelp.nao)
+    torch.testing.assert_close(quad_lc, quad_pt, atol=1e-12, rtol=1e-12)

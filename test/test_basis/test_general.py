@@ -171,3 +171,50 @@ def test_change_device_fail() -> None:
     # trying to use setter
     with pytest.raises(AttributeError):
         bas.device = "cpu"
+
+
+def test_non_valence_orthogonalization_is_metadata_independent() -> None:
+    """Non-valence shell orthogonalization depends on valence flags, not meta."""
+    numbers = torch.tensor([8, 1, 1])
+    custom = GFN1_XTB.model_copy(deep=True)
+    custom.meta = None
+
+    bas_ref = Basis(
+        numbers, GFN1_XTB, IndexHelper.from_numbers(numbers, GFN1_XTB)
+    )
+    bas_custom = Basis(
+        numbers, custom, IndexHelper.from_numbers(numbers, custom)
+    )
+
+    alphas_ref, coeffs_ref = bas_ref.create_cgtos()
+    alphas_cus, coeffs_cus = bas_custom.create_cgtos()
+    for a_ref, a_cus in zip(alphas_ref, alphas_cus):
+        torch.testing.assert_close(a_cus, a_ref, atol=0.0, rtol=0.0)
+    for c_ref, c_cus in zip(coeffs_ref, coeffs_cus):
+        torch.testing.assert_close(c_cus, c_ref, atol=0.0, rtol=0.0)
+
+
+@pytest.mark.parametrize("batched", [False, True])
+def test_create_cgtos_handles_zero_padded_numbers(batched: bool) -> None:
+    """Zero-padded atomic numbers produce 1D placeholder CGTO slots."""
+    unpadded = torch.tensor([8, 1])
+    bas_ref = Basis(
+        unpadded, GFN1_XTB, IndexHelper.from_numbers(unpadded, GFN1_XTB)
+    )
+    alphas_ref, coeffs_ref = bas_ref.create_cgtos()
+
+    padded = torch.tensor([[8, 1, 0]]) if batched else torch.tensor([8, 1, 0])
+    ihelp = IndexHelper.from_numbers(padded, GFN1_XTB, batch_mode=int(batched))
+    bas_pad = Basis(padded, GFN1_XTB, ihelp)
+    alphas_pad, coeffs_pad = bas_pad.create_cgtos()
+
+    assert len(alphas_pad) == len(alphas_ref) + 1
+    assert alphas_pad[0].shape == (1,)
+    assert coeffs_pad[0].shape == (1,)
+    assert torch.count_nonzero(alphas_pad[0]) == 0
+    assert torch.count_nonzero(coeffs_pad[0]) == 0
+
+    for a_ref, a_act in zip(alphas_ref, alphas_pad[1:]):
+        torch.testing.assert_close(a_act, a_ref, atol=0.0, rtol=0.0)
+    for c_ref, c_act in zip(coeffs_ref, coeffs_pad[1:]):
+        torch.testing.assert_close(c_act, c_ref, atol=0.0, rtol=0.0)

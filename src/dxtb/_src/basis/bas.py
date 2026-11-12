@@ -28,7 +28,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
-from tad_mctc.convert import tensor_to_numpy
 from tad_mctc.data import pse
 
 from dxtb._src.constants.defaults import DEFAULT_BASIS_INT
@@ -44,9 +43,22 @@ if TYPE_CHECKING:
 
 __all__ = [
     "Basis",
-    "create_libcint_cgtos_from_data",
+    "ShellLayout",
+    "build_shell_layout",
     "create_libcint_from_data",
+    "create_libcint_from_layout",
 ]
+
+ShellLayout = tuple[tuple[int, tuple[tuple[int, int], ...]], ...]
+
+
+def _to_int_list(tensor: Tensor) -> list[int]:
+    """Convert a 1D integer tensor to Python ints, including inside transforms."""
+    flat = tensor.reshape(-1)
+    try:
+        return [int(x) for x in flat.tolist()]
+    except RuntimeError:
+        return [int(v.item()) for v in flat]
 
 
 angular2label = {
@@ -145,52 +157,90 @@ class Basis(TensorLike):
             obj.ihelp = self.ihelp.to(device=obj.device)
         return obj
 
-    def create_cgtos(self) -> tuple[list[Tensor], list[Tensor]]:
+    def create_cgtos(self) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
         """
-        Create contracted Gaussian type orbitals from parametrization.
+        Expand Slater basis parameters into normalized contracted Gaussians.
+
+        Iterates unique elements and their unique shells in ``IndexHelper``
+        order. Within each unique element, secondary shells marked with
+        ``valence == False`` (such as hydrogen's polarizing ``2s`` shell in
+        GFN0-xTB and GFN1-xTB) are Gram-Schmidt orthonormalized against the
+        primary valence shell of the same angular momentum on that element,
+        independent of parametrization metadata names. Padding or zero-shell
+        placeholder slots in ``unique_angular`` emit 1D zero tensors so unique
+        shell indices remain aligned with ``IndexHelper.unique_angular``.
 
         Returns
         -------
-        tuple[list[Tensor], list[Tensor]]
-            List of primitive Gaussian exponents and contraction coefficients
-            for the orthonormalized basis functions for each shell.
+        tuple[tuple[Tensor, ...], tuple[Tensor, ...]]
+            Per-unique-shell primitive Gaussian exponents and contraction
+            coefficients.
         """
-        coeffs = []
-        alphas = []
+        unique_numbers = _to_int_list(self.unique)
+        shell_counts = _to_int_list(self.ihelp.ushells_per_unique)
+        angular = _to_int_list(self.ihelp.unique_angular)
+        valence_flags = [bool(v) for v in _to_int_list(self.valence)]
+        n_slots = len(angular)
 
-        # maybe this can be batched too, but this loop is rather small
-        # so it is probably not worth it
-        for i in range(self.ihelp.unique_angular.size(0)):
-            alpha, coeff = slater_to_gauss(
-                self.ngauss[i],
-                self.pqn[i],
-                self.ihelp.unique_angular[i],
-                self.slater[i],
-                sto=self.sto,
-            )
+        alphas: list[Tensor] = []
+        coeffs: list[Tensor] = []
+        shell = 0
 
-            # NOTE:
-            # This only works for GFN0/GFN1 with H being the only element
-            # with a non-valence shell. Otherwise the generation of
-            # self.valence is not correct.
-            # The correct way would be a map to show which orbital needs
-            # to be orthogonalized w.r.t. another one.
-            # Example: Si with 3s, 3p, 3d, 4p
-            # angular = [0, 1, 2, 1]; ortho = [None, None, None, 1]
-            # GFN0 and GFN1 both contain this duplicate hydrogen s shell.
-            if self.meta is not None and self.meta.name is not None:
-                method = self.meta.name.casefold()
-                if "gfn0" in method or "gfn1" in method:
-                    if self.valence[i].item() is False:
-                        alpha, coeff = orthogonalize(
-                            (alphas[i - 1], alpha),
-                            (coeffs[i - 1], coeff),
+        for number, count in zip(unique_numbers, shell_counts):
+            if count == 0:
+                if shell < n_slots and angular[shell] < 0:
+                    zero = torch.zeros(
+                        (1,), dtype=self.slater.dtype, device=self.slater.device
+                    )
+                    alphas.append(zero)
+                    coeffs.append(zero)
+                    shell += 1
+                continue
+
+            valence_by_angmom: dict[int, int] = {}
+            for _ in range(count):
+                angmom = angular[shell]
+                if number <= 0 or angmom < 0:
+                    zero = torch.zeros(
+                        (1,), dtype=self.slater.dtype, device=self.slater.device
+                    )
+                    alphas.append(zero)
+                    coeffs.append(zero)
+                    shell += 1
+                    continue
+
+                alpha, coeff = slater_to_gauss(
+                    self.ngauss[shell],
+                    self.pqn[shell],
+                    self.ihelp.unique_angular[shell],
+                    self.slater[shell],
+                    sto=self.sto,
+                )
+                if valence_flags[shell]:
+                    valence_by_angmom[angmom] = len(alphas)
+                else:
+                    ref_shell = valence_by_angmom.get(angmom)
+                    if ref_shell is None:
+                        raise ValueError(
+                            f"Non-valence shell (Z={number}, l={angmom}) has "
+                            "no preceding valence shell of the same angular "
+                            "momentum."
                         )
+                    if angmom != 0:
+                        raise NotImplementedError(
+                            "Gram-Schmidt orthogonalization is only "
+                            f"implemented for s shells (l=0), got l={angmom}."
+                        )
+                    alpha, coeff = orthogonalize(
+                        (alphas[ref_shell], alpha),
+                        (coeffs[ref_shell], coeff),
+                    )
 
-            alphas.append(alpha)
-            coeffs.append(coeff)
+                alphas.append(alpha)
+                coeffs.append(coeff)
+                shell += 1
 
-        return alphas, coeffs
+        return tuple(alphas), tuple(coeffs)
 
     def to_bse(
         self,
@@ -250,31 +300,41 @@ class Basis(TensorLike):
 
         header = ""
         if with_header is True:
-            l = 70 * "-"
+            line = 70 * "-"
             header = (
-                f"!{l}\n"
+                f"!{line}\n"
                 "! Basis Set Exchange\n"
                 "! Version v0.9\n"
                 "! https://www.basissetexchange.org\n"
-                f"!{l}\n"
+                f"!{line}\n"
                 f"!   Basis set: {self.meta.name}\n"
                 f"! Description: Orthonormalized {self.meta.name} Basis\n"
                 "!        Role: orbital\n"
                 f"!     Version: {self.meta.version}\n"
-                f"!{l}\n\n\n"
+                f"!{line}\n\n\n"
             )
-
-        coeffs = []
-        alphas = []
-        s = 0
-        fulltxt = ""
 
         if qcformat == "nwchem":
             header += 'BASIS "ao basis" SPHERICAL PRINT\n'
 
-        for i, number in enumerate(self.unique.tolist()):
-            txt = header
+        alphas, coeffs = self.create_cgtos()
+        unique_numbers = _to_int_list(self.unique)
+        shell_counts = _to_int_list(self.ihelp.ushells_per_unique)
+        angular = _to_int_list(self.ihelp.unique_angular)
+        n_slots = len(angular)
 
+        s = 0
+        fulltxt = ""
+
+        for number, shells in zip(unique_numbers, shell_counts):
+            if number <= 0:
+                if shells == 0 and s < n_slots and angular[s] < 0:
+                    s += 1
+                else:
+                    s += shells
+                continue
+
+            txt = header
             symbol = pse.Z2S[number]
             if symbol not in self.shells:
                 raise ValueError(
@@ -284,68 +344,48 @@ class Basis(TensorLike):
             if qcformat == "gaussian94":
                 txt += f"{symbol}\n"
             elif qcformat == "nwchem":
-                f = format_contraction(self.shells[symbol], self.ngauss)
+                f = format_contraction(
+                    self.shells[symbol], self.ngauss[s : s + shells]
+                )
                 txt += f"#BASIS SET: {f}\n"
 
-            shells = self.ihelp.shells_per_atom[i]
             for _ in range(shells):
-                alpha, coeff = slater_to_gauss(
-                    self.ngauss[s],
-                    self.pqn[s],
-                    self.ihelp.angular[s],
-                    self.slater[s],
-                    sto=self.sto,
-                )
-                if self.valence[s].item() is False:
-                    alpha, coeff = orthogonalize(
-                        (alphas[s - 1], alpha),
-                        (coeffs[s - 1], coeff),
-                    )
-                alphas.append(alpha)
-                coeffs.append(coeff)
-
-                l = angular2label[self.ihelp.angular.tolist()[s]]
+                alpha = alphas[s]
+                coeff = coeffs[s]
+                l = angular2label[angular[s]]
                 if qcformat == "gaussian94":
                     txt += f"{l}    {len(alpha)}    1.00\n"
                 elif qcformat == "nwchem":
-                    txt += f"{pse.Z2S[number]}    {l}\n"
+                    txt += f"{symbol}    {l}\n"
 
-                # write exponents and coefficients
                 for a, c in zip(alpha, coeff):
                     txt += f"      {a}      {c}\n"
 
                 s += 1
 
-            # final separator in gaussian94 format
             if qcformat == "gaussian94":
                 txt += "****\n"
             elif qcformat == "nwchem":
-                txt += f"END\n"
+                txt += "END\n"
 
-            # always save to src/dxtb/mol/external/basis
             if save is True:
                 if self.meta.name is None:
                     raise RuntimeError("Meta data incomplete (name missing).")
 
-                # Create the directory if it doesn't exist
                 target = f"mol/external/basis/{self.meta.name.casefold()}"
                 dpath = Path(__file__).parents[1] / target
                 Path(dpath).mkdir(parents=True, exist_ok=True)
 
-                # Create the file path
                 fpath = f"{number:02d}.nwchem"
                 file_path = Path(dpath) / fpath
 
-                # Check if the file already exists
-                if overwrite is False:
-                    if file_path.exists():
-                        print(
-                            f"The file '{fpath}' already exists in the "
-                            f"directory '{dpath}'. It will not be overwritten."
-                        )
-                        continue
+                if overwrite is False and file_path.exists():
+                    print(
+                        f"The file '{fpath}' already exists in the "
+                        f"directory '{dpath}'. It will not be overwritten."
+                    )
+                    continue
 
-                # Save the file
                 with open(file_path, "w", encoding="utf8") as file:
                     file.write(txt)
 
@@ -353,6 +393,9 @@ class Basis(TensorLike):
                 print(txt)
 
             fulltxt += txt
+
+        if not fulltxt and not save:
+            raise ValueError("No atoms for basis set printout found.")
 
         return fulltxt
 
@@ -365,7 +408,7 @@ class Basis(TensorLike):
                 "Libcint Basis conversion requires a single Structure."
             )
 
-        alphas, coeffs = self.create_libcint_cgtos()
+        alphas, coeffs = self.create_cgtos()
         return create_libcint_from_data(
             self.numbers,
             self.unique,
@@ -377,113 +420,74 @@ class Basis(TensorLike):
             mask=mask,
         )
 
-    def create_libcint_cgtos(
-        self,
-    ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
-        """Create geometry-independent Gaussian basis data for libcint."""
-        return create_libcint_cgtos_from_data(
-            self.unique,
-            self.ihelp.ushells_per_unique,
-            self.ngauss,
-            self.pqn,
-            self.ihelp.unique_angular,
-            self.slater,
-            self.valence,
-            self.sto,
-        )
 
-
-def create_libcint_cgtos_from_data(
+def build_shell_layout(
     unique: Tensor,
     ushells_per_unique: Tensor,
-    ngauss: Tensor,
-    pqn: Tensor,
     unique_angular: Tensor,
-    slater: Tensor,
-    valence: Tensor,
-    sto: Literal["gfn1", "gfn2"],
-) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
-    """Construct parameter-differentiable CGTO values from gathered Slater data."""
-    alphas: list[Tensor] = []
-    coeffs: list[Tensor] = []
-    shell = 0
+) -> ShellLayout:
+    """Extract static per-element ``(angmom, unique_shell_idx)`` metadata."""
+    unique_numbers = _to_int_list(unique)
+    shell_counts = _to_int_list(ushells_per_unique)
+    angular = _to_int_list(unique_angular)
+    n_slots = len(angular)
 
-    for unique_index in range(unique.size(0)):
-        shell_count = ushells_per_unique[unique_index]
-        if shell_count == 0:
-            zero = torch.tensor(0.0, dtype=slater.dtype, device=slater.device)
-            alphas.append(zero)
-            coeffs.append(zero)
-            shell += 1
+    layout: list[tuple[int, tuple[tuple[int, int], ...]]] = []
+    shell = 0
+    for number, count in zip(unique_numbers, shell_counts):
+        if count == 0:
+            if shell < n_slots and angular[shell] < 0:
+                shell += 1
             continue
 
-        for _ in range(shell_count):
-            alpha, coeff = slater_to_gauss(
-                ngauss[shell],
-                pqn[shell],
-                unique_angular[shell],
-                slater[shell],
-                sto=sto,
-            )
-            if valence[shell].item() is False:
-                alpha, coeff = orthogonalize(
-                    (alphas[shell - 1], alpha),
-                    (coeffs[shell - 1], coeff),
-                )
-            alphas.append(alpha)
-            coeffs.append(coeff)
+        element_shells: list[tuple[int, int]] = []
+        for _ in range(count):
+            angmom = angular[shell]
+            if angmom >= 0:
+                element_shells.append((angmom, shell))
             shell += 1
-    return tuple(alphas), tuple(coeffs)
+
+        if number > 0:
+            if element_shells:
+                layout.append((number, tuple(element_shells)))
+        elif element_shells:
+            raise ValueError("Padding atomic number zero cannot own shells.")
+
+    return tuple(layout)
 
 
-def create_libcint_from_data(
+def create_libcint_from_layout(
     numbers: Tensor,
-    unique: Tensor,
-    ushells_per_unique: Tensor,
-    unique_angular: Tensor,
+    shell_layout: ShellLayout,
     alphas: tuple[Tensor, ...],
     coeffs: tuple[Tensor, ...],
     positions: Tensor,
     *,
     mask: Tensor | None = None,
 ) -> tuple[libcint.Basis, libcint.Structure]:
-    """Create a call-local libcint basis and structure from gathered data."""
+    """Create a call-local libcint basis and structure from static layout."""
     from dxtb._src.exlibs import libcint
 
     shells_by_element: dict[int, list[libcint.Shell]] = {}
-    shell = 0
-    unique_numbers = [int(x.item()) for x in unique]
-    shell_counts = [int(x.item()) for x in ushells_per_unique]
-    angular = [int(x.item()) for x in unique_angular]
-    for number, count in zip(unique_numbers, shell_counts):
-        number = int(number)
-        if int(count) == 0:
-            shell += 1  # preserve the zero-shell placeholder alignment
-            continue
-        element_shells = []
-        for _ in range(int(count)):
-            # ``slater_to_gauss`` normalizes stretched 3D Cartesian Gaussians
-            # ``x^l exp(-alpha r^2)``, whereas ``tad-libcint`` combines the
-            # radial contraction ``sum_k c_k r^l exp(-alpha_k r^2)`` with real
-            # spherical harmonics of unit norm on the sphere, leaving an
-            # unnormalized shell self-overlap of ``(2l + 1) / (4 * pi)``.
-            # ``Shell.normalized()`` rescales the 1D shell coefficients by
-            # their exact analytical radial self-overlap ``overlap.rsqrt()``
-            # (differentiably w.r.t. ``alphas`` and ``coeffs``) rather than
-            # multiplying a second normalization factor on top, so do not
-            # remove ``.normalized()``.
-            element_shells.append(
-                libcint.Shell(
-                    angmom=int(angular[shell]),
-                    alphas=alphas[shell],
-                    coeffs=coeffs[shell],
-                ).normalized()
-            )
-            shell += 1
-        if number > 0:
-            shells_by_element[number] = element_shells
-        elif element_shells:
-            raise ValueError("Padding atomic number zero cannot own shells.")
+    for number, element_shells in shell_layout:
+        # ``slater_to_gauss`` normalizes stretched 3D Cartesian Gaussians
+        # ``x^l exp(-alpha r^2)``, whereas ``tad-libcint`` combines the
+        # radial contraction ``sum_k c_k r^l exp(-alpha_k r^2)`` with real
+        # spherical harmonics of unit norm on the sphere, leaving an
+        # unnormalized shell self-overlap of ``(2l + 1) / (4 * pi)``.
+        # ``Shell.normalized()`` rescales the 1D shell coefficients by
+        # their exact analytical radial self-overlap ``overlap.rsqrt()``
+        # (differentiably w.r.t. ``alphas`` and ``coeffs``) rather than
+        # multiplying a second normalization factor on top, so do not
+        # remove ``.normalized()``.
+        shells_by_element[number] = [
+            libcint.Shell(
+                angmom=angmom,
+                alphas=alphas[shell_idx],
+                coeffs=coeffs[shell_idx],
+            ).normalized()
+            for angmom, shell_idx in element_shells
+        ]
 
     physical_numbers = numbers
     physical_positions = positions
@@ -498,6 +502,24 @@ def create_libcint_from_data(
         libcint.Structure(
             numbers=physical_numbers, positions=physical_positions
         ),
+    )
+
+
+def create_libcint_from_data(
+    numbers: Tensor,
+    unique: Tensor,
+    ushells_per_unique: Tensor,
+    unique_angular: Tensor,
+    alphas: tuple[Tensor, ...],
+    coeffs: tuple[Tensor, ...],
+    positions: Tensor,
+    *,
+    mask: Tensor | None = None,
+) -> tuple[libcint.Basis, libcint.Structure]:
+    """Create a call-local libcint basis and structure from gathered data."""
+    layout = build_shell_layout(unique, ushells_per_unique, unique_angular)
+    return create_libcint_from_layout(
+        numbers, layout, alphas, coeffs, positions, mask=mask
     )
 
 

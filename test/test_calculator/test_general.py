@@ -97,11 +97,7 @@ def test_change_type_after_energy(int_driver: str) -> None:
     calc_32 = calc_64.type(torch.float32)
     run_asserts(calc_32, torch.float32)
     setup = calc_32.system.integral_setup
-    assert setup is not None
-    if setup.pytorch is not None:
-        assert setup.pytorch.alphas[0].dtype == torch.float32
-    else:
-        assert setup.libcint is not None
-        assert setup.libcint.slater.dtype == torch.float32
+    assert setup is not None and setup.backend is not None
+    assert setup.backend.alphas[0].dtype == torch.float32
 
     timer.reset()

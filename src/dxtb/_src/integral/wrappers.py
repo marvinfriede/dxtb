@@ -68,10 +68,12 @@ from dxtb._src.constants import labels
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import Literal, Tensor
 
-from .driver.libcint.driver import prepare_libcint
-from .driver.libcint.overlap import build_overlap_libcint
-from .driver.pytorch.multipole import build_dipole, build_quadrupole
-from .driver.pytorch.overlap import build_overlap
+from .driver.libcint import build_dipole as build_dipole_libcint
+from .driver.libcint import build_overlap as build_overlap_libcint
+from .driver.libcint import build_quadrupole as build_quadrupole_libcint
+from .driver.pytorch import build_dipole as build_dipole_pytorch
+from .driver.pytorch import build_overlap as build_overlap_pytorch
+from .driver.pytorch import build_quadrupole as build_quadrupole_pytorch
 from .evaluation import setup_integral_evaluation
 
 __all__ = ["dipint", "hcore", "overlap", "quadint"]
@@ -312,26 +314,21 @@ def _single(
 
     if driver == labels.INTDRIVER_PYTORCH:
         assert eval_setup.pytorch is not None
-        setup = eval_setup.pytorch
+        pt_setup = eval_setup.pytorch
         if kind == "dipole":
-            matrix = build_dipole(setup, positions)
+            matrix = build_dipole_pytorch(pt_setup, positions)
         elif kind == "quadrupole":
-            matrix = build_quadrupole(setup, positions)
+            matrix = build_quadrupole_pytorch(pt_setup, positions)
         else:
-            matrix = build_overlap(setup, positions)
+            matrix = build_overlap_pytorch(pt_setup, positions)
     else:
-        # pylint: disable=import-outside-toplevel
-        from dxtb._src.exlibs import libcint
-
         assert eval_setup.libcint is not None
-        call = prepare_libcint(eval_setup.libcint, positions)
+        lc_setup = eval_setup.libcint
         if kind == "dipole":
-            matrix = libcint.int1e("r0", call.basis, call.structure)
+            matrix = build_dipole_libcint(lc_setup, positions)
         elif kind == "quadrupole":
-            matrix = libcint.int1e(
-                "r0r0", call.basis, call.structure, packed=False
-            )
+            matrix = build_quadrupole_libcint(lc_setup, positions)
         else:
-            matrix = build_overlap_libcint(call)
+            matrix = build_overlap_libcint(lc_setup, positions)
 
     return matrix.to(device=positions.device)
