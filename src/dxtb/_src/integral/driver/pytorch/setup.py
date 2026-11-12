@@ -36,7 +36,17 @@ __all__ = ["PytorchIntegralSetup", "setup_integrals"]
 
 
 class PytorchIntegralSetup(Node):
-    """Immutable, transform-visible setup for pure PyTorch integrals."""
+    """
+    Immutable, transform-visible setup for pure PyTorch integrals.
+
+    Stores setup-time CGTO ``alphas`` and ``coeffs`` expanded from the active
+    parametrization. Reusing one instance across geometries supports repeated
+    independent backward passes with respect to ``positions`` (``retain_graph=False``).
+    Independent repeated backward passes with respect to basis parameters
+    (such as ``element.*.slater``) require rebuilding a fresh setup per
+    evaluation so setup-time ``slater_to_gauss``/``orthogonalize`` saved
+    tensors are not consumed across calls.
+    """
 
     index: IndexHelper = child()
     alphas: tuple[Tensor, ...] = child()

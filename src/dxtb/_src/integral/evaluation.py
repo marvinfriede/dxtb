@@ -144,7 +144,21 @@ def setup_integral_evaluation(
     device: torch.device | None = None,
     dtype: torch.dtype | None = None,
 ) -> IntegralSetup | None:
-    """Gather immutable backend data for later per-geometry matrix builds."""
+    """
+    Gather immutable backend data for later per-geometry matrix builds.
+
+    Note
+    ----
+    The returned :class:`IntegralSetup` captures setup-time CGTO ``alphas`` and
+    ``coeffs`` derived from ``par``. Reusing one setup across geometries
+    supports repeated independent backward passes with respect to ``positions``
+    without ``retain_graph=True``. For repeated independent backward passes or
+    :mod:`torch.func` transforms (``jvp``, ``jacfwd``, ``jacrev``) with respect
+    to basis parameters (such as ``element.*.slater``), rebuild a fresh setup
+    from the active parameter tensors on each evaluation (for example via
+    :meth:`~dxtb._src.calculators.model.Model.setup_functional` or
+    :class:`~dxtb.Calculator`).
+    """
     if intlevel < labels.INTLEVEL_OVERLAP:
         return None
     if ihelp.batch_mode != 0:

@@ -30,6 +30,17 @@ Conventions (the same for both drivers):
 - Every shell is normalized to unit self-overlap, so the overlap matrix has
   unit diagonal.
 
+.. warning::
+
+   **Breaking change**: The ``normalize`` keyword argument (including
+   ``normalize=False``) has been removed from :func:`overlap`, :func:`dipint`,
+   and :func:`quadint`. Contracted Gaussian shells are now always normalized to
+   unit self-overlap at construction across both backends. Internal xTB
+   evaluations (:func:`~dxtb._src.integral.evaluation.build_integral_matrices`)
+   retain ket-centered 3-component dipole and 6-component traceless quadrupole
+   conventions, whereas these standalone wrappers always return origin-centered
+   3-component dipole and 9-component Cartesian quadrupole matrices.
+
 Example
 -------
 
@@ -66,7 +77,7 @@ from tad_mctc.batch import pack
 from dxtb import IndexHelper
 from dxtb._src.constants import labels
 from dxtb._src.param import Param, ParamModule
-from dxtb._src.typing import Literal, Tensor
+from dxtb._src.typing import DD, Literal, Tensor
 
 from .driver.libcint import build_dipole as build_dipole_libcint
 from .driver.libcint import build_overlap as build_overlap_libcint
@@ -187,7 +198,7 @@ def hcore(
     _validate_inputs(numbers, positions, allow_batch=False)
     numbers, positions = _extract_active_atoms(numbers, positions)
 
-    dd = {"device": positions.device, "dtype": positions.dtype}
+    dd: DD = {"device": positions.device, "dtype": positions.dtype}
     pm = par if isinstance(par, ParamModule) else ParamModule(par, **dd)
     ihelp = IndexHelper.from_numbers(numbers, pm)
     # set up H0 first: it validates the method name of the parametrization
@@ -275,7 +286,7 @@ def _integral(
 
     _validate_inputs(numbers, positions, allow_batch=True)
 
-    dd = {"device": positions.device, "dtype": positions.dtype}
+    dd: DD = {"device": positions.device, "dtype": positions.dtype}
     pm = par if isinstance(par, ParamModule) else ParamModule(par, **dd)
 
     if numbers.ndim == 1:

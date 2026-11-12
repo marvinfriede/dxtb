@@ -80,7 +80,17 @@ def _build_shell_layout(
 
 
 class LibcintIntegralSetup(Node):
-    """Immutable, transform-visible setup for single-System libcint evaluation."""
+    """
+    Immutable, transform-visible setup for single-System libcint evaluation.
+
+    Stores setup-time CGTO ``alphas`` and ``coeffs`` expanded from the active
+    parametrization. Reusing one instance across geometries supports repeated
+    independent backward passes with respect to ``positions`` (``retain_graph=False``).
+    Independent repeated backward passes with respect to basis parameters
+    (such as ``element.*.slater``) require rebuilding a fresh setup per
+    evaluation so setup-time ``slater_to_gauss``/``orthogonalize`` saved
+    tensors are not consumed across calls.
+    """
 
     index: IndexHelper = child()
     numbers: Tensor = child(keep_dtype=True)
@@ -138,6 +148,11 @@ class LibcintIntegralSetup(Node):
         # pylint: disable=import-outside-toplevel
         from dxtb._src.exlibs import libcint
 
+        if positions.shape != (*self.numbers.shape, 3):
+            raise ValueError(
+                f"Expected positions of shape {(*self.numbers.shape, 3)}, "
+                f"got {tuple(positions.shape)}."
+            )
         if self.force_cpu and positions.device.type != "cpu":
             positions = positions.to(device=torch.device("cpu"))
 
@@ -164,8 +179,15 @@ class LibcintIntegralSetup(Node):
 
         numbers = self.numbers
         if mask is not None:
+            if mask.shape != numbers.shape:
+                raise ValueError(
+                    f"Expected mask of shape {tuple(numbers.shape)}, "
+                    f"got {tuple(mask.shape)}."
+                )
             if self.force_cpu and mask.device.type != "cpu":
                 mask = mask.to(device=torch.device("cpu"))
+            if self.active_atoms is not None:
+                mask = mask & (numbers > 0)
             numbers = torch.masked_select(numbers, mask)
             positions = torch.masked_select(
                 positions, mask.unsqueeze(-1)

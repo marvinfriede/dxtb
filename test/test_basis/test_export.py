@@ -144,25 +144,29 @@ def test_format_contraction_fail() -> None:
         format_contraction(shells, ngauss)
 
 
-@pytest.mark.parametrize("xtb_version", ["gfn1", "gfn2"])
+@pytest.mark.parametrize("qcformat", ["nwchem", "gaussian94"])
+@pytest.mark.parametrize("xtb_version", ["gfn0", "gfn1", "gfn2"])
+@pytest.mark.parametrize("comp", [[26, 1], [26, 1, 8, 1]])
 def test_export_multiatom_unsorted(
-    xtb_version: Literal["gfn1", "gfn2"],
+    qcformat: Literal["gaussian94", "nwchem"],
+    xtb_version: Literal["gfn0", "gfn1", "gfn2"],
+    comp: list[int],
 ) -> None:
-    """Multi-atom unsorted BSE export matches concatenated element blocks."""
+    """Multi-atom unsorted BSE export (including FeH) matches element blocks."""
     dd: DD = {"dtype": torch.double, "device": torch.device("cpu")}
     par = get_param_module(xtb_version, **dd)
 
-    numbers = torch.tensor([26, 1, 8, 1], device=dd["device"])
+    numbers = torch.tensor(comp, device=dd["device"])
     bas_multi = Basis(
         numbers, par, IndexHelper.from_numbers(numbers, par), **dd
     )
 
     expected_blocks = []
-    for z in (1, 8, 26):
+    for z in sorted(set(comp)):
         z_t = torch.tensor([z], device=dd["device"])
         bas_z = Basis(z_t, par, IndexHelper.from_numbers(z_t, par), **dd)
-        expected_blocks.append(bas_z.to_bse(qcformat="nwchem").rstrip())
+        expected_blocks.append(bas_z.to_bse(qcformat=qcformat).rstrip())
 
-    assert bas_multi.to_bse(qcformat="nwchem").rstrip() == "\n".join(
+    assert bas_multi.to_bse(qcformat=qcformat).rstrip() == "\n".join(
         expected_blocks
     )

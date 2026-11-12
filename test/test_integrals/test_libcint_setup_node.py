@@ -625,3 +625,126 @@ def test_setup_libcint_rejects_mismatched_numbers_and_index_helper() -> None:
 
     with pytest.raises(ValueError, match="matching IndexHelper"):
         setup_libcint(mismatched_basis, force_cpu=True)
+
+
+def test_libcint_noncontiguous_padding_unsorted_masks_and_unstack() -> None:
+    """WP3: noncontiguous Z=0 padding, unsorted Fe/Si/H, masks, and unstacking."""
+    import copy
+
+    from dxtb._src.xtb.h0 import setup_h0_core
+
+    par = ParamModule(GFN2_XTB, dtype=torch.float64)
+    nums_pad = torch.tensor([0, 26, 0, 14, 0, 1], dtype=torch.long)
+    pos_pad = torch.tensor(
+        [
+            [10.0, 20.0, 30.0],
+            [0.0, 0.0, 0.0],
+            [-5.0, -6.0, -7.0],
+            [0.0, 0.0, 4.1],
+            [11.0, 12.0, 13.0],
+            [0.0, 2.9, 1.2],
+        ],
+        dtype=torch.float64,
+    )
+    ihelp_pad = IndexHelper.from_numbers(nums_pad, par)
+    pt_pad = setup_integral_evaluation(
+        nums_pad,
+        par,
+        ihelp_pad,
+        driver_type=labels.INTDRIVER_PYTORCH,
+        intlevel=labels.INTLEVEL_QUADRUPOLE,
+        dtype=torch.float64,
+    )
+    lc_pad = setup_integral_evaluation(
+        nums_pad,
+        par,
+        ihelp_pad,
+        driver_type=labels.INTDRIVER_LIBCINT,
+        intlevel=labels.INTLEVEL_QUADRUPOLE,
+        dtype=torch.float64,
+    )
+    assert (
+        pt_pad is not None and lc_pad is not None and lc_pad.libcint is not None
+    )
+    assert lc_pad.libcint.active_atoms is not None
+    assert lc_pad.libcint.active_atoms.tolist() == [1, 3, 5]
+    assert all(num > 0 for num, _ in lc_pad.libcint.shell_layout)
+
+    h0_pad = setup_h0_core(
+        nums_pad,
+        par,
+        ihelp_pad,
+        device=torch.device("cpu"),
+        dtype=torch.float64,
+    )
+    m_pt, _ = build_integral_matrices(pt_pad, h0_pad, pos_pad, 0.0)
+    m_lc, _ = build_integral_matrices(lc_pad, h0_pad, pos_pad, 0.0)
+
+    nums_act = torch.tensor([26, 14, 1], dtype=torch.long)
+    pos_act = pos_pad[[1, 3, 5]]
+    ihelp_act = IndexHelper.from_numbers(nums_act, par)
+    lc_act = setup_integral_evaluation(
+        nums_act,
+        par,
+        ihelp_act,
+        driver_type=labels.INTDRIVER_LIBCINT,
+        intlevel=labels.INTLEVEL_QUADRUPOLE,
+        dtype=torch.float64,
+    )
+    assert lc_act is not None
+    h0_act = setup_h0_core(
+        nums_act,
+        par,
+        ihelp_act,
+        device=torch.device("cpu"),
+        dtype=torch.float64,
+    )
+    m_act, _ = build_integral_matrices(lc_act, h0_act, pos_act, 0.0)
+
+    torch.testing.assert_close(
+        m_lc.overlap, m_pt.overlap, atol=1e-13, rtol=1e-13
+    )
+    torch.testing.assert_close(m_lc.dipole, m_pt.dipole, atol=1e-13, rtol=1e-13)
+    torch.testing.assert_close(
+        m_lc.quadrupole, m_pt.quadrupole, atol=1e-13, rtol=1e-13
+    )
+    torch.testing.assert_close(m_lc.hcore, m_pt.hcore, atol=1e-13, rtol=1e-13)
+    torch.testing.assert_close(m_lc.overlap, m_act.overlap, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(
+        m_lc.quadrupole, m_act.quadrupole, atol=0.0, rtol=0.0
+    )
+
+    # Mask overlapping Z=0 padding slots still strips Z<=0 placeholders safely.
+    mask_with_zero = torch.tensor([True, True, True, False, False, True])
+    b_mask, s_mask = lc_pad.libcint.create_libcint(pos_pad, mask=mask_with_zero)
+    ov_mask = libcint.overlap(b_mask, s_mask)
+    nums_feh = torch.tensor([26, 1], dtype=torch.long)
+    pos_feh = pos_pad[[1, 5]]
+    _, lc_feh = _basis_and_setup(nums_feh, par, force_cpu=True)
+    ov_feh = libcint.overlap(*lc_feh.create_libcint(pos_feh))
+    torch.testing.assert_close(ov_mask, ov_feh, atol=0.0, rtol=0.0)
+
+    with pytest.raises(ValueError, match="Expected positions of shape"):
+        lc_feh.create_libcint(pos_feh[:1])
+    with pytest.raises(ValueError, match="Expected mask of shape"):
+        lc_feh.create_libcint(pos_feh, mask=torch.tensor([True]))
+
+    # Stack and unstack roundtrip preserves modified parameter values.
+    par_alt = copy.deepcopy(GFN2_XTB)
+    assert par_alt.element is not None
+    par_alt.element["H"].slater = [
+        x * 1.05 for x in par_alt.element["H"].slater
+    ]
+    _, lc_feh_alt = _basis_and_setup(
+        nums_feh, ParamModule(par_alt, dtype=torch.float64), force_cpu=True
+    )
+    stacked = stack((lc_feh, lc_feh_alt))
+    leaves, _ = tree_flatten(stacked)
+    _, spec_single = tree_flatten(lc_feh)
+    unstacked_alt = tree_unflatten([leaf[1] for leaf in leaves], spec_single)
+    torch.testing.assert_close(
+        build_overlap_libcint(unstacked_alt, pos_feh),
+        build_overlap_libcint(lc_feh_alt, pos_feh),
+        atol=0.0,
+        rtol=0.0,
+    )

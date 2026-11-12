@@ -37,6 +37,7 @@ from dxtb._src.typing.exceptions import (
     IntegralTransformError,
 )
 
+from ..conftest import DEVICE
 from ..utils import overlap_1d
 
 
@@ -296,3 +297,106 @@ def test_create_cgtos_handles_zero_padded_numbers(batched: bool) -> None:
         torch.testing.assert_close(a_act, a_ref, atol=0.0, rtol=0.0)
     for c_ref, c_act in zip(coeffs_ref, coeffs_pad[1:]):
         torch.testing.assert_close(c_act, c_ref, atol=0.0, rtol=0.0)
+
+
+@pytest.mark.parametrize("method", ["gfn0", "gfn1", "gfn2"])
+def test_canonical_cgtos_all_supported_elements(method: str) -> None:
+    """WP2: canonical CGTO setup across all 86 elements in GFN0, GFN1, GFN2."""
+    from tad_mctc.data import pse
+
+    from dxtb import GFN0_XTB, GFN2_XTB, ParamModule
+    from dxtb._src.basis.ortho import gaussian_integral
+
+    par_raw = {"gfn0": GFN0_XTB, "gfn1": GFN1_XTB, "gfn2": GFN2_XTB}[method]
+    assert par_raw.element is not None
+    zs = sorted(
+        pse.S2Z[sym] for sym in par_raw.element.keys() if sym in pse.S2Z
+    )
+    assert zs == list(range(1, 87))
+
+    expected_dev = torch.device("cpu") if DEVICE is None else DEVICE
+    par = ParamModule(par_raw, dtype=torch.float64, device=DEVICE)
+    tm_dsp_seen = 0
+
+    for z in zs:
+        num = torch.tensor([z], device=DEVICE)
+        ihelp = IndexHelper.from_numbers(num, par)
+        bas = Basis(num, par, ihelp, device=DEVICE, dtype=torch.float64)
+        alphas, coeffs = bas.create_cgtos()
+
+        n_shells = int(ihelp.ushells_per_unique[0].item())
+        assert len(alphas) == n_shells == len(coeffs)
+        angs = [int(x) for x in ihelp.unique_angular.tolist()]
+        vals = [int(x) for x in bas.valence.tolist()]
+        if angs[:1] == [2] and 0 in angs[1:]:
+            tm_dsp_seen += 1
+
+        for l_val in set(angs):
+            nv = sum(1 for a_l, v in zip(angs, vals) if a_l == l_val and v == 0)
+            assert nv <= 1
+
+        for s_idx, (alpha, coeff) in enumerate(zip(alphas, coeffs)):
+            assert alpha.ndim == 1 and coeff.ndim == 1
+            assert alpha.shape == coeff.shape
+            assert alpha.dtype == torch.float64 and coeff.dtype == torch.float64
+            assert alpha.device == expected_dev and coeff.device == expected_dev
+            assert torch.isfinite(alpha).all() and torch.isfinite(coeff).all()
+            if angs[s_idx] == 0:
+                self_ovlp = gaussian_integral(alpha, alpha, coeff, coeff)
+                torch.testing.assert_close(
+                    self_ovlp,
+                    torch.ones_like(self_ovlp),
+                    atol=1e-13,
+                    rtol=1e-13,
+                )
+
+        if z == 1 and method in ("gfn0", "gfn1"):
+            assert vals == [1, 0] and angs == [0, 0]
+            cross = gaussian_integral(
+                alphas[0], alphas[1], coeffs[0], coeffs[1]
+            )
+            torch.testing.assert_close(
+                cross, torch.zeros_like(cross), atol=1e-14, rtol=0.0
+            )
+
+    assert tm_dsp_seen == 41
+
+
+def test_custom_multi_nonvalence_s_shells_orthogonalize_to_primary() -> None:
+    """WP2: multiple non-valence s shells each orthogonalize to valence 1s."""
+    import copy
+
+    from dxtb import ParamModule
+    from dxtb._src.basis.ortho import gaussian_integral
+
+    custom = copy.deepcopy(GFN1_XTB)
+    assert custom.element is not None
+    h_el = custom.element["H"]
+    h_el.shells = ["1s", "2s", "3s"]
+    h_el.ngauss = [4, 4, 4]
+    h_el.slater = [1.2, 0.9, 0.6]
+    h_el.levels = [-10.0, -5.0, -2.0]
+    h_el.shpoly = [0.0, 0.0, 0.0]
+    h_el.kcn = [0.0, 0.0, 0.0]
+    h_el.lgam = [1.0, 1.0, 1.0]
+
+    par = ParamModule(custom, dtype=torch.float64, device=DEVICE)
+    num = torch.tensor([1], device=DEVICE)
+    ihelp = IndexHelper.from_numbers(num, par)
+    bas = Basis(num, par, ihelp, device=DEVICE, dtype=torch.float64)
+    alphas, coeffs = bas.create_cgtos()
+
+    assert [int(x) for x in bas.valence.tolist()] == [1, 0, 0]
+    for idx in range(3):
+        diag = gaussian_integral(
+            alphas[idx], alphas[idx], coeffs[idx], coeffs[idx]
+        )
+        torch.testing.assert_close(
+            diag, torch.ones_like(diag), atol=1e-14, rtol=1e-14
+        )
+    s12 = gaussian_integral(alphas[0], alphas[1], coeffs[0], coeffs[1])
+    s13 = gaussian_integral(alphas[0], alphas[2], coeffs[0], coeffs[2])
+    s23 = gaussian_integral(alphas[1], alphas[2], coeffs[1], coeffs[2])
+    torch.testing.assert_close(s12, torch.zeros_like(s12), atol=1e-14, rtol=0.0)
+    torch.testing.assert_close(s13, torch.zeros_like(s13), atol=1e-14, rtol=0.0)
+    assert s23.abs() > 0.1
