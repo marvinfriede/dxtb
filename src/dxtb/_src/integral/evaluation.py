@@ -26,12 +26,11 @@ from dxtb._src.basis.bas import Basis
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.integral.driver.libcint import (
     LibcintIntegralSetup,
-    LibcintIntegralSetupNode,
     build_dipole_libcint,
     build_overlap_libcint,
     build_quadrupole_libcint,
+    prepare_libcint,
     setup_libcint,
-    setup_libcint_core,
 )
 from dxtb._src.integral.driver.pytorch.multipole import (
     build_dipole as build_dipole_pytorch,
@@ -44,8 +43,7 @@ from dxtb._src.integral.driver.pytorch.overlap import (
 )
 from dxtb._src.integral.driver.pytorch.setup import (
     PytorchIntegralSetup,
-    PytorchIntegralSetupNode,
-    setup_integrals_core,
+    setup_integrals,
 )
 from dxtb._src.integral.types.dipole import shift_dipole_origin
 from dxtb._src.integral.types.quadrupole import (
@@ -71,13 +69,9 @@ class IntegralSetup(Node):
     driver_type: int = context()
     intlevel: int = context()
     logical_device: torch.device | None = context(default=None)
-    backend: (
-        PytorchIntegralSetupNode
-        | LibcintIntegralSetupNode
-        | PytorchIntegralSetup
-        | LibcintIntegralSetup
-        | None
-    ) = child(default=None)
+    backend: PytorchIntegralSetup | LibcintIntegralSetup | None = child(
+        default=None
+    )
 
     def _normalize(self) -> dict[str, object]:
         if self.logical_device is not None:
@@ -86,36 +80,25 @@ class IntegralSetup(Node):
             if normalized != self.logical_device:
                 return {"logical_device": normalized}
             return {}
-        if isinstance(
-            self.backend, (PytorchIntegralSetupNode, LibcintIntegralSetupNode)
-        ):
-            device = self.backend.index.device
-        elif isinstance(self.backend, PytorchIntegralSetup):
-            device = self.backend.ihelp.device
-        elif isinstance(self.backend, LibcintIntegralSetup):
-            device = self.backend.numbers.device
-        else:
-            device = torch.device("cpu")
+        device = (
+            torch.device("cpu")
+            if self.backend is None
+            else self.backend.index.device
+        )
         return {"logical_device": device}
 
     def _validate(self) -> None:
         """Require the selected backend to match its driver."""
-        expected_backends = {
-            labels.INTDRIVER_PYTORCH: (
-                PytorchIntegralSetupNode,
-                PytorchIntegralSetup,
-            ),
-            labels.INTDRIVER_LIBCINT: (
-                LibcintIntegralSetupNode,
-                LibcintIntegralSetup,
-            ),
+        expected_backend = {
+            labels.INTDRIVER_PYTORCH: PytorchIntegralSetup,
+            labels.INTDRIVER_LIBCINT: LibcintIntegralSetup,
         }.get(self.driver_type)
-        if expected_backends is None:
+        if expected_backend is None:
             raise ValueError(
                 f"Unsupported integral driver '{self.driver_type}'."
             )
         if self.backend is not None and not isinstance(
-            self.backend, expected_backends
+            self.backend, expected_backend
         ):
             raise TypeError(
                 "Integral backend Node does not match driver "
@@ -129,18 +112,14 @@ class IntegralSetup(Node):
         return self.logical_device
 
     @property
-    def pytorch(
-        self,
-    ) -> PytorchIntegralSetupNode | PytorchIntegralSetup | None:
+    def pytorch(self) -> PytorchIntegralSetup | None:
         """Return the PyTorch backend setup when selected."""
         if self.driver_type == labels.INTDRIVER_PYTORCH:
             return self.backend  # type: ignore[return-value]
         return None
 
     @property
-    def libcint(
-        self,
-    ) -> LibcintIntegralSetupNode | LibcintIntegralSetup | None:
+    def libcint(self) -> LibcintIntegralSetup | None:
         """Return the libcint backend setup when selected."""
         if self.driver_type == labels.INTDRIVER_LIBCINT:
             return self.backend  # type: ignore[return-value]
@@ -149,26 +128,7 @@ class IntegralSetup(Node):
     @property
     def index(self) -> IndexHelper | None:
         """Return the IndexHelper owned by the backend setup, if present."""
-        if isinstance(
-            self.backend, (PytorchIntegralSetupNode, LibcintIntegralSetupNode)
-        ):
-            return self.backend.index
-        if isinstance(
-            self.backend, (PytorchIntegralSetup, LibcintIntegralSetup)
-        ):
-            return self.backend.ihelp
-        return None
-
-    def _convert_child(
-        self,
-        name: str,
-        value: object,
-        device: torch.device | str | None,
-        dtype: torch.dtype | None,
-    ) -> object:
-        if isinstance(value, (PytorchIntegralSetup, LibcintIntegralSetup)):
-            return value.to(device=device, dtype=dtype)
-        return super()._convert_child(name, value, device, dtype)
+        return None if self.backend is None else self.backend.index
 
     def to(
         self,
@@ -202,7 +162,8 @@ def setup_integral_evaluation(
         return None
     if ihelp.batch_mode != 0:
         raise ValueError(
-            "setup_integral_evaluation requires a single System (batch_mode == 0)."
+            "setup_integral_evaluation requires a single System "
+            "(batch_mode == 0)."
         )
 
     target_device = numbers.device if device is None else device
@@ -226,7 +187,7 @@ def setup_integral_evaluation(
             device=target_device,
             dtype=target_dtype,
         )
-        pytorch_setup = setup_integrals_core(
+        pytorch_setup = setup_integrals(
             basis,
             **({} if algorithm is None else {"algorithm": algorithm}),
         )
@@ -264,22 +225,18 @@ def setup_integral_evaluation(
         driver_type=driver_type,
         intlevel=intlevel,
         logical_device=target_device,
-        backend=setup_libcint_core(basis, force_cpu=force_cpu_for_libcint),
+        backend=setup_libcint(basis, force_cpu=force_cpu_for_libcint),
     )
 
 
 def _evaluate_pytorch_moments(
-    backend: PytorchIntegralSetup | PytorchIntegralSetupNode,
+    backend: PytorchIntegralSetup,
     positions: Tensor,
     intlevel: int,
 ) -> tuple[Tensor, Tensor | None, Tensor | None, IndexHelper]:
     """Evaluate normalized overlap and ket-centered moments with PyTorch."""
     overlap = build_overlap_pytorch(backend, positions)
-    ihelp = (
-        backend.index
-        if isinstance(backend, PytorchIntegralSetupNode)
-        else backend.ihelp
-    )
+    ihelp = backend.index
     dipole = None
     quadrupole = None
 
@@ -303,12 +260,12 @@ def _evaluate_pytorch_moments(
 
 
 def _evaluate_libcint_moments(
-    backend: LibcintIntegralSetup | LibcintIntegralSetupNode,
+    backend: LibcintIntegralSetup,
     positions: Tensor,
     intlevel: int,
 ) -> tuple[Tensor, Tensor | None, Tensor | None, IndexHelper]:
     """Evaluate normalized overlap and ket-centered moments with libcint."""
-    call_data = setup_libcint(backend, positions)
+    call_data = prepare_libcint(backend, positions)
     overlap = build_overlap_libcint(call_data)
     dipole = None
     quadrupole = None
@@ -321,7 +278,7 @@ def _evaluate_libcint_moments(
             raw_quadrupole = build_quadrupole_libcint(call_data)
             quadrupole = make_quadrupole_traceless(raw_quadrupole)
 
-    return overlap, dipole, quadrupole, call_data.ihelp
+    return overlap, dipole, quadrupole, call_data.index
 
 
 def build_integral_matrices(

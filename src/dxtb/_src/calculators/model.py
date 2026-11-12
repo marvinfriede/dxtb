@@ -121,8 +121,8 @@ from dxtb._src.components.interactions.solvation.alpb import (
     setup_generalized_born,
 )
 from dxtb._src.constants import defaults
-from dxtb._src.integral.driver.libcint.driver import LibcintIntegralSetupNode
-from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetupNode
+from dxtb._src.integral.driver.libcint.driver import LibcintIntegralSetup
+from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetup
 from dxtb._src.integral.evaluation import (
     IntegralSetup,
     setup_integral_evaluation,
@@ -255,12 +255,7 @@ class ExactSystemCore(Node):
     @property
     def index(self) -> IndexHelper | None:
         """Return the index owned by the selected backend, if present."""
-        if self.integral is None or not isinstance(
-            self.integral.backend,
-            (PytorchIntegralSetupNode, LibcintIntegralSetupNode),
-        ):
-            return None
-        return self.integral.backend.index
+        return None if self.integral is None else self.integral.index
 
     @property
     def integral_setup(self) -> IntegralSetup | None:
@@ -439,12 +434,7 @@ def _build_setup_index_token(
     es2_setup: ES2CoreSetup | None,
 ) -> _SetupIndexToken:
     """Capture setup-time identity and version metadata for fast validation."""
-    backend_index: IndexHelper | None = None
-    if integral_setup is not None and isinstance(
-        integral_setup.backend,
-        (PytorchIntegralSetupNode, LibcintIntegralSetupNode),
-    ):
-        backend_index = integral_setup.backend.index
+    backend_index = None if integral_setup is None else integral_setup.index
 
     es2_shells = (
         es2_setup.shells_to_atom if es2_setup is not None else None
@@ -1050,12 +1040,9 @@ class System:
         ):
             return False
 
-        backend_index = None
-        if self.integral_setup is not None and isinstance(
-            self.integral_setup.backend,
-            (PytorchIntegralSetupNode, LibcintIntegralSetupNode),
-        ):
-            backend_index = self.integral_setup.backend.index
+        backend_index = (
+            None if self.integral_setup is None else self.integral_setup.index
+        )
         if backend_index is not None and (
             backend_index.atom_to_unique.shape != (nat,)
             or backend_index.shells_to_ushell.shape != (n_shells,)
@@ -1301,8 +1288,8 @@ class System:
         if core.integral is not None and (
             type(core.integral.backend)
             is not {
-                labels.INTDRIVER_PYTORCH: PytorchIntegralSetupNode,
-                labels.INTDRIVER_LIBCINT: LibcintIntegralSetupNode,
+                labels.INTDRIVER_PYTORCH: PytorchIntegralSetup,
+                labels.INTDRIVER_LIBCINT: LibcintIntegralSetup,
             }.get(core.integral.driver_type)
         ):
             return None
@@ -1387,11 +1374,7 @@ class System:
             return None
 
         expected_index = (
-            self.integral_setup.backend.index
-            if self.integral_setup is not None
-            and type(self.integral_setup.backend)
-            in (PytorchIntegralSetupNode, LibcintIntegralSetupNode)
-            else None
+            None if self.integral_setup is None else self.integral_setup.index
         )
         if core.index is not expected_index:
             return None

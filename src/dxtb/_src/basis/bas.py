@@ -24,7 +24,6 @@ from the parametrization. The basis set can also be printed in various formats.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -45,7 +44,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "Basis",
-    "BasisSetup",
     "create_libcint_cgtos_from_data",
     "create_libcint_from_data",
 ]
@@ -361,27 +359,38 @@ class Basis(TensorLike):
     def create_libcint(
         self, positions: Tensor, mask: Tensor | None = None
     ) -> tuple[libcint.Basis, libcint.Structure]:
-        """Create call-local new-API basis and structure values."""
-        return self.setup_data().create_libcint(positions, mask=mask)
+        """Create call-local libcint basis and structure for positions."""
+        if self.ihelp.batch_mode != 0 or self.unique.ndim > 1:
+            raise NotImplementedError(
+                "Libcint Basis conversion requires a single Structure."
+            )
 
-    def setup_data(self) -> BasisSetup:
-        """Return the gathered, geometry-free basis data."""
-        return BasisSetup(
-            numbers=self.numbers,
-            unique=self.unique,
-            ihelp=self.ihelp,
-            ngauss=self.ngauss,
-            pqn=self.pqn,
-            slater=self.slater,
-            valence=self.valence,
-            sto=self.sto,
+        alphas, coeffs = self.create_libcint_cgtos()
+        return create_libcint_from_data(
+            self.numbers,
+            self.unique,
+            self.ihelp.ushells_per_unique,
+            self.ihelp.unique_angular,
+            alphas,
+            coeffs,
+            positions,
+            mask=mask,
         )
 
     def create_libcint_cgtos(
         self,
     ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
         """Create geometry-independent Gaussian basis data for libcint."""
-        return self.setup_data().create_libcint_cgtos()
+        return create_libcint_cgtos_from_data(
+            self.unique,
+            self.ihelp.ushells_per_unique,
+            self.ngauss,
+            self.pqn,
+            self.ihelp.unique_angular,
+            self.slater,
+            self.valence,
+            self.sto,
+        )
 
 
 def create_libcint_cgtos_from_data(
@@ -490,74 +499,6 @@ def create_libcint_from_data(
             numbers=physical_numbers, positions=physical_positions
         ),
     )
-
-
-@dataclass(frozen=True, eq=False)
-class BasisSetup:
-    """Narrow composition data required to create libcint basis wrappers."""
-
-    numbers: Tensor
-    unique: Tensor
-    ihelp: IndexHelper
-    ngauss: Tensor
-    pqn: Tensor
-    slater: Tensor
-    valence: Tensor
-    sto: Literal["gfn1", "gfn2"] = "gfn2"
-
-    def to(
-        self,
-        device: torch.device | str | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> BasisSetup:
-        """Return converted gathered basis data."""
-        return replace(
-            self,
-            numbers=self.numbers.to(device=device),
-            unique=self.unique.to(device=device),
-            ihelp=self.ihelp.to(device=device),
-            ngauss=self.ngauss.to(device=device),
-            pqn=self.pqn.to(device=device),
-            slater=self.slater.to(device=device, dtype=dtype),
-            valence=self.valence.to(device=device),
-        )
-
-    def create_libcint(
-        self, positions: Tensor, mask: Tensor | None = None
-    ) -> tuple[libcint.Basis, libcint.Structure]:
-        """Create a call-local basis and structure for current positions."""
-        if self.ihelp.batch_mode != 0 or self.unique.ndim > 1:
-            raise NotImplementedError(
-                "Libcint BasisSetup conversion is per Structure; the Lanes "
-                "of a Batch are converted independently by the integral driver."
-            )
-
-        alphas, coeffs = self.create_libcint_cgtos()
-        return create_libcint_from_data(
-            self.numbers,
-            self.unique,
-            self.ihelp.ushells_per_unique,
-            self.ihelp.unique_angular,
-            alphas,
-            coeffs,
-            positions,
-            mask=mask,
-        )
-
-    def create_libcint_cgtos(
-        self,
-    ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
-        """Create parameter-differentiable Gaussian contractions."""
-        return create_libcint_cgtos_from_data(
-            self.unique,
-            self.ihelp.ushells_per_unique,
-            self.ngauss,
-            self.pqn,
-            self.ihelp.unique_angular,
-            self.slater,
-            self.valence,
-            self.sto,
-        )
 
 
 def format_contraction(shells: list[str], ngauss: Tensor) -> str:

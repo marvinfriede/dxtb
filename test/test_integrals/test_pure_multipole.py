@@ -39,7 +39,6 @@ from dxtb._src.integral.driver.pytorch.multipole import (
     build_dipole,
     build_quadrupole,
 )
-from dxtb._src.integral.driver.pytorch.overlap import PytorchOverlapSetup
 from dxtb._src.integral.driver.pytorch.setup import (
     PytorchIntegralSetup,
     setup_integrals,
@@ -66,7 +65,7 @@ def test_pure_multipole_reuses_setup_without_call_state(
     ihelp = IndexHelper.from_numbers(numbers, par)
     basis = Basis(torch.unique(numbers), par, ihelp, **dd)
     setup = setup_integrals(basis, algorithm=algorithm)
-    assert isinstance(setup, PytorchOverlapSetup)
+    assert isinstance(setup, PytorchIntegralSetup)
 
     first = build(setup, positions)
     components = (
@@ -74,7 +73,7 @@ def test_pure_multipole_reuses_setup_without_call_state(
     )
     direct = assemble_matrix(
         get_kernel(algorithm),
-        setup.ihelp,
+        setup.index,
         list(setup.alphas),
         list(setup.coeffs),
         positions,
@@ -136,10 +135,11 @@ def test_pure_multipole_supports_jvp_and_vmap(
     setup = setup_integrals(basis, algorithm=algorithm)
     tangent = torch.ones_like(positions)
 
-    value, derivative = jvp(
-        lambda pos: build(setup, pos), (positions,), (tangent,)
-    )
-    batched = vmap(lambda pos: build(setup, pos))(
+    def eval_multipole(pos: torch.Tensor) -> torch.Tensor:
+        return build(setup, pos)
+
+    value, derivative = jvp(eval_multipole, (positions,), (tangent,))
+    batched = vmap(eval_multipole)(
         torch.stack((positions, positions.clone()))
     )
 

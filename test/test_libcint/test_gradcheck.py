@@ -29,8 +29,8 @@ from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.libcint import (
-    LibcintIntegralSetup,
     build_overlap_libcint,
+    prepare_libcint,
     setup_libcint,
 )
 from dxtb._src.typing import DD, Callable, Tensor
@@ -127,25 +127,25 @@ def gradchecker_batch(
     )
 
     par = get_param_module("gfn1", **dd)
-    ihelp = IndexHelper.from_numbers(numbers, par)
-    basis_setups = []
+    setups = []
     for nums in numbers:
         nums = deflate(nums)
         ih = IndexHelper.from_numbers(nums, par)
-        basis_setups.append(Basis(nums, par, ih, **dd).setup_data())
-    setup = LibcintIntegralSetup(
-        numbers=numbers,
-        ihelp=ihelp,
-        basis_setups=tuple(basis_setups),
-        force_cpu=False,
-    )
+        setups.append(
+            setup_libcint(Basis(nums, par, ih, **dd), force_cpu=False)
+        )
 
     # variables to be differentiated
     pos = positions.clone().requires_grad_(True)
 
     def func(p: Tensor) -> Tensor:
-        call_data = setup_libcint(setup, p, mask=mask)
-        return build_overlap_libcint(call_data)
+        matrices = []
+        for setup_b, p_b, m_b in zip(setups, p, mask):
+            pos_b = torch.masked_select(p_b, m_b).reshape((-1, 3))
+            matrices.append(
+                build_overlap_libcint(prepare_libcint(setup_b, pos_b))
+            )
+        return pack(matrices)
 
     return func, pos
 

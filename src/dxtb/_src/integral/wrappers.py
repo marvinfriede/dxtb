@@ -68,7 +68,7 @@ from dxtb._src.constants import labels
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import Literal, Tensor
 
-from .driver.libcint.driver import setup_libcint
+from .driver.libcint.driver import prepare_libcint
 from .driver.libcint.overlap import build_overlap_libcint
 from .driver.pytorch.multipole import build_dipole, build_quadrupole
 from .driver.pytorch.overlap import build_overlap
@@ -324,13 +324,12 @@ def _single(
         from dxtb._src.exlibs import libcint
 
         assert eval_setup.libcint is not None
-        call = setup_libcint(eval_setup.libcint, positions)
-        (item,) = call.inputs
+        call = prepare_libcint(eval_setup.libcint, positions)
         if kind == "dipole":
-            matrix = libcint.int1e("r0", item.basis, item.structure)
+            matrix = libcint.int1e("r0", call.basis, call.structure)
         elif kind == "quadrupole":
             matrix = libcint.int1e(
-                "r0r0", item.basis, item.structure, packed=False
+                "r0r0", call.basis, call.structure, packed=False
             )
         else:
             matrix = build_overlap_libcint(call)

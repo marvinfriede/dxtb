@@ -25,19 +25,18 @@ from the interchangeable ``compute_1d`` kernels (see
 
 from __future__ import annotations
 
-
 from dxtb._src.typing import Tensor
 
 from .impls.kernels import get_kernel
 from .impls.pairs import assemble_matrix
 from .impls.pipeline import DIPOLE_COMPONENTS, QUADRUPOLE_COMPONENTS
-from .setup import PytorchIntegralSetup, PytorchIntegralSetupNode
+from .setup import PytorchIntegralSetup
 
 __all__ = ["build_dipole", "build_quadrupole"]
 
 
 def _build_multipole(
-    setup: PytorchIntegralSetup | PytorchIntegralSetupNode,
+    setup: PytorchIntegralSetup,
     positions: Tensor,
     components: tuple[tuple[int, int, int], ...],
 ) -> Tensor:
@@ -54,7 +53,7 @@ def _build_multipole(
 
 
 def build_dipole(
-    setup: PytorchIntegralSetup | PytorchIntegralSetupNode,
+    setup: PytorchIntegralSetup,
     positions: Tensor,
 ) -> Tensor:
     """Build the raw, origin-centered three-component dipole matrix."""
@@ -62,7 +61,7 @@ def build_dipole(
 
 
 def build_quadrupole(
-    setup: PytorchIntegralSetup | PytorchIntegralSetupNode,
+    setup: PytorchIntegralSetup,
     positions: Tensor,
 ) -> Tensor:
     """Build the raw, origin-centered nine-component quadrupole matrix."""

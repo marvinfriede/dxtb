@@ -23,8 +23,6 @@ Template for calculation and modification of multipole integrals.
 
 from __future__ import annotations
 
-from tad_mctc.batch import pack
-
 from dxtb._src.typing import Tensor
 
 from .driver import LibcintCallData
@@ -45,12 +43,4 @@ def build_multipole_libcint(
             f"Only '{', '.join(allowed_mps)}' are allowed."
         )
 
-    matrices = [
-        libcint.int1e(intstring, item.basis, item.structure)
-        for item in call_data.inputs
-    ]
-    if call_data.batch_mode > 0:
-        return pack(matrices)
-    if len(matrices) != 1:
-        raise RuntimeError("Single-system libcint setup needs one wrapper.")
-    return matrices[0]
+    return libcint.int1e(intstring, call_data.basis, call_data.structure)

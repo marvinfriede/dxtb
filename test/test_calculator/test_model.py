@@ -501,11 +501,7 @@ def test_system_does_not_retain_mutable_integral_layer() -> None:
 )
 def test_system_integral_setup_is_narrow(driver: str) -> None:
     """System's integral setup retains values, not model or adapter objects."""
-    from dxtb._src.basis.bas import BasisSetup
-    from dxtb._src.integral.driver.libcint import (
-        LibcintBasisNode,
-        LibcintIntegralSetupNode,
-    )
+    from dxtb._src.integral.driver.libcint import LibcintIntegralSetup
     from dxtb._src.integral.evaluation import IntegralSetup
     from dxtb._src.param import ParamModule
     from dxtb._src.xtb.base import BaseHamiltonian
@@ -527,30 +523,11 @@ def test_system_integral_setup_is_narrow(driver: str) -> None:
     assert not isinstance(setup.pytorch, legacy_types)
     assert not isinstance(setup.libcint, legacy_types)
     if setup.libcint is not None:
-        if isinstance(setup.libcint, LibcintIntegralSetupNode):
-            for basis_setup in setup.libcint.basis_setups:
-                assert isinstance(basis_setup, LibcintBasisNode)
-                assert not hasattr(basis_setup, "ihelp")
-                assert not hasattr(basis_setup, "par")
-                assert not hasattr(basis_setup, "basis")
-                assert not hasattr(basis_setup, "driver")
-            return
-        for basis_setup in setup.libcint.basis_setups:
-            assert isinstance(basis_setup, BasisSetup)
-            assert not hasattr(basis_setup, "par")
-            assert not hasattr(basis_setup, "basis")
-            assert not hasattr(basis_setup, "driver")
-            assert {
-                field.name for field in dataclasses.fields(basis_setup)
-            } == {
-                "numbers",
-                "unique",
-                "ihelp",
-                "ngauss",
-                "pqn",
-                "slater",
-                "valence",
-            }
+        assert isinstance(setup.libcint, LibcintIntegralSetup)
+        assert not hasattr(setup.libcint, "ihelp")
+        assert not hasattr(setup.libcint, "par")
+        assert not hasattr(setup.libcint, "basis")
+        assert not hasattr(setup.libcint, "driver")
     if setup.pytorch is not None:
         assert not hasattr(setup.pytorch, "par")
         assert not hasattr(setup.pytorch, "driver")

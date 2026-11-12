@@ -23,8 +23,6 @@ Overlap implementation based on `libcint`.
 
 from __future__ import annotations
 
-from tad_mctc.batch import pack
-
 from dxtb._src.typing import Tensor
 
 from .driver import LibcintCallData
@@ -40,13 +38,4 @@ def build_overlap_libcint(call_data: LibcintCallData) -> Tensor:
     # pylint: disable=import-outside-toplevel
     from dxtb._src.exlibs import libcint
 
-    matrices = [
-        libcint.overlap(item.basis, item.structure)
-        for item in call_data.inputs
-    ]
-    if call_data.batch_mode > 0:
-        return pack(matrices)
-
-    if len(matrices) != 1:
-        raise RuntimeError("Single-system libcint setup needs one input.")
-    return matrices[0]
+    return libcint.overlap(call_data.basis, call_data.structure)

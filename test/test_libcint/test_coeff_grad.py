@@ -22,16 +22,16 @@ from __future__ import annotations
 
 import pytest
 import torch
-from tad_mctc.batch import deflate, pack
+from tad_mctc.batch import pack
 from torch.autograd import gradcheck, gradgradcheck
 from torch.nn import Parameter
 
 from dxtb import GFN1_XTB, GFN2_XTB, IndexHelper, Param, ParamModule
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
-from dxtb._src.integral.driver.libcint.driver import (
-    LibcintCallData,
-    LibcintIntegralSetup,
+from dxtb._src.integral.driver.libcint import (
+    build_overlap_libcint,
+    prepare_libcint,
     setup_libcint,
 )
 from dxtb._src.typing import DD, Callable, Tensor
@@ -112,15 +112,6 @@ def test_gradgradcheck(name: str, gfn: Param) -> None:
     assert gradgradcheck(func, diffvars, atol=1e-6, nondet_tol=NONDET_TOL)
 
 
-def overlap(call_data: LibcintCallData) -> Tensor:
-    """Overlap wrapper for single and batched mode."""
-    matrices = [
-        libcint.overlap(item.basis, item.structure)
-        for item in call_data.inputs
-    ]
-    return pack(matrices) if call_data.batch_mode > 0 else matrices[0]
-
-
 def gradchecker_batch(name1: str, name2: str, gfn: Param) -> tuple[
     Callable[[Tensor], Tensor],  # autograd function
     Tensor,  # differentiable variables
@@ -153,20 +144,18 @@ def gradchecker_batch(name1: str, name2: str, gfn: Param) -> tuple[
         assert isinstance(p, Parameter)
         p.data = slater
 
-        basis_setups = []
-        for nums in numbers:
-            nums = deflate(nums)
-            ihelp = IndexHelper.from_numbers(nums, par)
-            basis_setups.append(Basis(nums, par, ihelp, **dd).setup_data())
-        setup = LibcintIntegralSetup(
-            numbers=numbers,
-            ihelp=IndexHelper.from_numbers(numbers, par),
-            basis_setups=tuple(basis_setups),
-            force_cpu=False,
-        )
-
-        call_data = setup_libcint(setup, positions)
-        return overlap(call_data)
+        matrices = []
+        for nums, pos in zip(numbers, positions):
+            active = nums > 0
+            nums_active, pos_active = nums[active], pos[active]
+            ihelp = IndexHelper.from_numbers(nums_active, par)
+            setup = setup_libcint(
+                Basis(nums_active, par, ihelp, **dd), force_cpu=False
+            )
+            matrices.append(
+                build_overlap_libcint(prepare_libcint(setup, pos_active))
+            )
+        return pack(matrices)
 
     return func, slater
 

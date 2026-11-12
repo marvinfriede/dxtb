@@ -352,8 +352,8 @@ def _floating_setup_tensor(system: System) -> Tensor | None:
         return None
     if setup.pytorch is not None and setup.pytorch.alphas:
         return setup.pytorch.alphas[0]
-    if setup.libcint is not None and setup.libcint.basis_setups:
-        return setup.libcint.basis_setups[0].slater
+    if setup.libcint is not None:
+        return setup.libcint.slater
     return None
 
 

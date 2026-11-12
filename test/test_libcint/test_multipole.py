@@ -34,8 +34,8 @@ from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint, has_pyscf
 from dxtb._src.integral.driver.libcint import (
-    LibcintIntegralSetup,
     build_multipole_libcint,
+    prepare_libcint,
     setup_libcint,
 )
 from dxtb._src.integral.types.quadrupole import (
@@ -82,13 +82,8 @@ def libcint_moment(
 ) -> Tensor:
     """Multipole integral from normalized libcint shells."""
     ihelp = IndexHelper.from_numbers(numbers, par)
-    setup = LibcintIntegralSetup(
-        numbers=numbers,
-        ihelp=ihelp,
-        basis_setups=(Basis(numbers, par, ihelp, **dd).setup_data(),),
-        force_cpu=True,
-    )
-    call_data = setup_libcint(setup, positions)
+    setup = setup_libcint(Basis(numbers, par, ihelp, **dd), force_cpu=True)
+    call_data = prepare_libcint(setup, positions)
     return build_multipole_libcint(call_data, intstring)
 
 

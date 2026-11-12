@@ -18,14 +18,11 @@
 Integral Setup
 ==============
 
-Composition-dependent data for PyTorch integral construction.
+Composition-dependent setup Node for PyTorch integral construction.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-
-import torch
 from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
@@ -33,140 +30,25 @@ from dxtb._src.basis.bas import Basis
 from dxtb._src.typing import Tensor
 
 from .impls.kernels import DEFAULT_ALGORITHM, get_kernel
-from .impls.pairs import PairClassNode, PairPlan, PairPlanNode, prepare
+from .impls.pairs import PairPlan, prepare
 
-__all__ = [
-    "PytorchIntegralSetup",
-    "PytorchIntegralSetupNode",
-    "core_pytorch_integral_setup",
-    "setup_integrals",
-    "setup_integrals_core",
-]
+__all__ = ["PytorchIntegralSetup", "setup_integrals"]
 
 
-@dataclass(frozen=True, eq=False)
-class PytorchIntegralSetup:
-    """Composition- and parameter-dependent data for integral construction."""
-
-    ihelp: IndexHelper
-    alphas: tuple[Tensor, ...]
-    coeffs: tuple[Tensor, ...]
-    pair_plan: PairPlan
-    algorithm: str = DEFAULT_ALGORITHM
-
-    def to(
-        self,
-        device: torch.device | str | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> PytorchIntegralSetup:
-        """Return setup tensors converted to the requested dtype/device."""
-        ihelp = self.ihelp.to(device=device)
-        return replace(
-            self,
-            ihelp=ihelp,
-            alphas=tuple(
-                alpha.to(device=device, dtype=dtype) for alpha in self.alphas
-            ),
-            coeffs=tuple(
-                coeff.to(device=device, dtype=dtype) for coeff in self.coeffs
-            ),
-            pair_plan=prepare(ihelp, ihelp.device),
-        )
-
-
-class PytorchIntegralSetupNode(Node):
+class PytorchIntegralSetup(Node):
     """Immutable, transform-visible setup for pure PyTorch integrals."""
 
     index: IndexHelper = child()
     alphas: tuple[Tensor, ...] = child()
     coeffs: tuple[Tensor, ...] = child()
-    pair_plan: PairPlanNode = child()
+    pair_plan: PairPlan = child()
     algorithm: str = context()
 
-
-def _snapshot_index_helper(
-    ihelp: IndexHelper,
-    *,
-    shells_to_atom: Tensor | None = None,
-) -> IndexHelper:
-    """Create a tensor-isolated single-system IndexHelper snapshot."""
-    atom = (
-        ihelp.shells_to_atom.clone()
-        if shells_to_atom is None
-        else shells_to_atom
-    )
-    return IndexHelper(
-        unique_angular=ihelp.unique_angular.clone(),
-        angular=ihelp.angular.clone(),
-        atom_to_unique=ihelp.atom_to_unique.clone(),
-        ushells_to_unique=ihelp.ushells_to_unique.clone(),
-        ushells_per_unique=ihelp.ushells_per_unique.clone(),
-        shells_to_ushell=ihelp.shells_to_ushell.clone(),
-        shells_per_atom=ihelp.shells_per_atom.clone(),
-        shell_index=ihelp.shell_index.clone(),
-        shells_to_atom=atom,
-        orbitals_per_shell=ihelp.orbitals_per_shell.clone(),
-        orbital_index=ihelp.orbital_index.clone(),
-        orbitals_to_shell=ihelp.orbitals_to_shell.clone(),
-        batch_mode=0,
-    )
-
-
-def _build_pair_plan_node(
-    pair_plan: PairPlan,
-    *,
-    atom: Tensor,
-    weight_dtype: torch.dtype,
-    clone: bool,
-) -> PairPlanNode:
-    """Build a PairPlanNode from a PairPlan, optionally cloning class tensors."""
-    return PairPlanNode(
-        nao=pair_plan.nao,
-        unique_angular=tuple(pair_plan.unique_angular),
-        atom=atom,
-        classes=tuple(
-            PairClassNode(
-                ub=cls.ub,
-                uk=cls.uk,
-                lb=cls.lb,
-                lk=cls.lk,
-                ib=cls.ib.clone() if clone else cls.ib,
-                jk=cls.jk.clone() if clone else cls.jk,
-                idx=cls.idx.clone() if clone else cls.idx,
-                weight=(
-                    cls.weight.to(dtype=weight_dtype).clone()
-                    if clone
-                    else cls.weight.to(dtype=weight_dtype)
-                ),
+    def _validate(self) -> None:
+        if self.index.batch_mode != 0:
+            raise ValueError(
+                "PyTorch integral setup requires one single System."
             )
-            for cls in pair_plan.classes
-        ),
-    )
-
-
-def core_pytorch_integral_setup(
-    setup: PytorchIntegralSetup,
-) -> PytorchIntegralSetupNode:
-    """Snapshot structural setup tensors while retaining basis graph edges.
-
-    PairPlan indices, weights and index mappings are structural, so the
-    converted Node must not alias the component setup. The basis exponent
-    and contraction tensors remain shared to preserve their ParamModule
-    autograd connections.
-    """
-    atom = setup.pair_plan.atom.clone()
-    return PytorchIntegralSetupNode(
-        index=_snapshot_index_helper(setup.ihelp, shells_to_atom=atom),
-        alphas=setup.alphas,
-        coeffs=setup.coeffs,
-        pair_plan=_build_pair_plan_node(
-            setup.pair_plan,
-            atom=atom,
-            weight_dtype=setup.alphas[0].dtype,
-            clone=True,
-        ),
-        algorithm=setup.algorithm.casefold(),
-    )
 
 
 def setup_integrals(
@@ -174,24 +56,9 @@ def setup_integrals(
     *,
     algorithm: str = DEFAULT_ALGORITHM,
 ) -> PytorchIntegralSetup:
-    """Build explicit structural integral data from a constructed basis."""
-    get_kernel(algorithm)
-    alphas, coeffs = basis.create_cgtos()
-    return PytorchIntegralSetup(
-        ihelp=basis.ihelp,
-        alphas=tuple(alphas),
-        coeffs=tuple(coeffs),
-        pair_plan=prepare(basis.ihelp, basis.numbers.device),
-        algorithm=algorithm.casefold(),
-    )
-
-
-def setup_integrals_core(
-    basis: Basis,
-    *,
-    algorithm: str = DEFAULT_ALGORITHM,
-) -> PytorchIntegralSetupNode:
-    """Build the authoritative Node setup for a pure single-System path."""
+    """Build the authoritative PyTorch integral setup Node from ``basis``."""
+    if basis.ihelp.batch_mode != 0:
+        raise ValueError("PyTorch integral setup requires one single System.")
     get_kernel(algorithm)
     alphas, coeffs = basis.create_cgtos()
     dev = basis.device
@@ -200,16 +67,11 @@ def setup_integrals_core(
         if basis.ihelp.device == dev
         else basis.ihelp.to(device=dev)
     )
-    pair_plan = prepare(index, dev)
-    return PytorchIntegralSetupNode(
+    pair_plan = prepare(index, dev, dtype=alphas[0].dtype)
+    return PytorchIntegralSetup(
         index=index,
         alphas=tuple(alphas),
         coeffs=tuple(coeffs),
-        pair_plan=_build_pair_plan_node(
-            pair_plan,
-            atom=index.shells_to_atom,
-            weight_dtype=alphas[0].dtype,
-            clone=False,
-        ),
+        pair_plan=pair_plan,
         algorithm=algorithm.casefold(),
     )

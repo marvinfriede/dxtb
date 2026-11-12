@@ -33,7 +33,7 @@ import pytest
 import torch
 
 from dxtb import IndexHelper
-from dxtb._src.basis.bas import Basis, BasisSetup
+from dxtb._src.basis.bas import Basis
 from dxtb._src.basis.slater import (
     pAlpha6sp,
     pCoeff6sp_p,
@@ -280,10 +280,8 @@ def test_basis_construction_and_export() -> None:
     # PyTorch CGTOs
     alphas_pt, coeffs_pt = b_gfn1.create_cgtos()
 
-    # Libcint CGTOs via BasisSetup
-    setup = b_gfn1.setup_data()
-    assert setup.sto == "gfn1"
-    alphas_lc, coeffs_lc = setup.create_libcint_cgtos()
+    # Libcint CGTOs via Basis
+    alphas_lc, coeffs_lc = b_gfn1.create_libcint_cgtos()
 
     for a_pt, a_lc in zip(alphas_pt, alphas_lc):
         torch.testing.assert_close(a_pt, a_lc, atol=0.0, rtol=0.0)

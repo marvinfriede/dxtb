@@ -16,11 +16,11 @@ from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, Calculator, labels
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.pytorch import setup as pytorch_setup_module
 from dxtb._src.integral.driver.pytorch.impls import pairs as pair_builder
-from dxtb._src.integral.driver.pytorch.impls.pairs import PairPlanNode
+from dxtb._src.integral.driver.pytorch.impls.pairs import PairPlan
 from dxtb._src.integral.driver.pytorch.overlap import (
     build_overlap as build_overlap_pytorch,
 )
-from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetupNode
+from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetup
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.typing import Tensor
 
@@ -58,7 +58,7 @@ def test_integral_matrices_are_history_independent(driver: int) -> None:
     structural_snapshot = None
     structural_ids = None
     if driver == labels.INTDRIVER_PYTORCH:
-        assert isinstance(core_setup, PytorchIntegralSetupNode)
+        assert isinstance(core_setup, PytorchIntegralSetup)
         structural_snapshot = [
             core_setup.index.shells_to_atom.clone(),
             core_setup.index.orbitals_to_shell.clone(),
@@ -88,9 +88,6 @@ def test_integral_matrices_are_history_independent(driver: int) -> None:
         )
     if setup.libcint is not None:
         assert not hasattr(setup.libcint, "par")
-        assert all(
-            not hasattr(basis, "par") for basis in setup.libcint.basis_setups
-        )
 
     moved = positions.clone()
     moved[1, 0] += 0.08
@@ -121,7 +118,7 @@ def test_integral_matrices_are_history_independent(driver: int) -> None:
     torch.testing.assert_close(refocc1, refocc2)
     torch.testing.assert_close(refocc1, refocc3)
 
-    if isinstance(core_setup, PytorchIntegralSetupNode):
+    if isinstance(core_setup, PytorchIntegralSetup):
         assert setup.pytorch is core_setup
         assert core_setup.pair_plan is not None
         assert structural_snapshot is not None
@@ -228,8 +225,8 @@ def test_system_reuses_setup_pair_plan_across_geometries(
     assert system.integral_setup is not None
     setup = system.integral_setup.pytorch
     assert setup is not None
-    assert type(setup) is PytorchIntegralSetupNode
-    assert type(setup.pair_plan) is PairPlanNode
+    assert type(setup) is PytorchIntegralSetup
+    assert type(setup.pair_plan) is PairPlan
     assert not hasattr(setup, "ihelp")
     assert not hasattr(setup.pair_plan, "positions")
 
@@ -278,7 +275,7 @@ def test_pytorch_integral_node_conversion_preserves_pair_plan() -> None:
     assert calc.system.integral_setup is not None
     setup = calc.system.integral_setup.pytorch
     assert setup is not None
-    assert type(setup) is PytorchIntegralSetupNode
+    assert type(setup) is PytorchIntegralSetup
 
     converted = setup.to(device="cpu", dtype=torch.float32)
     assert converted.pair_plan is not setup.pair_plan

@@ -58,9 +58,8 @@ from .trafo import TRAFO
 
 __all__ = [
     "assemble_matrix",
+    "PairClass",
     "PairPlan",
-    "PairClassNode",
-    "PairPlanNode",
     "prepare",
     "select_pairs",
 ]
@@ -84,15 +83,7 @@ def _to_ints(t: Tensor) -> list[int]:
         return [int(v) for v in t]
 
 
-class _Class:
-    """Structural data of one ordered unique-shell-pair class."""
-
-    def __init__(self, ub, uk, lb, lk, ib, jk, idx, weight):
-        self.ub, self.uk, self.lb, self.lk = ub, uk, lb, lk
-        self.ib, self.jk, self.idx, self.weight = ib, jk, idx, weight
-
-
-class PairClassNode(Node):
+class PairClass(Node):
     """Immutable structural tensors for one ordered shell-pair class."""
 
     ub: int = context()
@@ -105,94 +96,106 @@ class PairClassNode(Node):
     weight: Tensor = child()
 
 
-class PairPlanNode(Node):
-    """Transform-visible, ordered structural data for pair assembly."""
+class PairPlan(Node):
+    """
+    Transform-visible structural data for :func:`assemble_matrix` that depends
+    only on the structure (angular momenta, unique shells, shell-to-atom map),
+    not on positions or basis parameters.
+    """
 
     nao: int = context()
     unique_angular: tuple[int, ...] = context()
     atom: Tensor = child(keep_dtype=True)
-    classes: tuple[PairClassNode, ...] = child()
+    classes: tuple[PairClass, ...] = child()
 
 
-class PairPlan:
+def prepare(
+    ihelp: IndexHelper,
+    dev: torch.device,
+    dtype: torch.dtype = torch.float64,
+) -> PairPlan:
     """
-    Everything of :func:`assemble_matrix` that depends only on the structure
-    (angular momenta, unique shells, shell-to-atom map), not on positions or
-    basis parameters.
-    """
-
-    def __init__(self, ihelp: IndexHelper, dev: torch.device) -> None:
-        # All index bookkeeping is done with numpy on the helper's constant
-        # index arrays. This keeps it out of the autograd/`torch.func`
-        # machinery, which cannot evaluate `unique`/`nonzero` on tensors
-        # inside a transform on every supported torch version (see
-        # `_to_ints`).
-        ang_np = np.asarray(_to_ints(ihelp.angular))
-        ush_np = np.asarray(_to_ints(ihelp.shells_to_ushell))
-        nsh = ang_np.shape[0]
-        nsph_np = 2 * ang_np + 1
-        off_np = np.cumsum(nsph_np) - nsph_np
-
-        self.nao = int(nsph_np.sum())
-        self.atom = ihelp.shells_to_atom.to(dev)
-        self.unique_angular = _to_ints(ihelp.unique_angular)
-
-        # ordered shell pairs with bra >= ket
-        bra_np, ket_np = np.tril_indices(nsh)
-        key_np = ush_np[bra_np] * (int(ush_np.max()) + 1) + ush_np[ket_np]
-
-        self.classes: list[_Class] = []
-        for k in np.unique(key_np).tolist():
-            cls_np = np.nonzero(key_np == k)[0]
-            first = int(cls_np[0])
-            ib_np, jk_np = bra_np[cls_np], ket_np[cls_np]
-            lb, lk = int(ang_np[bra_np[first]]), int(ang_np[ket_np[first]])
-
-            rows = (
-                off_np[ib_np][:, None, None]
-                + np.arange(2 * lb + 1)[None, :, None]
-            )
-            cols = (
-                off_np[jk_np][:, None, None]
-                + np.arange(2 * lk + 1)[None, None, :]
-            )
-            idx = rows * self.nao + cols  # broadcasts to (npairs, nb, nk)
-
-            self.classes.append(
-                _Class(
-                    int(ush_np[bra_np[first]]),
-                    int(ush_np[ket_np[first]]),
-                    lb,
-                    lk,
-                    torch.as_tensor(ib_np, dtype=torch.long, device=dev),
-                    torch.as_tensor(jk_np, dtype=torch.long, device=dev),
-                    torch.as_tensor(idx, dtype=torch.long, device=dev),
-                    torch.as_tensor(
-                        np.where(ib_np == jk_np, 0.5, 1.0), device=dev
-                    ),
-                )
-            )
-
-
-def prepare(ihelp: IndexHelper, dev: torch.device) -> PairPlan:
-    """
-    Build the structural plan of `ihelp` on `dev`.
+    Build the structural plan of ``ihelp`` on ``dev``.
 
     The plan is owned by the caller, who passes it as ``plan`` to
     :func:`assemble_matrix` and :func:`select_pairs` to avoid rebuilding it on
     every call. This is required to trace :func:`assemble_matrix` with
     ``torch.compile`` (``fullgraph``), which cannot read the index arrays on
     the host. There is deliberately no global cache: a plan lives exactly as
-    long as its owner (e.g., the integral driver).
+    long as its owner.
     """
-    return PairPlan(ihelp, dev)
+    if ihelp.batch_mode != 0:
+        raise ValueError("PyTorch pair plan requires one single System.")
+
+    # All index bookkeeping is done with numpy on the helper's constant index
+    # arrays. This keeps it out of the autograd/`torch.func` machinery, which
+    # cannot evaluate `unique`/`nonzero` on tensors inside a transform on every
+    # supported torch version (see `_to_ints`).
+    ang_np = np.asarray(_to_ints(ihelp.angular))
+    ush_np = np.asarray(_to_ints(ihelp.shells_to_ushell))
+    nsh = ang_np.shape[0]
+    nsph_np = 2 * ang_np + 1
+    off_np = np.cumsum(nsph_np) - nsph_np
+
+    nao = int(nsph_np.sum())
+    atom = (
+        ihelp.shells_to_atom
+        if ihelp.shells_to_atom.device == dev
+        else ihelp.shells_to_atom.to(dev)
+    )
+    unique_angular = tuple(_to_ints(ihelp.unique_angular))
+
+    # ordered shell pairs with bra >= ket
+    bra_np, ket_np = np.tril_indices(nsh)
+    key_np = ush_np[bra_np] * (int(ush_np.max()) + 1) + ush_np[ket_np]
+
+    classes: list[PairClass] = []
+    for k in np.unique(key_np).tolist():
+        cls_np = np.nonzero(key_np == k)[0]
+        first = int(cls_np[0])
+        ib_np, jk_np = bra_np[cls_np], ket_np[cls_np]
+        lb, lk = int(ang_np[bra_np[first]]), int(ang_np[ket_np[first]])
+
+        rows = (
+            off_np[ib_np][:, None, None]
+            + np.arange(2 * lb + 1)[None, :, None]
+        )
+        cols = (
+            off_np[jk_np][:, None, None]
+            + np.arange(2 * lk + 1)[None, None, :]
+        )
+        idx = rows * nao + cols  # broadcasts to (npairs, nb, nk)
+
+        classes.append(
+            PairClass(
+                ub=int(ush_np[bra_np[first]]),
+                uk=int(ush_np[ket_np[first]]),
+                lb=lb,
+                lk=lk,
+                ib=torch.as_tensor(ib_np, dtype=torch.long, device=dev),
+                jk=torch.as_tensor(jk_np, dtype=torch.long, device=dev),
+                idx=torch.as_tensor(idx, dtype=torch.long, device=dev),
+                weight=torch.as_tensor(
+                    np.where(ib_np == jk_np, 0.5, 1.0),
+                    dtype=dtype,
+                    device=dev,
+                ),
+            )
+        )
+
+    return PairPlan(
+        nao=nao,
+        unique_angular=unique_angular,
+        atom=atom,
+        classes=tuple(classes),
+    )
 
 
 def _resolve_plan(
     ihelp: IndexHelper | None,
     dev: torch.device,
-    plan: PairPlan | PairPlanNode | None,
-) -> PairPlan | PairPlanNode:
+    plan: PairPlan | None,
+) -> PairPlan:
     if plan is not None:
         return plan
 
@@ -208,7 +211,7 @@ def _resolve_plan(
             "with `prepare(ihelp, device)` and pass it as `plan`."
         )
 
-    return PairPlan(ihelp, dev)
+    return prepare(ihelp, dev)
 
 
 def _normalized(
@@ -270,7 +273,7 @@ def assemble_matrix(
     chunk_size: int | None = None,
     checkpoint: bool = False,
     pairs: Sequence[Tensor] | None = None,
-    plan: PairPlan | PairPlanNode | None = None,
+    plan: PairPlan | None = None,
 ) -> Tensor:
     """
     Assemble the full AO integral matrix of one molecule. Every shell is
@@ -314,7 +317,7 @@ def assemble_matrix(
         indices are constants, so everything is static and the function works
         under ``vmap`` and ``torch.compile`` as well. The error bound of the
         screening only holds for the geometries the selection was made for.
-    plan : PairPlan | PairPlanNode | None
+    plan : PairPlan | None
         Structural plan of `ihelp` from :func:`prepare`. Built on the fly if
         not given (not possible inside ``torch.compile``).
 
@@ -587,7 +590,7 @@ def select_pairs(
     positions: Tensor,
     threshold: float,
     origin: Tensor | None = None,
-    plan: PairPlan | PairPlanNode | None = None,
+    plan: PairPlan | None = None,
 ) -> tuple[Tensor, ...]:
     """
     Shell pairs to compute for the given geometries, for the ``pairs``
@@ -614,7 +617,7 @@ def select_pairs(
         Drop pairs whose bound is below this value.
     origin : Tensor | None
         Multipole origin (default: Cartesian origin).
-    plan : PairPlan | PairPlanNode | None
+    plan : PairPlan | None
         Structural plan of `ihelp` from :func:`prepare`. Built on the fly if
         not given.
 

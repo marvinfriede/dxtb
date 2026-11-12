@@ -102,6 +102,6 @@ def test_change_type_after_energy(int_driver: str) -> None:
         assert setup.pytorch.alphas[0].dtype == torch.float32
     else:
         assert setup.libcint is not None
-        assert setup.libcint.basis_setups[0].slater.dtype == torch.float32
+        assert setup.libcint.slater.dtype == torch.float32
 
     timer.reset()

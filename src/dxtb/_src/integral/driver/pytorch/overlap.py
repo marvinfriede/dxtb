@@ -18,45 +18,22 @@
 Implementation: Overlap
 =======================
 
-PyTorch-based overlap implementations.
+PyTorch-based overlap implementation.
 """
 
 from __future__ import annotations
 
-
-from dxtb._src.basis.bas import Basis
 from dxtb._src.typing import Tensor
 
-from .impls.kernels import DEFAULT_ALGORITHM, get_kernel
+from .impls.kernels import get_kernel
 from .impls.pairs import assemble_matrix
-from .setup import (
-    PytorchIntegralSetup,
-    PytorchIntegralSetupNode,
-    setup_integrals,
-)
+from .setup import PytorchIntegralSetup
 
-__all__ = [
-    "PytorchIntegralSetup",
-    "PytorchOverlapSetup",
-    "setup_overlap",
-    "build_overlap",
-]
-
-
-PytorchOverlapSetup = PytorchIntegralSetup
-
-
-def setup_overlap(
-    basis: Basis,
-    *,
-    algorithm: str = DEFAULT_ALGORITHM,
-) -> PytorchIntegralSetup:
-    """Build explicit overlap data from an already constructed basis."""
-    return setup_integrals(basis, algorithm=algorithm)
+__all__ = ["build_overlap"]
 
 
 def build_overlap(
-    setup: PytorchIntegralSetup | PytorchIntegralSetupNode,
+    setup: PytorchIntegralSetup,
     positions: Tensor,
 ) -> Tensor:
     """Build an overlap matrix from immutable setup data and current positions."""

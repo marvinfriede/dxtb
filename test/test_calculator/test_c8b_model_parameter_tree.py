@@ -41,8 +41,8 @@ from dxtb._src.calculators.model import (
     _parameter_setup_lock,
 )
 from dxtb._src.exlibs.available import has_libcint
-from dxtb._src.integral.driver.libcint.driver import LibcintIntegralSetupNode
-from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetupNode
+from dxtb._src.integral.driver.libcint.driver import LibcintIntegralSetup
+from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetup
 
 
 def _model(par: ParamModule) -> Model:
@@ -388,8 +388,8 @@ def test_functional_setup_rejects_a_foreign_parameter_owner() -> None:
 @pytest.mark.parametrize(
     ("driver", "expected_type"),
     [
-        (labels.INTDRIVER_PYTORCH, PytorchIntegralSetupNode),
-        (labels.INTDRIVER_LIBCINT, LibcintIntegralSetupNode),
+        (labels.INTDRIVER_PYTORCH, PytorchIntegralSetup),
+        (labels.INTDRIVER_LIBCINT, LibcintIntegralSetup),
     ],
 )
 def test_integral_backend_node_matches_driver(

@@ -49,8 +49,6 @@ from dxtb._src.components.classicals import (
 )
 from dxtb._src.components.interactions import Interaction, InteractionList
 from dxtb._src.constants import defaults
-from dxtb._src.integral.driver.libcint.driver import LibcintIntegralSetupNode
-from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetupNode
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.timing import timer
 from dxtb._src.typing import Any, Self, Tensor, TensorLike, override
@@ -90,22 +88,13 @@ def _convert_system_dtype(
                 else system.h0_setup.to(dtype=dtype)
             )
         )
-        core_integral = (
-            integral_setup
-            if integral_setup is None
-            or isinstance(
-                integral_setup.backend,
-                (PytorchIntegralSetupNode, LibcintIntegralSetupNode),
-            )
-            else None
-        )
         core_h0 = h0_setup if isinstance(h0_setup, H0SetupNode) else None
         if (
-            core_integral is not converted_core.integral
+            integral_setup is not converted_core.integral
             or core_h0 is not converted_core.h0_setup
         ):
             exact_core = converted_core.replace(
-                integral=core_integral,
+                integral=integral_setup,
                 h0_setup=core_h0,
             )
         else:

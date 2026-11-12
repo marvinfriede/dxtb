@@ -23,10 +23,8 @@ import torch
 
 from dxtb import GFN1_XTB, GFN2_XTB, IndexHelper
 from dxtb._src.basis.bas import Basis
-from dxtb._src.integral.driver.pytorch.overlap import (
-    build_overlap,
-    setup_overlap,
-)
+from dxtb._src.integral.driver.pytorch.overlap import build_overlap
+from dxtb._src.integral.driver.pytorch.setup import setup_integrals
 from dxtb._src.param import Param, ParamModule
 
 from ..conftest import DEVICE
@@ -44,7 +42,7 @@ def test_pure_overlap_reuses_setup_without_call_state(
     positions = sample["positions"].to(**dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
     basis = Basis(torch.unique(numbers), par, ihelp, **dd)
-    setup = setup_overlap(basis)
+    setup = setup_integrals(basis)
 
     first = build_overlap(setup, positions)
     changed = positions.clone()
@@ -67,7 +65,7 @@ def test_pure_overlap_equal_leaf_gradients(
     positions = sample["positions"].to(**dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
     basis = Basis(torch.unique(numbers), par, ihelp, **dd)
-    setup = setup_overlap(basis)
+    setup = setup_integrals(basis)
 
     left = positions.clone().requires_grad_(True)
     right = positions.clone().requires_grad_(True)

@@ -934,7 +934,7 @@ def test_captured_integral_maps_are_not_rebuilt_during_evaluation(
     system = _model().setup(numbers)
     setup = system.integral_setup
     assert setup is not None and setup.pytorch is not None
-    assert type(setup.pytorch).__name__ == "PytorchIntegralSetupNode"
+    assert type(setup.pytorch).__name__ == "PytorchIntegralSetup"
     assert not hasattr(setup.pytorch, "ihelp")
     assert not hasattr(system.h0_setup, "ihelp")
     assert isinstance(setup.pytorch.index, IndexHelper)
