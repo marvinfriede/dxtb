@@ -227,7 +227,7 @@ def setup_libcint(
     numbers = basis.numbers.clone()
     active_atoms: Tensor | None = None
     if numbers.device.type != "meta":
-        num_list = [int(v) for v in numbers.detach().cpu().reshape(-1).tolist()]
+        num_list = _to_int_list(basis.numbers)
         if any(z <= 0 for z in num_list):
             active_atoms = torch.tensor(
                 [idx for idx, z in enumerate(num_list) if z > 0],
