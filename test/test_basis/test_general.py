@@ -175,23 +175,101 @@ def test_change_device_fail() -> None:
 
 def test_non_valence_orthogonalization_is_metadata_independent() -> None:
     """Non-valence shell orthogonalization depends on valence flags, not meta."""
+    from dxtb import ParamModule, labels
+    from dxtb._src.integral.evaluation import setup_integral_evaluation
+    from dxtb.integrals.wrappers import overlap
+
     numbers = torch.tensor([8, 1, 1])
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.8], [0.0, 1.8, 0.0]],
+        dtype=torch.float64,
+    )
     custom = GFN1_XTB.model_copy(deep=True)
     custom.meta = None
+    custom_pm = ParamModule(custom, dtype=torch.float64)
 
     bas_ref = Basis(
-        numbers, GFN1_XTB, IndexHelper.from_numbers(numbers, GFN1_XTB)
+        numbers,
+        GFN1_XTB,
+        IndexHelper.from_numbers(numbers, GFN1_XTB),
+        dtype=torch.float64,
     )
     bas_custom = Basis(
-        numbers, custom, IndexHelper.from_numbers(numbers, custom)
+        numbers,
+        custom,
+        IndexHelper.from_numbers(numbers, custom),
+        dtype=torch.float64,
+    )
+    bas_custom_pm = Basis(
+        numbers, custom_pm, IndexHelper.from_numbers(numbers, custom_pm)
     )
 
     alphas_ref, coeffs_ref = bas_ref.create_cgtos()
     alphas_cus, coeffs_cus = bas_custom.create_cgtos()
-    for a_ref, a_cus in zip(alphas_ref, alphas_cus):
+    alphas_pm, coeffs_pm = bas_custom_pm.create_cgtos()
+    for a_ref, a_cus, a_pm in zip(alphas_ref, alphas_cus, alphas_pm):
         torch.testing.assert_close(a_cus, a_ref, atol=0.0, rtol=0.0)
-    for c_ref, c_cus in zip(coeffs_ref, coeffs_cus):
+        torch.testing.assert_close(a_pm, a_ref, atol=0.0, rtol=0.0)
+    for c_ref, c_cus, c_pm in zip(coeffs_ref, coeffs_cus, coeffs_pm):
         torch.testing.assert_close(c_cus, c_ref, atol=0.0, rtol=0.0)
+        torch.testing.assert_close(c_pm, c_ref, atol=0.0, rtol=0.0)
+
+    setup = setup_integral_evaluation(
+        numbers,
+        custom_pm,
+        IndexHelper.from_numbers(numbers, custom_pm),
+        driver_type=labels.INTDRIVER_PYTORCH,
+        intlevel=labels.INTLEVEL_OVERLAP,
+    )
+    assert setup.backend is not None
+
+    s_ref = overlap(
+        numbers, positions, GFN1_XTB, driver=labels.INTDRIVER_PYTORCH
+    )
+    s_cus = overlap(numbers, positions, custom, driver=labels.INTDRIVER_PYTORCH)
+    torch.testing.assert_close(s_cus, s_ref, atol=0.0, rtol=0.0)
+
+
+def test_basis_and_wrappers_honor_target_dtype_with_param_module() -> None:
+    """Basis and integral wrappers cast existing ParamModule CGTOs to dtype."""
+    from dxtb import ParamModule, labels
+    from dxtb._src.exlibs.available import has_libcint
+    from dxtb.integrals.wrappers import dipint, overlap, quadint
+
+    numbers = torch.tensor([8, 1, 1])
+    positions_f32 = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.8], [0.0, 1.8, 0.0]],
+        dtype=torch.float32,
+    )
+    pm_f64 = ParamModule(GFN1_XTB, dtype=torch.float64)
+    ihelp = IndexHelper.from_numbers(numbers, pm_f64)
+
+    bas_default = Basis(numbers, pm_f64, ihelp)
+    assert bas_default.dtype == torch.float64
+    assert bas_default.slater.dtype == torch.float64
+
+    bas_f32 = Basis(numbers, pm_f64, ihelp, dtype=torch.float32)
+    alphas_f32, coeffs_f32 = bas_f32.create_cgtos()
+    assert bas_f32.dtype == torch.float32
+    assert all(a.dtype == torch.float32 for a in alphas_f32)
+    assert all(c.dtype == torch.float32 for c in coeffs_f32)
+
+    drivers = [labels.INTDRIVER_PYTORCH]
+    if has_libcint:
+        drivers.append(labels.INTDRIVER_LIBCINT)
+    for drv in drivers:
+        assert (
+            overlap(numbers, positions_f32, pm_f64, driver=drv).dtype
+            == torch.float32
+        )
+        assert (
+            dipint(numbers, positions_f32, pm_f64, driver=drv).dtype
+            == torch.float32
+        )
+        assert (
+            quadint(numbers, positions_f32, pm_f64, driver=drv).dtype
+            == torch.float32
+        )
 
 
 @pytest.mark.parametrize("batched", [False, True])

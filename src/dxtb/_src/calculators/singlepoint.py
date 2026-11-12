@@ -593,10 +593,15 @@ def _prepare_singlepoint(
         )
     )
     if floating_setup is not None:
-        if floating_setup.device != system_device:
+        floating_setup_device = (
+            integral_setup.device
+            if system.h0_setup is None and integral_setup is not None
+            else floating_setup.device
+        )
+        if floating_setup_device != system_device:
             raise DeviceError(
                 "System floating setup is on "
-                f"'{floating_setup.device}', but System numbers are on "
+                f"'{floating_setup_device}', but System numbers are on "
                 f"'{system_device}'."
             )
         if core is not None and floating_setup.dtype != core.effective_dtype:

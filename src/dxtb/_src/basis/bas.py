@@ -104,10 +104,21 @@ class Basis(TensorLike):
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> None:
-        super().__init__(numbers.device if device is None else device, dtype)
+        resolved_dtype = (
+            par.dtype
+            if dtype is None and isinstance(par, ParamModule)
+            else dtype
+        )
+        super().__init__(
+            numbers.device if device is None else device, resolved_dtype
+        )
         self.numbers = numbers
         self.unique: Tensor = torch.unique(numbers)
-        self.meta = par.meta
+        self.meta = (
+            None
+            if isinstance(par, ParamModule) and par.is_none("meta")
+            else par.meta
+        )
         self.ihelp = ihelp
 
         if not isinstance(par, ParamModule):
@@ -134,7 +145,7 @@ class Basis(TensorLike):
         # `setup_integral_evaluation`). We are moving here, because we do not
         # want to move the whole parametrization back and forth.
         self.ngauss = self.ngauss.to(device=self.device)
-        self.slater = self.slater.to(device=self.device)
+        self.slater = self.slater.to(device=self.device, dtype=self.dtype)
         self.pqn = self.pqn.to(device=self.device)
         self.valence = self.valence.to(device=self.device)
 
@@ -292,6 +303,8 @@ class Basis(TensorLike):
 
         header = ""
         if with_header is True:
+            meta_name = getattr(self.meta, "name", None)
+            meta_version = getattr(self.meta, "version", None)
             line = 70 * "-"
             header = (
                 f"!{line}\n"
@@ -299,10 +312,10 @@ class Basis(TensorLike):
                 "! Version v0.9\n"
                 "! https://www.basissetexchange.org\n"
                 f"!{line}\n"
-                f"!   Basis set: {self.meta.name}\n"
-                f"! Description: Orthonormalized {self.meta.name} Basis\n"
+                f"!   Basis set: {meta_name}\n"
+                f"! Description: Orthonormalized {meta_name} Basis\n"
                 "!        Role: orbital\n"
-                f"!     Version: {self.meta.version}\n"
+                f"!     Version: {meta_version}\n"
                 f"!{line}\n\n\n"
             )
 
@@ -361,10 +374,11 @@ class Basis(TensorLike):
                 txt += "END\n"
 
             if save is True:
-                if self.meta.name is None:
+                meta_name = getattr(self.meta, "name", None)
+                if meta_name is None:
                     raise RuntimeError("Meta data incomplete (name missing).")
 
-                target = f"mol/external/basis/{self.meta.name.casefold()}"
+                target = f"mol/external/basis/{meta_name.casefold()}"
                 dpath = Path(__file__).parents[1] / target
                 Path(dpath).mkdir(parents=True, exist_ok=True)
 
@@ -433,7 +447,7 @@ def format_contraction(shells: list[str], ngauss: Tensor) -> str:
     type_order = ["s", "p", "d", "f", "g"]
 
     # 1) tally up primitives by angular momentum
-    prim_counts = {}
+    prim_counts: dict[str, int] = {}
     for shell, n in zip(shells, ngauss):
         l = shell[-1]  # last char: 's','p',...
         prim_counts[l] = prim_counts.get(l, 0) + int(n)

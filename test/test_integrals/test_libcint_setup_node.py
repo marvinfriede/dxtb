@@ -614,3 +614,14 @@ def _functional_cgto_loss(
 
     runner = _Runner(par)
     return functional_call(runner, {f"mod.{param_key}": slater_val}, ())
+
+
+def test_setup_libcint_rejects_mismatched_numbers_and_index_helper() -> None:
+    """setup_libcint rejects Basis with unique-only numbers for multi-atom ihelp."""
+    numbers = torch.tensor([8, 1, 1])
+    par = ParamModule(GFN1_XTB, dtype=torch.float64)
+    ihelp = IndexHelper.from_numbers(numbers, par)
+    mismatched_basis = Basis(torch.unique(numbers), par, ihelp)
+
+    with pytest.raises(ValueError, match="matching IndexHelper"):
+        setup_libcint(mismatched_basis, force_cpu=True)

@@ -292,13 +292,15 @@ class ParamShortcutMixin(ParamGetterMixin):
     """Shortcut methods to access the parameter tree."""
 
     @property
-    def meta(self) -> SimpleNamespace:
+    def meta(self) -> SimpleNamespace | None:
         """
         Return the metadata of the parametrization as an object with attribute access.
 
         If the meta data is stored as a dictionary, it is converted into a SimpleNamespace,
         so that one can do, for example, `if self.meta.name: ...`.
         """
+        if self.is_none("meta"):
+            return None
         return SimpleNamespace(**self.get("meta", unwrapped=True))
 
     @property
@@ -392,7 +394,10 @@ class ParamElementsPairsMixin(ParamShortcutMixin):
 
             # Convert scalar values to 1D tensors for concatenation
             param_val = param_module.param
-            if param_val.is_inference() and not torch.is_inference_mode_enabled():
+            if (
+                param_val.is_inference()
+                and not torch.is_inference_mode_enabled()
+            ):
                 param_val = param_val.detach().clone()
             collected.append(torch.atleast_1d(param_val))
 
@@ -476,14 +481,20 @@ class ParamElementsPairsMixin(ParamShortcutMixin):
                     p = par_pair[key1]
                     assert isinstance(p, ParameterModule)
                     param_val = p.param
-                    if param_val.is_inference() and not torch.is_inference_mode_enabled():
+                    if (
+                        param_val.is_inference()
+                        and not torch.is_inference_mode_enabled()
+                    ):
                         param_val = param_val.detach().clone()
                     value = param_val.view(-1)[0]
                 elif key2 in par_pair:
                     p = par_pair[key2]
                     assert isinstance(p, ParameterModule)
                     param_val = p.param
-                    if param_val.is_inference() and not torch.is_inference_mode_enabled():
+                    if (
+                        param_val.is_inference()
+                        and not torch.is_inference_mode_enabled()
+                    ):
                         param_val = param_val.detach().clone()
                     value = param_val.view(-1)[0]
                 else:

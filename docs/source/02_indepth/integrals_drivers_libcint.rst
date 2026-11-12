@@ -23,11 +23,3 @@ Implementations
 .. automodule:: dxtb._src.integral.driver.libcint.multipole
    :members:
    :show-inheritance:
-
-.. automodule:: dxtb._src.integral.driver.libcint.dipole
-   :members:
-   :show-inheritance:
-
-.. automodule:: dxtb._src.integral.driver.libcint.quadrupole
-   :members:
-   :show-inheritance:

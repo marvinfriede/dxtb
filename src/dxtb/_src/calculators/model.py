@@ -41,10 +41,10 @@ leaves, i.e., it can be called inside a differentiated function.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from functools import wraps
 from threading import Lock, RLock
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Callable
 from weakref import WeakKeyDictionary
 
@@ -436,9 +436,7 @@ def _build_setup_index_token(
     """Capture setup-time identity and version metadata for fast validation."""
     backend_index = None if integral_setup is None else integral_setup.index
 
-    es2_shells = (
-        es2_setup.shells_to_atom if es2_setup is not None else None
-    )
+    es2_shells = es2_setup.shells_to_atom if es2_setup is not None else None
 
     tracked: list[Tensor] = [
         numbers,
@@ -1959,6 +1957,8 @@ class Model:
                     driver_type=config.ints.driver,
                     intlevel=config.ints.level,
                     algorithm=config.ints.algorithm,
+                    device=dd["device"],
+                    dtype=dd["dtype"],
                     force_cpu_for_libcint=(
                         config.ints.driver == labels.INTDRIVER_LIBCINT
                     ),
@@ -2011,9 +2011,7 @@ class Model:
             )
 
         setup_index_token = (
-            _build_setup_index_token(
-                numbers, ihelp, integral_setup, es2_setup
-            )
+            _build_setup_index_token(numbers, ihelp, integral_setup, es2_setup)
             if batch_mode == 0
             else None
         )

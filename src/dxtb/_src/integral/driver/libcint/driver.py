@@ -93,6 +93,10 @@ class LibcintIntegralSetup(Node):
     def _validate(self) -> None:
         if self.index.batch_mode != 0:
             raise ValueError("Libcint setup requires one single System.")
+        if self.numbers.shape != self.index.shells_per_atom.shape:
+            raise ValueError(
+                "Libcint setup numbers must match IndexHelper atom shape."
+            )
         if self.force_cpu:
             tensors: list[Tensor] = [
                 self.numbers,
@@ -185,6 +189,13 @@ def setup_libcint(
     ihelp = basis.ihelp
     if ihelp.batch_mode != 0:
         raise ValueError("Libcint setup requires one single System.")
+    if (
+        basis.numbers.ndim != 1
+        or basis.numbers.shape != ihelp.shells_per_atom.shape
+    ):
+        raise ValueError(
+            "Libcint setup requires 1D atomic numbers matching IndexHelper."
+        )
 
     source_tensors = (
         basis.numbers,

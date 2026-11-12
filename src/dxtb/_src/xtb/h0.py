@@ -444,6 +444,7 @@ def setup_h0(
         par = ParamModule(par, device=device, dtype=dtype)
     if par.is_none("meta.name"):
         raise ValueError("The parametrization must specify a method name.")
+    assert par.meta is not None
     name = par.meta.name.casefold().replace("-xtb", "")
     if name not in ("gfn0", "gfn1", "gfn2"):
         raise ValueError(f"Unsupported Hamiltonian type: {par.meta.name}")

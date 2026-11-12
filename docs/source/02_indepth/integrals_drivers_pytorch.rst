@@ -67,3 +67,7 @@ Implementations
 .. automodule:: dxtb._src.integral.driver.pytorch.overlap
    :members:
    :show-inheritance:
+
+.. automodule:: dxtb._src.integral.driver.pytorch.multipole
+   :members:
+   :show-inheritance:
