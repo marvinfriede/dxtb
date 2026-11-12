@@ -41,15 +41,7 @@ from .slater import slater_to_gauss
 if TYPE_CHECKING:
     from dxtb._src.exlibs import libcint
 
-__all__ = [
-    "Basis",
-    "ShellLayout",
-    "build_shell_layout",
-    "create_libcint_from_data",
-    "create_libcint_from_layout",
-]
-
-ShellLayout = tuple[tuple[int, tuple[tuple[int, int], ...]], ...]
+__all__ = ["Basis"]
 
 
 def _to_int_list(tensor: Tensor) -> list[int]:
@@ -408,119 +400,12 @@ class Basis(TensorLike):
                 "Libcint Basis conversion requires a single Structure."
             )
 
-        alphas, coeffs = self.create_cgtos()
-        return create_libcint_from_data(
-            self.numbers,
-            self.unique,
-            self.ihelp.ushells_per_unique,
-            self.ihelp.unique_angular,
-            alphas,
-            coeffs,
-            positions,
-            mask=mask,
+        # pylint: disable=import-outside-toplevel
+        from dxtb._src.integral.driver.libcint.driver import setup_libcint
+
+        return setup_libcint(self, force_cpu=False).create_libcint(
+            positions, mask=mask
         )
-
-
-def build_shell_layout(
-    unique: Tensor,
-    ushells_per_unique: Tensor,
-    unique_angular: Tensor,
-) -> ShellLayout:
-    """Extract static per-element ``(angmom, unique_shell_idx)`` metadata."""
-    unique_numbers = _to_int_list(unique)
-    shell_counts = _to_int_list(ushells_per_unique)
-    angular = _to_int_list(unique_angular)
-    n_slots = len(angular)
-
-    layout: list[tuple[int, tuple[tuple[int, int], ...]]] = []
-    shell = 0
-    for number, count in zip(unique_numbers, shell_counts):
-        if count == 0:
-            if shell < n_slots and angular[shell] < 0:
-                shell += 1
-            continue
-
-        element_shells: list[tuple[int, int]] = []
-        for _ in range(count):
-            angmom = angular[shell]
-            if angmom >= 0:
-                element_shells.append((angmom, shell))
-            shell += 1
-
-        if number > 0:
-            if element_shells:
-                layout.append((number, tuple(element_shells)))
-        elif element_shells:
-            raise ValueError("Padding atomic number zero cannot own shells.")
-
-    return tuple(layout)
-
-
-def create_libcint_from_layout(
-    numbers: Tensor,
-    shell_layout: ShellLayout,
-    alphas: tuple[Tensor, ...],
-    coeffs: tuple[Tensor, ...],
-    positions: Tensor,
-    *,
-    mask: Tensor | None = None,
-) -> tuple[libcint.Basis, libcint.Structure]:
-    """Create a call-local libcint basis and structure from static layout."""
-    from dxtb._src.exlibs import libcint
-
-    shells_by_element: dict[int, list[libcint.Shell]] = {}
-    for number, element_shells in shell_layout:
-        # ``slater_to_gauss`` normalizes stretched 3D Cartesian Gaussians
-        # ``x^l exp(-alpha r^2)``, whereas ``tad-libcint`` combines the
-        # radial contraction ``sum_k c_k r^l exp(-alpha_k r^2)`` with real
-        # spherical harmonics of unit norm on the sphere, leaving an
-        # unnormalized shell self-overlap of ``(2l + 1) / (4 * pi)``.
-        # ``Shell.normalized()`` rescales the 1D shell coefficients by
-        # their exact analytical radial self-overlap ``overlap.rsqrt()``
-        # (differentiably w.r.t. ``alphas`` and ``coeffs``) rather than
-        # multiplying a second normalization factor on top, so do not
-        # remove ``.normalized()``.
-        shells_by_element[number] = [
-            libcint.Shell(
-                angmom=angmom,
-                alphas=alphas[shell_idx],
-                coeffs=coeffs[shell_idx],
-            ).normalized()
-            for angmom, shell_idx in element_shells
-        ]
-
-    physical_numbers = numbers
-    physical_positions = positions
-    if mask is not None:
-        physical_numbers = torch.masked_select(physical_numbers, mask)
-        physical_positions = torch.masked_select(
-            physical_positions, mask.unsqueeze(-1)
-        ).reshape((-1, 3))
-
-    return (
-        libcint.Basis(shells=shells_by_element),
-        libcint.Structure(
-            numbers=physical_numbers, positions=physical_positions
-        ),
-    )
-
-
-def create_libcint_from_data(
-    numbers: Tensor,
-    unique: Tensor,
-    ushells_per_unique: Tensor,
-    unique_angular: Tensor,
-    alphas: tuple[Tensor, ...],
-    coeffs: tuple[Tensor, ...],
-    positions: Tensor,
-    *,
-    mask: Tensor | None = None,
-) -> tuple[libcint.Basis, libcint.Structure]:
-    """Create a call-local libcint basis and structure from gathered data."""
-    layout = build_shell_layout(unique, ushells_per_unique, unique_angular)
-    return create_libcint_from_layout(
-        numbers, layout, alphas, coeffs, positions, mask=mask
-    )
 
 
 def format_contraction(shells: list[str], ngauss: Tensor) -> str:

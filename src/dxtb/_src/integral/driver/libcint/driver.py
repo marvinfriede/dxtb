@@ -29,12 +29,7 @@ import torch
 from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
-from dxtb._src.basis.bas import (
-    Basis,
-    ShellLayout,
-    build_shell_layout,
-    create_libcint_from_layout,
-)
+from dxtb._src.basis.bas import Basis, _to_int_list
 from dxtb._src.typing import Tensor
 
 if TYPE_CHECKING:
@@ -42,8 +37,46 @@ if TYPE_CHECKING:
 
 __all__ = [
     "LibcintIntegralSetup",
+    "ShellLayout",
     "setup_libcint",
 ]
+
+ShellLayout = tuple[tuple[int, tuple[tuple[int, int], ...]], ...]
+
+
+def _build_shell_layout(
+    unique: Tensor,
+    ushells_per_unique: Tensor,
+    unique_angular: Tensor,
+) -> ShellLayout:
+    """Extract static per-element ``(angmom, unique_shell_idx)`` metadata."""
+    unique_numbers = _to_int_list(unique)
+    shell_counts = _to_int_list(ushells_per_unique)
+    angular = _to_int_list(unique_angular)
+    n_slots = len(angular)
+
+    layout: list[tuple[int, tuple[tuple[int, int], ...]]] = []
+    shell = 0
+    for number, count in zip(unique_numbers, shell_counts):
+        if count == 0:
+            if shell < n_slots and angular[shell] < 0:
+                shell += 1
+            continue
+
+        element_shells: list[tuple[int, int]] = []
+        for _ in range(count):
+            angmom = angular[shell]
+            if angmom >= 0:
+                element_shells.append((angmom, shell))
+            shell += 1
+
+        if number > 0:
+            if element_shells:
+                layout.append((number, tuple(element_shells)))
+        elif element_shells:
+            raise ValueError("Padding atomic number zero cannot own shells.")
+
+    return tuple(layout)
 
 
 class LibcintIntegralSetup(Node):
@@ -92,23 +125,54 @@ class LibcintIntegralSetup(Node):
         return super()._convert_child(name, value, device, dtype)
 
     def create_libcint(
-        self, positions: Tensor
+        self,
+        positions: Tensor,
+        *,
+        mask: Tensor | None = None,
     ) -> tuple[libcint.Basis, libcint.Structure]:
         """Construct call-local libcint basis and structure for ``positions``."""
+        # pylint: disable=import-outside-toplevel
+        from dxtb._src.exlibs import libcint
+
         if self.force_cpu and positions.device.type != "cpu":
             positions = positions.to(device=torch.device("cpu"))
 
+        shells_by_element: dict[int, list[libcint.Shell]] = {}
+        for number, element_shells in self.shell_layout:
+            # ``slater_to_gauss`` normalizes stretched 3D Cartesian Gaussians
+            # ``x^l exp(-alpha r^2)``, whereas ``tad-libcint`` combines the
+            # radial contraction ``sum_k c_k r^l exp(-alpha_k r^2)`` with real
+            # spherical harmonics of unit norm on the sphere, leaving an
+            # unnormalized shell self-overlap of ``(2l + 1) / (4 * pi)``.
+            # ``Shell.normalized()`` rescales the 1D shell coefficients by
+            # their exact analytical radial self-overlap ``overlap.rsqrt()``
+            # (differentiably w.r.t. ``alphas`` and ``coeffs``) rather than
+            # multiplying a second normalization factor on top, so do not
+            # remove ``.normalized()``.
+            shells_by_element[number] = [
+                libcint.Shell(
+                    angmom=angmom,
+                    alphas=self.alphas[shell_idx],
+                    coeffs=self.coeffs[shell_idx],
+                ).normalized()
+                for angmom, shell_idx in element_shells
+            ]
+
         numbers = self.numbers
-        if self.active_atoms is not None:
+        if mask is not None:
+            if self.force_cpu and mask.device.type != "cpu":
+                mask = mask.to(device=torch.device("cpu"))
+            numbers = torch.masked_select(numbers, mask)
+            positions = torch.masked_select(
+                positions, mask.unsqueeze(-1)
+            ).reshape((-1, 3))
+        elif self.active_atoms is not None:
             numbers = numbers.index_select(0, self.active_atoms)
             positions = positions.index_select(-2, self.active_atoms)
 
-        return create_libcint_from_layout(
-            numbers,
-            self.shell_layout,
-            self.alphas,
-            self.coeffs,
-            positions,
+        return (
+            libcint.Basis(shells=shells_by_element),
+            libcint.Structure(numbers=numbers, positions=positions),
         )
 
 
@@ -145,7 +209,7 @@ def setup_libcint(
         )
 
     alphas, coeffs = basis.create_cgtos()
-    shell_layout = build_shell_layout(
+    shell_layout = _build_shell_layout(
         basis.unique, ihelp.ushells_per_unique, ihelp.unique_angular
     )
 
