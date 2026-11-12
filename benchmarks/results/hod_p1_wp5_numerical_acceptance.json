@@ -1,0 +1,392 @@
+{
+  "single_system_matrix": [
+    {
+      "molecule": "H2",
+      "method": "gfn1",
+      "driver": "pytorch",
+      "shape": [
+        3,
+        3,
+        3
+      ],
+      "all_finite": true,
+      "dipole_sys_vs_calc_max_abs": 0.0,
+      "pol_sys_vs_calc_max_abs": 1.7763568394002505e-15,
+      "beta_sys_vs_calc_autograd_max_abs": 4.765393808725538e-15,
+      "beta_calc_ag_vs_ft_pol_max_abs": 1.1672114013164259e-14,
+      "beta_ft_pol_vs_ft_dip_max_abs": 0.0,
+      "beta_ft_dip_vs_ft_ene_max_abs": 0.0,
+      "beta_sys_vs_fd_max_abs": 8.44202425484304e-05,
+      "beta_calc_ag_vs_fd_max_abs": 8.44202425531958e-05,
+      "beta_perm_symmetry_defect_sys": 0.0,
+      "beta_perm_symmetry_defect_calc_ag": 0.0
+    },
+    {
+      "molecule": "H2",
+      "method": "gfn1",
+      "driver": "libcint",
+      "shape": [
+        3,
+        3,
+        3
+      ],
+      "all_finite": true,
+      "dipole_sys_vs_calc_max_abs": 0.0,
+      "pol_sys_vs_calc_max_abs": 3.9968028886505635e-15,
+      "beta_sys_vs_calc_autograd_max_abs": 5.3452251305707854e-15,
+      "beta_calc_ag_vs_ft_pol_max_abs": 1.3344197708625716e-14,
+      "beta_ft_pol_vs_ft_dip_max_abs": 0.0,
+      "beta_ft_dip_vs_ft_ene_max_abs": 0.0,
+      "beta_sys_vs_fd_max_abs": 0.00029306679494675,
+      "beta_calc_ag_vs_fd_max_abs": 0.0002930667949414048,
+      "beta_perm_symmetry_defect_sys": 0.0,
+      "beta_perm_symmetry_defect_calc_ag": 0.0
+    },
+    {
+      "molecule": "H2",
+      "method": "gfn2",
+      "driver": "pytorch",
+      "shape": [
+        3,
+        3,
+        3
+      ],
+      "all_finite": true,
+      "dipole_sys_vs_calc_max_abs": 0.0,
+      "pol_sys_vs_calc_max_abs": 0.0,
+      "beta_sys_vs_calc_autograd_max_abs": 8.580310601941318e-15,
+      "beta_calc_ag_vs_ft_pol_max_abs": 1.4701527349019264e-16,
+      "beta_ft_pol_vs_ft_dip_max_abs": 0.0,
+      "beta_ft_dip_vs_ft_ene_max_abs": 0.0,
+      "beta_sys_vs_fd_max_abs": 4.9591614860627595e-09,
+      "beta_calc_ag_vs_fd_max_abs": 4.959152905752158e-09,
+      "beta_perm_symmetry_defect_sys": 0.0,
+      "beta_perm_symmetry_defect_calc_ag": 0.0
+    },
+    {
+      "molecule": "H2",
+      "method": "gfn2",
+      "driver": "libcint",
+      "shape": [
+        3,
+        3,
+        3
+      ],
+      "all_finite": true,
+      "dipole_sys_vs_calc_max_abs": 0.0,
+      "pol_sys_vs_calc_max_abs": 0.0,
+      "beta_sys_vs_calc_autograd_max_abs": 2.5054888991994086e-15,
+      "beta_calc_ag_vs_ft_pol_max_abs": 1.0539527623011333e-15,
+      "beta_ft_pol_vs_ft_dip_max_abs": 0.0,
+      "beta_ft_dip_vs_ft_ene_max_abs": 0.0,
+      "beta_sys_vs_fd_max_abs": 4.963605450863401e-09,
+      "beta_calc_ag_vs_fd_max_abs": 4.963602945374502e-09,
+      "beta_perm_symmetry_defect_sys": 0.0,
+      "beta_perm_symmetry_defect_calc_ag": 0.0
+    },
+    {
+      "molecule": "LiH",
+      "method": "gfn1",
+      "driver": "pytorch",
+      "shape": [
+        3,
+        3,
+        3
+      ],
+      "all_finite": true,
+      "dipole_sys_vs_calc_max_abs": 0.0,
+      "pol_sys_vs_calc_max_abs": 3.552713678800501e-15,
+      "beta_sys_vs_calc_autograd_max_abs": 1.9895196601282805e-13,
+      "beta_calc_ag_vs_ft_pol_max_abs": 1.7053025658242404e-13,
+      "beta_ft_pol_vs_ft_dip_max_abs": 0.0,
+      "beta_ft_dip_vs_ft_ene_max_abs": 0.0,
+      "beta_sys_vs_fd_max_abs": 0.0031598754315780297,
+      "beta_calc_ag_vs_fd_max_abs": 0.003159875431634873,
+      "beta_perm_symmetry_defect_sys": 8.526512829121202e-14,
+      "beta_perm_symmetry_defect_calc_ag": 2.8421709430404007e-13
+    },
+    {
+      "molecule": "LiH",
+      "method": "gfn1",
+      "driver": "libcint",
+      "shape": [
+        3,
+        3,
+        3
+      ],
+      "all_finite": true,
+      "dipole_sys_vs_calc_max_abs": 0.0,
+      "pol_sys_vs_calc_max_abs": 7.105427357601002e-15,
+      "beta_sys_vs_calc_autograd_max_abs": 1.9895196601282805e-13,
+      "beta_calc_ag_vs_ft_pol_max_abs": 1.7053025658242404e-13,
+      "beta_ft_pol_vs_ft_dip_max_abs": 0.0,
+      "beta_ft_dip_vs_ft_ene_max_abs": 0.0,
+      "beta_sys_vs_fd_max_abs": 0.003159875601539852,
+      "beta_calc_ag_vs_fd_max_abs": 0.0031598756013977436,
+      "beta_perm_symmetry_defect_sys": 1.7053025658242404e-13,
+      "beta_perm_symmetry_defect_calc_ag": 1.9895196601282805e-13
+    },
+    {
+      "molecule": "LiH",
+      "method": "gfn2",
+      "driver": "pytorch",
+      "shape": [
+        3,
+        3,
+        3
+      ],
+      "all_finite": true,
+      "dipole_sys_vs_calc_max_abs": 0.0,
+      "pol_sys_vs_calc_max_abs": 8.881784197001252e-15,
+      "beta_sys_vs_calc_autograd_max_abs": 3.979039320256561e-13,
+      "beta_calc_ag_vs_ft_pol_max_abs": 3.694822225952521e-13,
+      "beta_ft_pol_vs_ft_dip_max_abs": 0.0,
+      "beta_ft_dip_vs_ft_ene_max_abs": 0.0,
+      "beta_sys_vs_fd_max_abs": 0.0011775344500222218,
+      "beta_calc_ag_vs_fd_max_abs": 0.0011775344504201257,
+      "beta_perm_symmetry_defect_sys": 5.684341886080802e-14,
+      "beta_perm_symmetry_defect_calc_ag": 1.7053025658242404e-13
+    },
+    {
+      "molecule": "LiH",
+      "method": "gfn2",
+      "driver": "libcint",
+      "shape": [
+        3,
+        3,
+        3
+      ],
+      "all_finite": true,
+      "dipole_sys_vs_calc_max_abs": 0.0,
+      "pol_sys_vs_calc_max_abs": 3.552713678800501e-15,
+      "beta_sys_vs_calc_autograd_max_abs": 1.7053025658242404e-13,
+      "beta_calc_ag_vs_ft_pol_max_abs": 1.1368683772161603e-13,
+      "beta_ft_pol_vs_ft_dip_max_abs": 0.0,
+      "beta_ft_dip_vs_ft_ene_max_abs": 0.0,
+      "beta_sys_vs_fd_max_abs": 0.0011775344460431825,
+      "beta_calc_ag_vs_fd_max_abs": 0.0011775344461000259,
+      "beta_perm_symmetry_defect_sys": 1.1368683772161603e-13,
+      "beta_perm_symmetry_defect_calc_ag": 5.684341886080802e-14
+    },
+    {
+      "molecule": "H2O",
+      "method": "gfn1",
+      "driver": "pytorch",
+      "shape": [
+        3,
+        3,
+        3
+      ],
+      "all_finite": true,
+      "dipole_sys_vs_calc_max_abs": 0.0,
+      "pol_sys_vs_calc_max_abs": 1.7763568394002505e-15,
+      "beta_sys_vs_calc_autograd_max_abs": 1.9095836023552692e-14,
+      "beta_calc_ag_vs_ft_pol_max_abs": 7.105427357601002e-15,
+      "beta_ft_pol_vs_ft_dip_max_abs": 0.0,
+      "beta_ft_dip_vs_ft_ene_max_abs": 0.0,
+      "beta_sys_vs_fd_max_abs": 5.848582063094909e-07,
+      "beta_calc_ag_vs_fd_max_abs": 5.848581885459225e-07,
+      "beta_perm_symmetry_defect_sys": 2.4868995751603507e-14,
+      "beta_perm_symmetry_defect_calc_ag": 1.7763568394002505e-15
+    },
+    {
+      "molecule": "H2O",
+      "method": "gfn1",
+      "driver": "libcint",
+      "shape": [
+        3,
+        3,
+        3
+      ],
+      "all_finite": true,
+      "dipole_sys_vs_calc_max_abs": 0.0,
+      "pol_sys_vs_calc_max_abs": 1.1379786002407855e-15,
+      "beta_sys_vs_calc_autograd_max_abs": 2.220446049250313e-14,
+      "beta_calc_ag_vs_ft_pol_max_abs": 8.881784197001252e-15,
+      "beta_ft_pol_vs_ft_dip_max_abs": 0.0,
+      "beta_ft_dip_vs_ft_ene_max_abs": 0.0,
+      "beta_sys_vs_fd_max_abs": 5.848453330514758e-07,
+      "beta_calc_ag_vs_fd_max_abs": 5.84845335716011e-07,
+      "beta_perm_symmetry_defect_sys": 4.440892098500626e-15,
+      "beta_perm_symmetry_defect_calc_ag": 2.042810365310288e-14
+    },
+    {
+      "molecule": "H2O",
+      "method": "gfn2",
+      "driver": "pytorch",
+      "shape": [
+        3,
+        3,
+        3
+      ],
+      "all_finite": true,
+      "dipole_sys_vs_calc_max_abs": 0.0,
+      "pol_sys_vs_calc_max_abs": 2.6645352591003757e-15,
+      "beta_sys_vs_calc_autograd_max_abs": 5.329070518200751e-15,
+      "beta_calc_ag_vs_ft_pol_max_abs": 3.1086244689504383e-15,
+      "beta_ft_pol_vs_ft_dip_max_abs": 0.0,
+      "beta_ft_dip_vs_ft_ene_max_abs": 0.0,
+      "beta_sys_vs_fd_max_abs": 2.0111837617520223e-07,
+      "beta_calc_ag_vs_fd_max_abs": 2.0111837750746986e-07,
+      "beta_perm_symmetry_defect_sys": 1.609823385706477e-15,
+      "beta_perm_symmetry_defect_calc_ag": 7.105427357601002e-15
+    },
+    {
+      "molecule": "H2O",
+      "method": "gfn2",
+      "driver": "libcint",
+      "shape": [
+        3,
+        3,
+        3
+      ],
+      "all_finite": true,
+      "dipole_sys_vs_calc_max_abs": 0.0,
+      "pol_sys_vs_calc_max_abs": 8.881784197001252e-16,
+      "beta_sys_vs_calc_autograd_max_abs": 5.329070518200751e-15,
+      "beta_calc_ag_vs_ft_pol_max_abs": 3.552713678800501e-15,
+      "beta_ft_pol_vs_ft_dip_max_abs": 0.0,
+      "beta_ft_dip_vs_ft_ene_max_abs": 0.0,
+      "beta_sys_vs_fd_max_abs": 2.0113169885149773e-07,
+      "beta_calc_ag_vs_fd_max_abs": 2.0113169840740852e-07,
+      "beta_perm_symmetry_defect_sys": 9.992007221626409e-16,
+      "beta_perm_symmetry_defect_calc_ag": 2.220446049250313e-15
+    },
+    {
+      "molecule": "NO2",
+      "method": "gfn1",
+      "driver": "pytorch",
+      "shape": [
+        3,
+        3,
+        3
+      ],
+      "all_finite": true,
+      "dipole_sys_vs_calc_max_abs": 0.0,
+      "pol_sys_vs_calc_max_abs": 2.55351295663786e-15,
+      "beta_sys_vs_calc_autograd_max_abs": 2.9161413772627043e-07,
+      "beta_calc_ag_vs_ft_pol_max_abs": 1.7763568394002505e-14,
+      "beta_ft_pol_vs_ft_dip_max_abs": 0.0,
+      "beta_ft_dip_vs_ft_ene_max_abs": 0.0,
+      "beta_sys_vs_fd_max_abs": 2.1491199517775783e-06,
+      "beta_calc_ag_vs_fd_max_abs": 2.146126702129436e-06,
+      "beta_perm_symmetry_defect_sys": 2.3568702545162523e-11,
+      "beta_perm_symmetry_defect_calc_ag": 2.1316282072803006e-14
+    },
+    {
+      "molecule": "NO2",
+      "method": "gfn1",
+      "driver": "libcint",
+      "shape": [
+        3,
+        3,
+        3
+      ],
+      "all_finite": true,
+      "dipole_sys_vs_calc_max_abs": 0.0,
+      "pol_sys_vs_calc_max_abs": 3.552713678800501e-15,
+      "beta_sys_vs_calc_autograd_max_abs": 6.665692340313001e-07,
+      "beta_calc_ag_vs_ft_pol_max_abs": 1.5987211554602254e-14,
+      "beta_ft_pol_vs_ft_dip_max_abs": 0.0,
+      "beta_ft_dip_vs_ft_ene_max_abs": 0.0,
+      "beta_sys_vs_fd_max_abs": 2.1529697702415973e-06,
+      "beta_calc_ag_vs_fd_max_abs": 2.1461319439364246e-06,
+      "beta_perm_symmetry_defect_sys": 2.155964295980084e-11,
+      "beta_perm_symmetry_defect_calc_ag": 4.241051954068098e-14
+    },
+    {
+      "molecule": "NO2",
+      "method": "gfn2",
+      "driver": "pytorch",
+      "shape": [
+        3,
+        3,
+        3
+      ],
+      "all_finite": true,
+      "dipole_sys_vs_calc_max_abs": 0.0,
+      "pol_sys_vs_calc_max_abs": 7.105427357601002e-15,
+      "beta_sys_vs_calc_autograd_max_abs": 0.0003536671182646778,
+      "beta_calc_ag_vs_ft_pol_max_abs": 5.861977570020827e-14,
+      "beta_ft_pol_vs_ft_dip_max_abs": 0.0,
+      "beta_ft_dip_vs_ft_ene_max_abs": 0.0,
+      "beta_sys_vs_fd_max_abs": 0.00032104217202055807,
+      "beta_calc_ag_vs_fd_max_abs": 3.262494624411971e-05,
+      "beta_perm_symmetry_defect_sys": 1.440092667337467e-08,
+      "beta_perm_symmetry_defect_calc_ag": 3.552713678800501e-14
+    },
+    {
+      "molecule": "NO2",
+      "method": "gfn2",
+      "driver": "libcint",
+      "shape": [
+        3,
+        3,
+        3
+      ],
+      "all_finite": true,
+      "dipole_sys_vs_calc_max_abs": 0.0,
+      "pol_sys_vs_calc_max_abs": 7.105427357601002e-15,
+      "beta_sys_vs_calc_autograd_max_abs": 0.00037022447974388584,
+      "beta_calc_ag_vs_ft_pol_max_abs": 4.39648317751562e-14,
+      "beta_ft_pol_vs_ft_dip_max_abs": 0.0,
+      "beta_ft_dip_vs_ft_ene_max_abs": 0.0,
+      "beta_sys_vs_fd_max_abs": 0.0003379124835873881,
+      "beta_calc_ag_vs_fd_max_abs": 3.231199615649771e-05,
+      "beta_perm_symmetry_defect_sys": 1.4682457916137537e-08,
+      "beta_perm_symmetry_defect_calc_ag": 1.509903313490213e-14
+    }
+  ],
+  "fd_step_sweep_lih": {
+    "pol_unrolled_vs_implicit_max_abs": 2.4158453015843406e-13,
+    "steps": {
+      "0.001": {
+        "beta_sys_unr_vs_fd_unr_max_abs": 0.001512425989659505,
+        "beta_calc_unr_vs_fd_unr_max_abs": 0.0015124259896026615,
+        "fd_unr_vs_fd_imp_max_abs": 4.184812496532686e-10
+      },
+      "0.0005": {
+        "beta_sys_unr_vs_fd_unr_max_abs": 9.422615971743653e-05,
+        "beta_calc_unr_vs_fd_unr_max_abs": 9.422615966059311e-05,
+        "fd_unr_vs_fd_imp_max_abs": 2.8629187909245957e-10
+      },
+      "0.0001": {
+        "beta_sys_unr_vs_fd_unr_max_abs": 1.5063739056131453e-07,
+        "beta_calc_unr_vs_fd_unr_max_abs": 1.5063733371789567e-07,
+        "fd_unr_vs_fd_imp_max_abs": 1.716955466690706e-10
+      },
+      "5e-05": {
+        "beta_sys_unr_vs_fd_unr_max_abs": 9.354096164315706e-09,
+        "beta_calc_unr_vs_fd_unr_max_abs": 9.354039320896845e-09,
+        "fd_unr_vs_fd_imp_max_abs": 4.6480863602482714e-10
+      }
+    }
+  },
+  "rotation_covariance": {
+    "h2o_system_rot_covariance_max_abs": 1.1546319456101628e-14,
+    "h2o_calc_autograd_rot_covariance_max_abs": 7.105427357601002e-15
+  },
+  "batch_and_vmap": {
+    "vmap_shared_lane0_vs_single_max_abs": 8.526512829121202e-14,
+    "vmap_per_lane_lane1_vs_single_max_abs": 1.1368683772161603e-13,
+    "calc_pack_shared_ag_vs_ft_max_abs": 1.7053025658242404e-13,
+    "calc_pack_per_lane_ag_vs_ft_max_abs": 1.7053025658242404e-13,
+    "calc_pack_lane0_vs_single_lih_max_abs": 0.0
+  },
+  "other_higher_order_properties": {
+    "hessian_sys_vs_calc_ag_max_abs": 4.996003610813204e-16,
+    "hessian_calc_ag_vs_ft_max_abs": 2.498001805406602e-16,
+    "dipole_deriv_sys_vs_calc_ag_max_abs": 4.996003610813204e-16,
+    "dipole_deriv_calc_ag_vs_ft_max_abs": 5.551115123125783e-16,
+    "pol_deriv_sys_vs_calc_ag_max_abs": 1.1120895688029617e-14,
+    "pol_deriv_calc_ag_vs_ft_max_abs": 1.2434497875801753e-14,
+    "pol_deriv_pack_shared_ag_vs_ft_max_abs": 2.353672812205332e-14,
+    "pol_deriv_pack_per_lane_ag_vs_ft_max_abs": 2.353672812205332e-14,
+    "third_order_directional_vs_fd_abs": 1.272870697732742e-13,
+    "parameter_force_jacobian_shape": [
+      3,
+      3
+    ],
+    "parameter_force_jacobian_max_abs": 0.1853805404310899
+  }
+}

@@ -29,8 +29,10 @@ from tad_mctc.tree import Node, child
 
 from dxtb._src.calculators.config.scf import ConfigSCF
 from dxtb._src.constants import defaults, labels
+from dxtb._src.scf.core import replace_tensor_leaves, tensor_leaves
 from dxtb._src.scf.status import SCFFailureCode
 from dxtb._src.typing import Tensor
+from dxtb._src.utils.tensors import disable_functorch, unwrap_functorch_tensor
 from dxtb._src.wavefunction import filling
 from dxtb._src.wavefunction.filling import (
     FermiOccupationResult,
@@ -685,12 +687,90 @@ def _select_tensor(mask: Tensor, new: Tensor, old: Tensor) -> Tensor:
     return torch.where(mask, new, old)
 
 
+def _unwrap_gradtracking_tree(tree: object) -> tuple[object, bool]:
+    """Unwrap ``GradTrackingTensor`` leaves when no ``vmap`` is active."""
+    leaves = tensor_leaves(tree)
+    unwrapped: dict[str, Tensor] = {}
+    any_wrapped = False
+    for path, leaf in leaves:
+        raw = unwrap_functorch_tensor(leaf, allow_vmap=False)
+        if raw is None:
+            return tree, False
+        if raw is not leaf:
+            any_wrapped = True
+        unwrapped[path] = raw
+    if not any_wrapped:
+        return tree, True
+    return replace_tensor_leaves(tree, unwrapped), True
+
+
+def _certify_scf_core_state_primal(
+    problem: SCFProblem,
+    state: SCFPhysicalState,
+    thresholds: SCFCertificationThresholds,
+    *,
+    fixed_point_residual: SCFResidual,
+    unwrapped_problem: tuple[SCFProblem, bool] | None = None,
+) -> SCFCertificationCoreResult:
+    """Evaluate controller certification diagnostics without AD graph tracking."""
+    prob_raw, prob_ok = (
+        _unwrap_gradtracking_tree(problem)
+        if unwrapped_problem is None
+        else unwrapped_problem
+    )
+    if prob_ok:
+        state_raw, state_ok = _unwrap_gradtracking_tree(state)
+        res_raw, res_ok = _unwrap_gradtracking_tree(fixed_point_residual)
+        if state_ok and res_ok:
+            with disable_functorch(), torch.no_grad():
+                return certify_scf_core_state(
+                    cast(SCFProblem, prob_raw),
+                    cast(SCFPhysicalState, state_raw),
+                    thresholds,
+                    fixed_point_residual=cast(SCFResidual, res_raw),
+                )
+    return certify_scf_core_state(
+        problem,
+        state,
+        thresholds,
+        fixed_point_residual=fixed_point_residual,
+    )
+
+
 def _select_core_certification(
     mask: Tensor,
     new: SCFCertificationCoreResult,
     old: SCFCertificationCoreResult,
 ) -> SCFCertificationCoreResult:
     """Select tensor leaves of immutable certification diagnostics."""
+    mask_raw, mask_ok = _unwrap_gradtracking_tree(mask)
+    if mask_ok:
+        new_raw, new_ok = _unwrap_gradtracking_tree(new)
+        old_raw, old_ok = _unwrap_gradtracking_tree(old)
+        if new_ok and old_ok:
+            with disable_functorch(), torch.no_grad():
+                mask_u = cast(Tensor, mask_raw)
+
+                def select_unwrapped(new_value, old_value):
+                    if isinstance(new_value, Tensor):
+                        return torch.where(mask_u, new_value, old_value)
+                    if is_dataclass(new_value):
+                        return replace(
+                            new_value,
+                            **{
+                                field.name: select_unwrapped(
+                                    getattr(new_value, field.name),
+                                    getattr(old_value, field.name),
+                                )
+                                for field in fields(new_value)
+                            },
+                        )
+                    return new_value
+
+                return cast(
+                    SCFCertificationCoreResult,
+                    select_unwrapped(new_raw, old_raw),
+                )
 
     def select_value(new_value, old_value):
         if isinstance(new_value, Tensor):
@@ -1197,6 +1277,13 @@ class FixedTripControl:
             )
         problem = self.problem
         thresholds = self.thresholds
+        unwrapped_problem = (
+            None
+            if problem is None or thresholds is None
+            else cast(
+                tuple[SCFProblem, bool], _unwrap_gradtracking_tree(problem)
+            )
+        )
         for index in range(start, stop):
             map_input = state.current_x
             active_before = state.active
@@ -1217,11 +1304,12 @@ class FixedTripControl:
                 candidate_residual = _residual(
                     candidate_x - state.current_x, self.residual_projection
                 )
-                candidate_certification = certify_scf_core_state(
+                candidate_certification = _certify_scf_core_state_primal(
                     problem,
                     SCFPhysicalState(state.current_x, certification_candidate),
                     thresholds,
                     fixed_point_residual=candidate_residual,
+                    unwrapped_problem=unwrapped_problem,
                 )
             state = _solver_control_step(
                 state,
@@ -1281,7 +1369,7 @@ class FixedTripControl:
         if self.problem is not None and self.thresholds is not None:
             state = replace(
                 state,
-                certification=certify_scf_core_state(
+                certification=_certify_scf_core_state_primal(
                     self.problem,
                     SCFPhysicalState(state.map_input_x, state.map_result),
                     self.thresholds,

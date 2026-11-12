@@ -810,6 +810,8 @@ class AutogradCalculator(EnergyCalculator):
         derived_quantity: Literal["energy", "dipole"] = "dipole",
         field: Tensor | Sequence[Tensor | None] | None = None,
         field_grad: Tensor | Sequence[Tensor | None] | None = None,
+        *,
+        create_graph: bool = True,
         **kwargs: Any,
     ) -> Tensor:
         r"""
@@ -845,6 +847,13 @@ class AutogradCalculator(EnergyCalculator):
             ``'energy'`` differentiates
             :math:`\alpha = -\partial^2 E / \partial F^2` and requires
             ``use_functorch=True``. Defaults to ``'dipole'``.
+        create_graph : bool, optional
+            If ``True`` (default), constructs and retains the higher-order
+            derivative graph so the returned third-order tensor supports
+            subsequent differentiation. If ``False``, returns an explicitly
+            terminal third-order tensor (``grad_fn is None``) and releases
+            intermediate graphs after each row to reduce peak and retained
+            memory.
 
         Returns
         -------
@@ -866,32 +875,46 @@ class AutogradCalculator(EnergyCalculator):
             field, field_grad, needs_field=True
         )
         is_batched = self.numbers.ndim > 1
+        build_graph = bool(create_graph) and torch.is_grad_enabled()
 
         if use_functorch is False:
-            # pylint: disable=import-outside-toplevel
-            from tad_mctc.autograd import jac
-
-            a = self.polarizability(
+            if field is None:
+                raise RuntimeError("pol_deriv requires field=.")
+            mu = self.dipole(
                 positions,
                 chrg,
                 spin,
-                use_functorch=use_functorch,
-                derived_quantity=derived_quantity,
+                use_functorch=False,
                 field=field,
                 field_grad=field_grad,
             )
-
-            if is_batched:
-                # Sum independent batch lanes so jac computes lane-local derivatives
-                # in 9 VJP passes: (3, 3, B*nat*3) -> (3, 3, B, nat, 3) -> (B, 3, 3, nat, 3)
-                chi = (
-                    jac(a.sum(dim=0), positions)
-                    .reshape(3, 3, *positions.shape)
-                    .movedim(2, 0)
+            mu_red = mu.sum(dim=0) if is_batched else mu
+            rows: list[Tensor] = []
+            for i in range(3):
+                (alpha_i,) = torch.autograd.grad(
+                    mu_red[i],
+                    field,
+                    create_graph=True,
+                    retain_graph=True,
                 )
-            else:
-                # d(3, 3) / d(nat, 3) -> (3, 3, nat*3) -> (3, 3, nat, 3)
-                chi = jac(a, positions).reshape((3, 3, *positions.shape[-2:]))
+                alpha_i_red = (
+                    alpha_i.sum(dim=0) if field.ndim == 2 else alpha_i
+                )
+                cols: list[Tensor] = []
+                for j in range(3):
+                    is_last = i == 2 and j == 2
+                    (chi_ij,) = torch.autograd.grad(
+                        alpha_i_red[j],
+                        positions,
+                        create_graph=build_graph,
+                        retain_graph=build_graph or not is_last,
+                    )
+                    cols.append(chi_ij)
+                rows.append(torch.stack(cols, dim=0))
+                del alpha_i, alpha_i_red
+            chi = torch.stack(rows, dim=0)
+            if is_batched:
+                chi = chi.movedim(2, 0)
 
         else:
             # pylint: disable=import-outside-toplevel
@@ -913,6 +936,8 @@ class AutogradCalculator(EnergyCalculator):
             assert isinstance(chi, Tensor)
             if is_batched:
                 chi = chi.movedim(2, 0)
+            if not build_graph:
+                chi = chi.detach()
 
         if is_batched:
             pad_mask = (
@@ -943,6 +968,8 @@ class AutogradCalculator(EnergyCalculator):
         ] = "pol",
         field: Tensor | Sequence[Tensor | None] | None = None,
         field_grad: Tensor | Sequence[Tensor | None] | None = None,
+        *,
+        create_graph: bool = True,
     ) -> Tensor:
         r"""
         Calculate the hyper polarizability tensor :math:`\beta`.
@@ -978,6 +1005,13 @@ class AutogradCalculator(EnergyCalculator):
             ``use_functorch=True``), and ``'energy'`` computes
             :math:`-\partial^3 E / \partial F^3` (requires
             ``use_functorch=True``). Defaults to ``'pol'``.
+        create_graph : bool, optional
+            If ``True`` (default), constructs and retains the higher-order
+            derivative graph so the returned third-order tensor supports
+            subsequent differentiation. If ``False``, returns an explicitly
+            terminal third-order tensor (``grad_fn is None``) and releases
+            intermediate graphs after each row to reduce peak and retained
+            memory.
 
         Returns
         -------
@@ -1009,12 +1043,10 @@ class AutogradCalculator(EnergyCalculator):
             )
 
         per_lane_field = field.ndim == 2
+        build_graph = bool(create_graph) and torch.is_grad_enabled()
 
         if use_functorch is False:
-            # pylint: disable=import-outside-toplevel
-            from tad_mctc.autograd import jac
-
-            alpha = self.polarizability(
+            mu = self.dipole(
                 positions,
                 chrg,
                 spin,
@@ -1023,13 +1055,58 @@ class AutogradCalculator(EnergyCalculator):
                 field_grad=field_grad,
             )
             if per_lane_field:
-                beta = (
-                    jac(alpha.sum(dim=0), field)
-                    .reshape(3, 3, field.shape[0], 3)
-                    .movedim(2, 0)
-                )
+                mu_red = mu.sum(dim=0)
+                rows: list[Tensor] = []
+                for i in range(3):
+                    (alpha_i,) = torch.autograd.grad(
+                        mu_red[i],
+                        field,
+                        create_graph=True,
+                        retain_graph=True,
+                    )
+                    alpha_i_red = alpha_i.sum(dim=0)
+                    cols: list[Tensor] = []
+                    for j in range(3):
+                        is_last = i == 2 and j == 2
+                        (beta_ij,) = torch.autograd.grad(
+                            alpha_i_red[j],
+                            field,
+                            create_graph=build_graph,
+                            retain_graph=build_graph or not is_last,
+                        )
+                        cols.append(beta_ij)
+                    rows.append(torch.stack(cols, dim=0))
+                    del alpha_i, alpha_i_red
+                beta = torch.stack(rows, dim=0).movedim(2, 0)
             else:
-                beta = jac(alpha, field).reshape(
+                mu_flat = mu.reshape(-1, 3)
+                n_lanes = mu_flat.shape[0]
+                lane_betas: list[Tensor] = []
+                for lane in range(n_lanes):
+                    rows = []
+                    for i in range(3):
+                        (alpha_i,) = torch.autograd.grad(
+                            mu_flat[lane, i],
+                            field,
+                            create_graph=True,
+                            retain_graph=True,
+                        )
+                        cols = []
+                        for j in range(3):
+                            is_last = (
+                                lane == n_lanes - 1 and i == 2 and j == 2
+                            )
+                            (beta_ij,) = torch.autograd.grad(
+                                alpha_i[j],
+                                field,
+                                create_graph=build_graph,
+                                retain_graph=build_graph or not is_last,
+                            )
+                            cols.append(beta_ij)
+                        rows.append(torch.stack(cols, dim=0))
+                        del alpha_i
+                    lane_betas.append(torch.stack(rows, dim=0))
+                beta = torch.stack(lane_betas, dim=0).reshape(
                     *self.numbers.shape[:-1], 3, 3, 3
                 )
             return beta.contiguous()
@@ -1130,6 +1207,8 @@ class AutogradCalculator(EnergyCalculator):
 
         if derived_quantity == "energy":
             beta = -beta
+        if not build_graph:
+            beta = beta.detach()
         return beta
 
     # SPECTRA

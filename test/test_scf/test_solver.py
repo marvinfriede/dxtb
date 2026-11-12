@@ -762,3 +762,107 @@ def test_solver_has_no_mutable_mixer_or_tensor_control_flow() -> (
         "torch.autograd.Function",
     ):
         assert forbidden not in text
+
+
+def test_solver_primal_certification_matches_fallback_status_and_derivatives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Primal SCF certification unwrapping preserves active-step masks, status, diagnostics, and 1st..3rd derivatives."""
+    from torch.func import jacrev
+
+    import dxtb._src.scf.solver as solver_mod
+
+    def return_false(tree: object) -> tuple[object, bool]:
+        return tree, False
+
+    for maxiter, x_atol in ((2, 1.0e-30), (4, 1.0e-2)):
+        options = {
+            "strategy": scf_strategy("linear", "charge"),
+            "maxiter": maxiter,
+            "mix_guess": True,
+            "x_atol": x_atol,
+            "x_atol_max": x_atol,
+        }
+        field0 = torch.tensor(
+            [0.002, -0.001, 0.0015], dtype=torch.float64
+        )
+        direction = torch.tensor(
+            [0.6, -0.3, 0.7], dtype=torch.float64
+        )
+
+        def eval_outcomes(alpha: torch.Tensor) -> torch.Tensor:
+            c = _prepare_case(
+                GFN1_XTB,
+                sample_name="H2",
+                field=field0 + alpha * direction,
+                scf_options=options,
+            )
+            s = setup_solver_settings(c.system.config.scf, torch.float64)
+            res = solve_scf_simple(c.x, c.inputs, s)
+            return torch.cat(
+                (
+                    (res.energy + res.fenergy).sum().unsqueeze(0),
+                    res.final_charges.mono.reshape(-1),
+                    res.residual.reshape(-1),
+                )
+            )
+
+        base_case = _prepare_case(
+            GFN1_XTB,
+            sample_name="H2",
+            field=field0,
+            scf_options=options,
+        )
+        base_settings = setup_solver_settings(
+            base_case.system.config.scf, torch.float64
+        )
+        opt_res = solve_scf_simple(
+            base_case.x, base_case.inputs, base_settings, record_trace=True
+        )
+        z0 = torch.zeros((), dtype=torch.float64)
+        opt_d1 = jacfwd(eval_outcomes)(z0)
+        opt_d2 = jacfwd(jacrev(eval_outcomes))(z0)
+        opt_d3 = jacfwd(jacfwd(jacrev(eval_outcomes)))(z0)
+
+        with monkeypatch.context() as m:
+            m.setattr(solver_mod, "_unwrap_gradtracking_tree", return_false)
+            ref_res = solve_scf_simple(
+                base_case.x, base_case.inputs, base_settings, record_trace=True
+            )
+            ref_d1 = jacfwd(eval_outcomes)(z0)
+            ref_d2 = jacfwd(jacrev(eval_outcomes))(z0)
+            ref_d3 = jacfwd(jacfwd(jacrev(eval_outcomes)))(z0)
+
+        assert opt_res.trace is not None and ref_res.trace is not None
+        assert torch.equal(
+            opt_res.trace.active_before, ref_res.trace.active_before
+        )
+        assert torch.equal(
+            opt_res.trace.active_after, ref_res.trace.active_after
+        )
+        assert torch.equal(opt_res.iterations, ref_res.iterations)
+        assert torch.equal(opt_res.converged, ref_res.converged)
+        torch.testing.assert_close(
+            opt_res.residual, ref_res.residual, atol=0.0, rtol=0.0
+        )
+        assert opt_res.diagnostics is not None and ref_res.diagnostics is not None
+        assert (
+            opt_res.diagnostics.certification is not None
+            and ref_res.diagnostics is not None
+            and ref_res.diagnostics.certification is not None
+        )
+        opt_cert = opt_res.diagnostics.certification.result
+        ref_cert = ref_res.diagnostics.certification.result
+        assert torch.equal(opt_cert.certified, ref_cert.certified)
+        assert torch.equal(opt_cert.terminal_failed, ref_cert.terminal_failed)
+        assert torch.equal(opt_cert.failure_code, ref_cert.failure_code)
+        torch.testing.assert_close(
+            opt_cert.metrics.stationarity_orthogonalized_l2,
+            ref_cert.metrics.stationarity_orthogonalized_l2,
+            atol=0.0,
+            rtol=0.0,
+        )
+        torch.testing.assert_close(opt_d1, ref_d1, atol=0.0, rtol=0.0)
+        torch.testing.assert_close(opt_d2, ref_d2, atol=0.0, rtol=0.0)
+        torch.testing.assert_close(opt_d3, ref_d3, atol=0.0, rtol=0.0)
+

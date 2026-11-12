@@ -29,6 +29,7 @@ from tad_mctc.storch.linsolve import dense_solve
 from tad_mctc.tools.compile import is_compiling
 
 from dxtb._src.typing import Tensor
+from dxtb._src.utils.tensors import disable_functorch, unwrap_functorch_tensor
 
 if TYPE_CHECKING:
     from dxtb._src.wavefunction.filling import _FermiCoreState
@@ -426,7 +427,12 @@ def _matrix_fermi_impl(
     if eager:
         doubling_steps = max(0, int(scale_power.max()) - 1)
     else:
-        doubling_steps = _FERMI_MAX_SCALE_POWER - 1
+        max_power = _max_scale_power_host(scale_power)
+        doubling_steps = (
+            _FERMI_MAX_SCALE_POWER - 1
+            if max_power is None
+            else max(0, min(_FERMI_MAX_SCALE_POWER, max_power) - 1)
+        )
 
     for index in range(doubling_steps):
         denominator = eye + tangent @ tangent
@@ -439,6 +445,25 @@ def _matrix_fermi_impl(
     density = torch.where(pair, density, torch.zeros_like(density))
     nan = torch.full_like(density, float("nan"))
     return torch.where(in_range[..., None, None], density, nan)
+
+
+def _max_scale_power_host(scale_power: Tensor) -> int | None:
+    """Return the maximum integer scaling power across all batch/vmap lanes.
+
+    ``scale_power`` is a non-differentiable ``torch.long`` tensor computed from
+    detached spectral bounds. Unwrapping ``torch.func`` wrappers on CPU bounds
+    the loop count to the active maximum across all lanes without executing
+    no-op iterations where ``index < scale_power`` is identically ``False``.
+    Returns ``None`` when compiling, tracing, or on non-CPU devices so those
+    paths keep their static loop bounds.
+    """
+    if scale_power.device.type != "cpu":
+        return None
+    raw = unwrap_functorch_tensor(scale_power, allow_vmap=True)
+    if raw is None or raw.numel() == 0:
+        return None
+    with disable_functorch():
+        return int(raw.amax().item())
 
 
 def _matrix_expm1(matrix: Tensor) -> Tensor:
@@ -502,7 +527,9 @@ def _matrix_expm1(matrix: Tensor) -> Tensor:
     result = scaled @ result
     result = 0.5 * (result + result.transpose(-2, -1))
 
-    for index in range(8):
+    max_power = _max_scale_power_host(scale_power)
+    steps = 8 if max_power is None else min(8, max(0, max_power))
+    for index in range(steps):
         doubled = result @ (result + 2.0 * identity)
         doubled = 0.5 * (doubled + doubled.transpose(-2, -1))
         update = index < scale_power

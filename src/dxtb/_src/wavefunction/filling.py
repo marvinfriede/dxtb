@@ -50,6 +50,7 @@ from torch.utils._python_dispatch import _get_current_dispatch_mode
 
 from dxtb._src.constants import defaults
 from dxtb._src.typing import Tensor
+from dxtb._src.utils.tensors import disable_functorch, unwrap_functorch_tensor
 
 __all__ = [
     "FermiOccupationResult",
@@ -922,36 +923,80 @@ def _get_fermi_occupation_core_state(
     full = occupied & ((target - norb).abs() <= tol)
     active = occupied & kt_pos & ~full & ~too_many
 
-    emo_d, kt_d, target_d = emo.detach(), safe_kt.detach(), target.detach()
-    n0, below, above = _partition(target_d, emo_d, valid)
-    e_fermi = _initial_fermi_energy(target_d, emo_d, mask)
     search = (
         _fermi_energy_search_until_done
         if _fermi_search_stops_early(emo)
         else _fermi_energy_search_fixed
     )
-    (ref, offset), resid, done, lo, hi = search(
-        target_d - n0,
-        below,
-        above,
-        emo_d,
-        kt_d,
-        e_fermi,
-        active,
-        valid,
-        thresh,
-        maxiter,
-    )
-    polish_mask = active & done & ~too_many
-    offset = _polish(
-        emo_d - ref,
-        offset,
-        kt_d,
-        target_d - n0,
-        below,
-        above,
-        polish_mask,
-    )
+    emo_raw = _unwrap_gradtracking_tensor(emo)
+    kt_raw = _unwrap_gradtracking_tensor(safe_kt)
+    target_raw = _unwrap_gradtracking_tensor(target)
+    active_raw = _unwrap_gradtracking_tensor(active)
+    thresh_raw = _unwrap_gradtracking_tensor(thresh)
+    too_many_raw = _unwrap_gradtracking_tensor(too_many)
+    valid_raw = None if valid is None else _unwrap_gradtracking_tensor(valid)
+    mask_raw = None if mask is None else _unwrap_gradtracking_tensor(mask)
+    if (
+        emo_raw is not None
+        and kt_raw is not None
+        and target_raw is not None
+        and active_raw is not None
+        and thresh_raw is not None
+        and too_many_raw is not None
+        and (valid is None or valid_raw is not None)
+        and (mask is None or mask_raw is not None)
+    ):
+        with disable_functorch(), torch.no_grad():
+            n0, below, above = _partition(target_raw, emo_raw, valid_raw)
+            e_fermi = _initial_fermi_energy(target_raw, emo_raw, mask_raw)
+            (ref, offset), resid, done, lo, hi = search(
+                target_raw - n0,
+                below,
+                above,
+                emo_raw,
+                kt_raw,
+                e_fermi,
+                active_raw,
+                valid_raw,
+                thresh_raw,
+                maxiter,
+            )
+            polish_mask = active_raw & done & ~too_many_raw
+            offset = _polish(
+                emo_raw - ref,
+                offset,
+                kt_raw,
+                target_raw - n0,
+                below,
+                above,
+                polish_mask,
+            )
+    else:
+        emo_d, kt_d, target_d = emo.detach(), safe_kt.detach(), target.detach()
+        n0, below, above = _partition(target_d, emo_d, valid)
+        e_fermi = _initial_fermi_energy(target_d, emo_d, mask)
+        (ref, offset), resid, done, lo, hi = search(
+            target_d - n0,
+            below,
+            above,
+            emo_d,
+            kt_d,
+            e_fermi,
+            active,
+            valid,
+            thresh,
+            maxiter,
+        )
+        polish_mask = active & done & ~too_many
+        offset = _polish(
+            emo_d - ref,
+            offset,
+            kt_d,
+            target_d - n0,
+            below,
+            above,
+            polish_mask,
+        )
 
     delta = target - n0
     diff_kt = torch.where(kt_pos, kt, kt.new_tensor(1.0))
@@ -1060,6 +1105,16 @@ def _fermi_energy_search_fixed(
         if step < maxiter:
             e_fermi, lo, hi = next_e, next_lo, next_hi
     return (ref, e_fermi), resid, done, lo, hi
+
+
+def _unwrap_gradtracking_tensor(tensor: Tensor) -> Tensor | None:
+    """Unwrap nested ``GradTrackingTensor`` layers when no ``vmap`` is active.
+
+    Returns ``None`` if ``tensor`` carries a ``BatchedTensor`` or
+    ``FunctionalTensor`` layer, or when compiling/tracing/in a dispatch mode,
+    so ``vmap`` and compiler transforms remain on the wrapped tensor path.
+    """
+    return unwrap_functorch_tensor(tensor, allow_vmap=False)
 
 
 def _fermi_search_stops_early(emo: Tensor) -> bool:

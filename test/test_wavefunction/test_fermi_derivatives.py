@@ -949,3 +949,168 @@ def test_electron_number_zero_temperature(padding: bool):
     ref[0, alpha, 0] = 1.0
     ref[1, beta, 1] = 1.0
     assert torch.equal(jac, ref)
+
+
+def test_fermi_primal_search_shortcut_matches_fallback_across_regimes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Primal Fermi root-search unwrapping preserves occupation, chemical potential, status, and 1st..3rd derivatives."""
+    from torch.func import jacfwd
+
+    dtype = torch.float64
+    w_occ = torch.tensor(
+        [
+            [[0.3, -0.5, 0.7, -0.2, 0.4], [-0.4, 0.6, -0.3, 0.5, -0.1]],
+            [[0.2, 0.4, -0.6, 0.3, -0.5], [0.5, -0.2, 0.1, -0.4, 0.3]],
+        ],
+        dtype=dtype,
+        device=DEVICE,
+    )
+    dir_emo = torch.tensor(
+        [
+            [[0.15, -0.25, 0.35, -0.1, 0.2], [-0.2, 0.3, -0.15, 0.25, -0.05]],
+            [[0.1, 0.2, -0.3, 0.15, -0.25], [0.25, -0.1, 0.05, -0.2, 0.15]],
+        ],
+        dtype=dtype,
+        device=DEVICE,
+    )
+    dir_nel = torch.tensor(
+        [[0.4, -0.2], [-0.3, 0.5]], dtype=dtype, device=DEVICE
+    )
+
+    # Batch of 2 systems x 2 spin channels x 5 orbitals:
+    # Lane 0: open-shell partial / near-degenerate spectrum
+    # Lane 1: wide-gap charged / padded spectrum
+    emo0 = torch.tensor(
+        [
+            [
+                [-0.40, -0.10, -0.0999, 0.05, 0.30],
+                [-0.35, -0.05, 0.10, 0.25, 0.50],
+            ],
+            [
+                [-2.50, -1.20, 0.80, 1.90, 0.00],
+                [-2.40, -1.10, 0.90, 2.00, 0.00],
+            ],
+        ],
+        dtype=dtype,
+        device=DEVICE,
+    )
+    nel0 = torch.tensor(
+        [[2.3, 1.0], [2.0, 1.5]], dtype=dtype, device=DEVICE
+    )
+    mask = torch.tensor(
+        [
+            [[1, 1, 1, 1, 1], [1, 1, 1, 1, 1]],
+            [[1, 1, 1, 1, 0], [1, 1, 1, 1, 0]],
+        ],
+        dtype=torch.int64,
+        device=DEVICE,
+    )
+
+    def return_none(_: torch.Tensor) -> None:
+        return None
+
+    for kt_val in (0.0, 1.0e-4, 9.5e-4):
+        kt = torch.tensor(kt_val, dtype=dtype, device=DEVICE)
+
+        def eval_mixed(pair: torch.Tensor) -> torch.Tensor:
+            alpha = pair[0]
+            beta = pair[1]
+            res = filling.get_fermi_occupation_core(
+                nel0 + beta * dir_nel,
+                emo0 + alpha * dir_emo,
+                kt,
+                mask=mask,
+                diff_order=3,
+            )
+            return (res.occupation * w_occ).sum()
+
+        z_pair = torch.zeros((2,), dtype=dtype, device=DEVICE)
+        opt_state = filling._get_fermi_occupation_core_state(
+            nel0, emo0, kt, mask=mask, diff_order=3
+        )
+        opt_d1 = jacfwd(eval_mixed)(z_pair)
+        opt_d2 = jacfwd(jacrev(eval_mixed))(z_pair)
+        opt_d3 = jacfwd(jacfwd(torch.func.grad(eval_mixed)))(z_pair)
+
+        with monkeypatch.context() as m:
+            m.setattr(filling, "_unwrap_gradtracking_tensor", return_none)
+            ref_state = filling._get_fermi_occupation_core_state(
+                nel0, emo0, kt, mask=mask, diff_order=3
+            )
+            ref_d1 = jacfwd(eval_mixed)(z_pair)
+            ref_d2 = jacfwd(jacrev(eval_mixed))(z_pair)
+            ref_d3 = jacfwd(jacfwd(torch.func.grad(eval_mixed)))(z_pair)
+
+        torch.testing.assert_close(
+            opt_state.result.occupation,
+            ref_state.result.occupation,
+            atol=0.0,
+            rtol=0.0,
+        )
+        torch.testing.assert_close(
+            opt_state.chemical_potential_ref,
+            ref_state.chemical_potential_ref,
+            atol=0.0,
+            rtol=0.0,
+        )
+        torch.testing.assert_close(
+            opt_state.chemical_potential_offset,
+            ref_state.chemical_potential_offset,
+            atol=0.0,
+            rtol=0.0,
+        )
+        assert torch.equal(
+            opt_state.result.status.converged,
+            ref_state.result.status.converged,
+        )
+        torch.testing.assert_close(opt_d1, ref_d1, atol=0.0, rtol=0.0)
+        torch.testing.assert_close(opt_d2, ref_d2, atol=0.0, rtol=0.0)
+        torch.testing.assert_close(opt_d3, ref_d3, atol=0.0, rtol=0.0)
+
+    # Boundary and failed search cases: full channel, empty channel, too_many_electrons, maxiter=0, negative kt
+    nel_boundary = torch.tensor(
+        [[5.0, 0.0], [6.0, 2.0]], dtype=dtype, device=DEVICE
+    )
+    for kt_b, maxit_b in ((9.5e-4, 0), (9.5e-4, 200), (-1.0e-3, 200)):
+        kt_t = torch.tensor(kt_b, dtype=dtype, device=DEVICE)
+
+        def eval_boundary(alpha: torch.Tensor) -> torch.Tensor:
+            res = filling.get_fermi_occupation_core(
+                nel_boundary,
+                emo0 + alpha * dir_emo,
+                kt_t,
+                mask=mask,
+                maxiter=maxit_b,
+                diff_order=3,
+            )
+            return (res.occupation * w_occ).sum()
+
+        z0 = torch.zeros((), dtype=dtype, device=DEVICE)
+        opt_b = filling.get_fermi_occupation_core(
+            nel_boundary, emo0, kt_t, mask=mask, maxiter=maxit_b, diff_order=3
+        )
+        opt_g = jacfwd(eval_boundary)(z0)
+        with monkeypatch.context() as m:
+            m.setattr(filling, "_unwrap_gradtracking_tensor", return_none)
+            ref_b = filling.get_fermi_occupation_core(
+                nel_boundary,
+                emo0,
+                kt_t,
+                mask=mask,
+                maxiter=maxit_b,
+                diff_order=3,
+            )
+            ref_g = jacfwd(eval_boundary)(z0)
+        torch.testing.assert_close(
+            opt_b.occupation, ref_b.occupation, atol=0.0, rtol=0.0
+        )
+        assert torch.equal(opt_b.status.converged, ref_b.status.converged)
+        assert torch.equal(
+            opt_b.status.too_many_electrons, ref_b.status.too_many_electrons
+        )
+        assert torch.equal(
+            opt_b.status.invalid_temperature, ref_b.status.invalid_temperature
+        )
+        torch.testing.assert_close(opt_g, ref_g, atol=0.0, rtol=0.0)
+
