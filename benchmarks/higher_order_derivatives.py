@@ -121,7 +121,9 @@ def _get_git_sha() -> str:
         return "unknown"
 
 
-def _get_molecule_geometry(name: str, torch_mod: Any) -> tuple[Any, Any, float, int]:
+def _get_molecule_geometry(
+    name: str, torch_mod: Any
+) -> tuple[Any, Any, float, int]:
     """Return (numbers, positions, charge, uhf) in float64 for standard fixtures."""
     dtype = torch_mod.float64
     key = name.upper()
@@ -176,7 +178,11 @@ def _run_worker(args: argparse.Namespace) -> int:
         limit_bytes = int(args.mem_limit_gb * (1024**3))
         try:
             _, hard = resource.getrlimit(resource.RLIMIT_AS)
-            new_soft = limit_bytes if hard == resource.RLIM_INFINITY else min(limit_bytes, hard)
+            new_soft = (
+                limit_bytes
+                if hard == resource.RLIM_INFINITY
+                else min(limit_bytes, hard)
+            )
             resource.setrlimit(resource.RLIMIT_AS, (new_soft, hard))
         except (ValueError, OSError):
             pass
@@ -193,8 +199,9 @@ def _run_worker(args: argparse.Namespace) -> int:
     import dxtb._src.scf.energy as scf_energy_mod
     import dxtb._src.scf.iterator as scf_iterator_mod
     import dxtb._src.scf.map as scf_map_mod
+    import dxtb._src.scf.solver as scf_solver_mod
     import dxtb._src.scf.spectral as scf_spectral_mod
-    from dxtb import Calculator, GFN1_XTB, GFN2_XTB
+    from dxtb import GFN1_XTB, GFN2_XTB, Calculator
     from dxtb._src.calculators.model import System
 
     # Lightweight call counters for SCF / spectral internals
@@ -203,11 +210,13 @@ def _run_worker(args: argparse.Namespace) -> int:
         "diagonalize": 0,
         "matrix_fermi": 0,
         "dense_solve": 0,
+        "executed_trips": 0,
     }
     orig_eval_h = scf_map_mod.evaluate_hamiltonian
     orig_diag = scf_map_mod._transitional_diagonalize
     orig_fermi = scf_spectral_mod._matrix_fermi_impl
     orig_solve = scf_spectral_mod.dense_solve
+    orig_solver_outcome = scf_solver_mod._solver_outcome
 
     def counted_eval_h(*a: Any, **kw: Any) -> Any:
         counters["evaluate_hamiltonian"] += 1
@@ -225,16 +234,23 @@ def _run_worker(args: argparse.Namespace) -> int:
         counters["dense_solve"] += 1
         return orig_solve(*a, **kw)
 
+    def counted_solver_outcome(state: Any, *a: Any, **kw: Any) -> Any:
+        counters["executed_trips"] += int(state.executed_trips)
+        return orig_solver_outcome(state, *a, **kw)
+
     scf_map_mod.evaluate_hamiltonian = counted_eval_h
     scf_iterator_mod.evaluate_hamiltonian = counted_eval_h
     scf_energy_mod.evaluate_hamiltonian = counted_eval_h
     scf_map_mod._transitional_diagonalize = counted_diag
     scf_spectral_mod._matrix_fermi_impl = counted_fermi
     scf_spectral_mod.dense_solve = counted_solve
+    scf_solver_mod._solver_outcome = counted_solver_outcome
 
     dtype = torch.float64
     param = GFN1_XTB if args.method.upper() == "GFN1" else GFN2_XTB
-    numbers, positions, charge_val, uhf_val = _get_molecule_geometry(args.molecule, torch)
+    numbers, positions, charge_val, uhf_val = _get_molecule_geometry(
+        args.molecule, torch
+    )
     charge = torch.tensor(charge_val, dtype=dtype)
     uhf = torch.tensor(uhf_val, dtype=dtype) if uhf_val != 0 else None
     field = torch.zeros((3,), dtype=dtype)
@@ -570,14 +586,22 @@ def _run_worker(args: argparse.Namespace) -> int:
     primal_res_norm = float(torch.linalg.norm(sp_res.residual).item())
     is_eager_schedule = case.startswith("calculator_")
     scf_schedule = "eager" if is_eager_schedule else "fixed_trip"
-    executed_scf_iters = primal_scf_iters if is_eager_schedule else int(args.maxiter)
+    executed_scf_iters = (
+        primal_scf_iters
+        if is_eager_schedule
+        else first_counters["executed_trips"]
+    )
 
     cuda_avail = bool(torch.cuda.is_available())
     cuda_alloc_mb = (
-        float(torch.cuda.max_memory_allocated()) / (1024.0**2) if cuda_avail else 0.0
+        float(torch.cuda.max_memory_allocated()) / (1024.0**2)
+        if cuda_avail
+        else 0.0
     )
     cuda_res_mb = (
-        float(torch.cuda.max_memory_reserved()) / (1024.0**2) if cuda_avail else 0.0
+        float(torch.cuda.max_memory_reserved()) / (1024.0**2)
+        if cuda_avail
+        else 0.0
     )
     gpu_model = torch.cuda.get_device_name(0) if cuda_avail else "CPU-only"
 
@@ -592,11 +616,14 @@ def _run_worker(args: argparse.Namespace) -> int:
         "maxiter": args.maxiter,
         "scf_schedule": scf_schedule,
         "executed_scf_iterations": executed_scf_iters,
+        "executed_trips": first_counters["executed_trips"],
         "graph_retained": graph_retained,
         "setup_time_s": round(setup_time_s, 6),
         "first_call_time_s": round(first_call_time_s, 6),
         "repeat_call_time_s": (
-            round(repeat_call_time_s, 6) if repeat_call_time_s is not None else None
+            round(repeat_call_time_s, 6)
+            if repeat_call_time_s is not None
+            else None
         ),
         "baseline_rss_mb": round(baseline_rss_mb, 3),
         "post_rss_mb": round(post_rss_mb, 3),
@@ -605,7 +632,9 @@ def _run_worker(args: argparse.Namespace) -> int:
         "peak_rss_mb": round(peak_rss_mb, 3),
         "peak_additional_rss_mb": round(peak_additional_rss_mb, 3),
         "repeat_peak_rss_mb": (
-            round(repeat_peak_rss_mb, 3) if repeat_peak_rss_mb is not None else None
+            round(repeat_peak_rss_mb, 3)
+            if repeat_peak_rss_mb is not None
+            else None
         ),
         "hwm_reset_supported": hwm_reset_ok,
         "cpu_user_s": round(cpu_user_s, 6),
@@ -753,6 +782,8 @@ def _run_subprocess_case(
         "differentiation": differentiation,
         "fermi_diff_order": fermi_diff_order,
         "maxiter": maxiter,
+        "executed_scf_iterations": None,
+        "executed_trips": None,
         "setup_time_s": None,
         "first_call_time_s": round(wall_s, 6),
         "repeat_call_time_s": None,
@@ -760,7 +791,9 @@ def _run_subprocess_case(
         "post_rss_mb": None,
         "peak_rss_mb": round(max(sampled_max_rss_mb, sampled_max_hwm_mb), 3),
         "peak_additional_rss_mb": None,
-        "sampled_peak_rss_mb": round(max(sampled_max_rss_mb, sampled_max_hwm_mb), 3),
+        "sampled_peak_rss_mb": round(
+            max(sampled_max_rss_mb, sampled_max_hwm_mb), 3
+        ),
         "primal_scf_iterations": None,
         "primal_converged": None,
         "primal_residual_norm": None,
@@ -833,15 +866,19 @@ def main() -> int:
     else:
         case_list = [c.strip() for c in args.cases.split(",") if c.strip()]
 
-    maxiter_list = [int(x.strip()) for x in args.maxiters.split(",") if x.strip()]
+    maxiter_list = [
+        int(x.strip()) for x in args.maxiters.split(",") if x.strip()
+    ]
     driver_list = [d.strip() for d in args.drivers.split(",") if d.strip()]
-    diff_list = [d.strip() for d in args.differentiations.split(",") if d.strip()]
+    diff_list = [
+        d.strip() for d in args.differentiations.split(",") if d.strip()
+    ]
 
     results: list[dict[str, Any]] = []
     header = (
         f"{'Driver':<8} {'Diff':<9} {'MaxIt':>5} {'Case':<36} "
         f"{'Status':<8} {'Time(s)':>9} {'PeakRSS(MB)':>11} {'AddRSS(MB)':>10} "
-        f"{'SCFIt':>5} {'HamEval':>7} {'xxz':>12}"
+        f"{'SCFIt':>5} {'Trips':>5} {'HamEval':>7} {'xxz':>12}"
     )
     print(header)
     print("-" * len(header))
@@ -883,18 +920,25 @@ def main() -> int:
                         if rec.get("primal_scf_iterations") is not None
                         else "N/A"
                     )
+                    tr_str = (
+                        str(rec["executed_trips"])
+                        if rec.get("executed_trips") is not None
+                        else "N/A"
+                    )
                     he_str = (
                         str(rec["ad_hamiltonian_evals"])
                         if rec.get("ad_hamiltonian_evals") is not None
                         else "N/A"
                     )
                     xxz_str = (
-                        f"{rec['xxz']:.4f}" if rec.get("xxz") is not None else "N/A"
+                        f"{rec['xxz']:.4f}"
+                        if rec.get("xxz") is not None
+                        else "N/A"
                     )
                     print(
                         f"{driver:<8} {diff_mode:<9} {maxiter:>5d} {case:<36} "
                         f"{rec['status']:<8} {t_str:>9} {p_str:>11} {a_str:>10} "
-                        f"{it_str:>5} {he_str:>7} {xxz_str:>12}",
+                        f"{it_str:>5} {tr_str:>5} {he_str:>7} {xxz_str:>12}",
                         flush=True,
                     )
 
@@ -913,6 +957,8 @@ def main() -> int:
             "differentiation",
             "fermi_diff_order",
             "maxiter",
+            "executed_scf_iterations",
+            "executed_trips",
             "case",
             "molecule",
             "method",
@@ -946,7 +992,9 @@ def main() -> int:
             "commit_sha",
         ]
         with open(out_csv, "w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=csv_fields, extrasaction="ignore")
+            writer = csv.DictWriter(
+                handle, fieldnames=csv_fields, extrasaction="ignore"
+            )
             writer.writeheader()
             for row in results:
                 writer.writerow(row)

@@ -51,6 +51,14 @@ from .certification import (
     terminal_failure_code,
 )
 from .convergence import SCFConvergence, SCFResidual
+from .converger import (
+    LinearConverger,
+    SCFConverger,
+    SCFConvergerContext,
+    SCFConvergerProposal,
+    SCFConvergerState,
+    simple_mix,
+)
 from .data import (
     ChargeLayout,
     PotentialLayout,
@@ -66,14 +74,6 @@ from .map import (
     evaluate_hamiltonian,
     evaluate_potential,
     potential_from_charges,
-)
-from .converger import (
-    LinearConverger,
-    SCFConverger,
-    SCFConvergerContext,
-    SCFConvergerProposal,
-    SCFConvergerState,
-    simple_mix,
 )
 from .problem import (
     SCFPhysicalState,
@@ -163,13 +163,14 @@ class SCFStrategyDiagnostics:
 
 @dataclass(frozen=True, eq=False)
 class SCFSolverDiagnostics:
-    """Tensor-valued numerical diagnostics for the Eager controller."""
+    """Numerical and host-control diagnostics for an SCF solve."""
 
     final_damp: Tensor
     dynamic_damping_switched: Tensor
     terminal_failed: Tensor
     certification: SCFPhysicalCertificationDiagnostics | None = None
     strategy: SCFStrategyDiagnostics | None = None
+    executed_trips: int | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -464,11 +465,7 @@ def scf_finalization_ok(result: SCFSolveResult) -> Tensor:
 
 def scf_return_valid(result: SCFSolveResult) -> Tensor:
     """Return physical convergence and subsolve validity for output."""
-    return scf_physical_converged(result) & scf_subsolves_ok(
-        result
-    )
-
-
+    return scf_physical_converged(result) & scf_subsolves_ok(result)
 
 
 @dataclass(frozen=True, eq=False)
@@ -491,6 +488,7 @@ class _SolverOutcome:
     trace: SCFSolverTrace | None = None
     final_problem: SCFProblem | None = None
     strategy_diagnostics: SCFStrategyDiagnostics | None = None
+    executed_trips: int | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -515,6 +513,7 @@ class _SolverControlState:
     certified: Tensor
     terminal_failed: Tensor
     certification: SCFCertificationCoreResult | None
+    executed_trips: int = 0
 
 
 def _resolve_tolerance(value: float, dtype: torch.dtype) -> float:
@@ -542,8 +541,6 @@ def setup_solver_settings(
         requested_x_atol=config.x_atol,
         requested_x_atol_max=config.x_atol_max,
     )
-
-
 
 
 def _update_damping(
@@ -1023,9 +1020,7 @@ def _select_first_stage(
         if len(selected_strategy.stages) != 1:
             raise ValueError("Multi-stage execution requires an SCFProblem.")
     else:
-        variables = selected_strategy.resolve_variables(
-            problem.variable
-        )
+        variables = selected_strategy.resolve_variables(problem.variable)
         if not eager and len(selected_strategy.stages) != 1:
             raise NotImplementedError(
                 "Dynamic multi-stage SCF is currently eager-only."
@@ -1154,14 +1149,15 @@ def _finalize_problem_outcome(
         outcome.damping_state,
         outcome.trace,
     )
-    diagnostics = dict(
-        certification=outcome.certification,
-        terminal_failed=outcome.terminal_failed,
-        strategy_diagnostics=outcome.strategy_diagnostics,
-        root_x=outcome.root_x,
-    )
     if final_problem.variable is SCFVariable.CHARGE:
-        return finalize_scf(*common, **diagnostics)
+        return finalize_scf(
+            *common,
+            root_x=outcome.root_x,
+            certification=outcome.certification,
+            terminal_failed=outcome.terminal_failed,
+            strategy_diagnostics=outcome.strategy_diagnostics,
+            executed_trips=outcome.executed_trips,
+        )
     if final_problem.variable is SCFVariable.POTENTIAL:
         assert final_problem.potential_layout is not None
         return finalize_scf_potential(
@@ -1174,9 +1170,20 @@ def _finalize_problem_outcome(
             outcome.trajectory_status,
             outcome.damping_state,
             outcome.trace,
-            **diagnostics,
+            root_x=outcome.root_x,
+            certification=outcome.certification,
+            terminal_failed=outcome.terminal_failed,
+            strategy_diagnostics=outcome.strategy_diagnostics,
+            executed_trips=outcome.executed_trips,
         )
-    return finalize_scf_fock(*common, **diagnostics)
+    return finalize_scf_fock(
+        *common,
+        root_x=outcome.root_x,
+        certification=outcome.certification,
+        terminal_failed=outcome.terminal_failed,
+        strategy_diagnostics=outcome.strategy_diagnostics,
+        executed_trips=outcome.executed_trips,
+    )
 
 
 def solve_scf_problem(
@@ -1213,6 +1220,15 @@ def solve_scf_problem(
     return _finalize_problem_outcome(outcome, problem)
 
 
+def _can_stop_fixed_trip_early(active: Tensor) -> bool:
+    """Return whether CPU fixed-trip execution can stop before the next trip."""
+    raw_active = unwrap_functorch_tensor(active, allow_vmap=True)
+    if raw_active is None:
+        return False
+    with disable_functorch():
+        return raw_active.device.type == "cpu" and not bool(raw_active.any())
+
+
 @dataclass(frozen=True, eq=False)
 class FixedTripControl:
     """Resumable form of the transform-compatible fixed-trip controller.
@@ -1225,10 +1241,13 @@ class FixedTripControl:
     :class:`_SolverControlState`, and the method step is derived from the
     global trip index. Lanes whose ``active`` flag is cleared are frozen by
     the shared transition, so trips after the last active lane change no
-    selected value.
+    selected value or finite-trajectory derivative.
 
-    Only the configured ``maxiter`` determines the physical schedule; the
-    trip ranges passed to :meth:`advance` are an execution detail.
+    On CPU when ``observations is None`` and functorch wrappers unwrap to a
+    plain tensor, :meth:`advance` stops as soon as no lane remains active.
+    Under symbolic tracing, compilation, ``FunctionalTensor``, Python dispatch
+    modes, trace recording, or non-CPU devices, :meth:`advance` executes the
+    full requested range up to ``maxiter``.
     """
 
     maxiter: int
@@ -1275,6 +1294,12 @@ class FixedTripControl:
                 f"Invalid fixed-trip range [{start}, {stop}) for "
                 f"maxiter={self.maxiter}."
             )
+        if (
+            observations is None
+            and start < stop
+            and _can_stop_fixed_trip_early(state.active)
+        ):
+            return state, observations
         problem = self.problem
         thresholds = self.thresholds
         unwrapped_problem = (
@@ -1285,6 +1310,12 @@ class FixedTripControl:
             )
         )
         for index in range(start, stop):
+            if (
+                index > start
+                and observations is None
+                and _can_stop_fixed_trip_early(state.active)
+            ):
+                break
             map_input = state.current_x
             active_before = state.active
             candidate = self.map_fn(state.current_x)
@@ -1529,7 +1560,8 @@ def _solve_map_control(
     """Run transform-compatible fixed-trip control around a raw map.
 
     Equivalent to ``start``, ``advance(0, maxiter)`` and ``finish`` of
-    :class:`FixedTripControl`.
+    :class:`FixedTripControl` (stopping early on CPU when all lanes are
+    inactive and ``record_trace`` is ``False``).
     """
     control = _fixed_trip_control(
         guess,
@@ -1596,9 +1628,8 @@ def _solve_map_control_eager(
 ) -> _SolverOutcome:
     """Run the shared eager lifecycle for one or more strategy stages.
 
-    This host-controlled controller is for production eager execution only.
-    Transform and vmap users must use :func:`_solve_map_control`, whose trip
-    count is static and which contains no tensor-dependent Python control.
+    This host-controlled controller is for independent single-System eager
+    execution. Transform and vmap users must use :func:`_solve_map_control`.
     Both controllers call the same physical initialization and transition
     helpers. Dynamic stage selection is restricted to this eager boundary.
     """
@@ -1609,10 +1640,7 @@ def _solve_map_control_eager(
         if problem is None
         else strategy.resolve_variables(problem.variable)
     )
-    if (
-        problem is not None
-        and stage_variables[0] is not problem.variable
-    ):
+    if problem is not None and stage_variables[0] is not problem.variable:
         raise NotImplementedError(
             "The initial strategy stage must match the supplied problem."
         )
@@ -1699,8 +1727,7 @@ def _solve_map_control_eager(
         )
 
     for _ in range(maxiter):
-        # The tensor-to-bool read is deliberately isolated to this eager,
-        # single-System controller. The fixed-trip controller never reads it.
+        # Single-System eager execution reads the scalar activity flag directly.
         if not bool(state.active):
             break
         candidate = current_map_fn(state.current_x)
@@ -2003,11 +2030,6 @@ def _initialize_solver_control(
     initial = (
         map_fn(initial_guess) if initial_result is None else initial_result
     )
-    trajectory_status = (
-        trajectory_status_from_map(initial.fermi_status)
-        if record_initial_status
-        else None
-    )
     initial_terminal = terminal_failure_code(
         SCFPhysicalState(initial_guess, initial)
     ) != int(SCFCoreFailure.NONE)
@@ -2020,6 +2042,14 @@ def _initialize_solver_control(
         initial_x - initial_guess, residual_projection
     ).as_tensor()
     active = ~initial_terminal
+    if record_initial_status:
+        trajectory_status = trajectory_status_from_map(initial.fermi_status)
+    elif maxiter > 0 and initial.fermi_status is not None:
+        trajectory_status = accumulate_trajectory_status(
+            None, initial.fermi_status, torch.zeros_like(active)
+        )
+    else:
+        trajectory_status = None
     damping = DampingState(
         guess.new_tensor(initial_damp),
         torch.zeros((), dtype=torch.bool, device=guess.device),
@@ -2055,6 +2085,7 @@ def _initialize_solver_control(
         certified=torch.zeros_like(active),
         terminal_failed=initial_terminal,
         certification=None,
+        executed_trips=0,
     )
 
 
@@ -2226,6 +2257,7 @@ def _solver_control_step(
                 )
             )
         ),
+        executed_trips=state.executed_trips + 1,
     )
 
 
@@ -2251,6 +2283,7 @@ def _solver_outcome(
         trace=trace,
         final_problem=final_problem,
         strategy_diagnostics=strategy_diagnostics,
+        executed_trips=state.executed_trips,
     )
 
 
@@ -2360,6 +2393,42 @@ def _materialize_solver_trace(
     )
 
 
+def _build_solver_diagnostics(
+    map_result: SCFMapResult,
+    damping_state: DampingState | None,
+    certification: SCFCertificationCoreResult | None,
+    terminal_failed: Tensor | None,
+    strategy_diagnostics: SCFStrategyDiagnostics | None,
+    executed_trips: int | None,
+) -> SCFSolverDiagnostics:
+    """Construct solver diagnostics for variable finalizers."""
+    device = map_result.mapped_x.device
+    return SCFSolverDiagnostics(
+        final_damp=(
+            map_result.mapped_x.new_tensor(0.0)
+            if damping_state is None
+            else damping_state.value
+        ),
+        dynamic_damping_switched=(
+            torch.zeros((), dtype=torch.bool, device=device)
+            if damping_state is None
+            else damping_state.switched
+        ),
+        terminal_failed=(
+            torch.zeros((), dtype=torch.bool, device=device)
+            if terminal_failed is None
+            else terminal_failed
+        ),
+        certification=(
+            None
+            if certification is None
+            else SCFPhysicalCertificationDiagnostics(certification)
+        ),
+        strategy=strategy_diagnostics,
+        executed_trips=executed_trips,
+    )
+
+
 def finalize_scf(
     map_result: SCFMapResult,
     inputs: SCFInputs,
@@ -2374,6 +2443,7 @@ def finalize_scf(
     certification: SCFCertificationCoreResult | None = None,
     terminal_failed: Tensor | None = None,
     strategy_diagnostics: SCFStrategyDiagnostics | None = None,
+    executed_trips: int | None = None,
 ) -> SCFSolveResult:
     """Finalize energy/potential from the selected raw map output charges."""
     final_charges = SCFCharges(
@@ -2397,32 +2467,13 @@ def finalize_scf(
         converged=converged,
         residual=residual,
         trajectory_status=trajectory_status,
-        diagnostics=SCFSolverDiagnostics(
-            final_damp=(
-                map_result.mapped_x.new_tensor(0.0)
-                if damping_state is None
-                else damping_state.value
-            ),
-            dynamic_damping_switched=(
-                torch.zeros(
-                    (), dtype=torch.bool, device=map_result.mapped_x.device
-                )
-                if damping_state is None
-                else damping_state.switched
-            ),
-            terminal_failed=(
-                torch.zeros(
-                    (), dtype=torch.bool, device=map_result.mapped_x.device
-                )
-                if terminal_failed is None
-                else terminal_failed
-            ),
-            certification=(
-                None
-                if certification is None
-                else SCFPhysicalCertificationDiagnostics(certification)
-            ),
-            strategy=strategy_diagnostics,
+        diagnostics=_build_solver_diagnostics(
+            map_result,
+            damping_state,
+            certification,
+            terminal_failed,
+            strategy_diagnostics,
+            executed_trips,
         ),
         trace=trace,
     )
@@ -2443,6 +2494,7 @@ def finalize_scf_potential(
     certification: SCFCertificationCoreResult | None = None,
     terminal_failed: Tensor | None = None,
     strategy_diagnostics: SCFStrategyDiagnostics | None = None,
+    executed_trips: int | None = None,
 ) -> SCFSolveResult:
     """Finalize potential mode from one extra variable conversion."""
     final_potential_state = unpack_potential(map_result.mapped_x, layout)
@@ -2466,32 +2518,13 @@ def finalize_scf_potential(
         converged=converged,
         residual=residual,
         trajectory_status=trajectory_status,
-        diagnostics=SCFSolverDiagnostics(
-            final_damp=(
-                map_result.mapped_x.new_tensor(0.0)
-                if damping_state is None
-                else damping_state.value
-            ),
-            dynamic_damping_switched=(
-                torch.zeros(
-                    (), dtype=torch.bool, device=map_result.mapped_x.device
-                )
-                if damping_state is None
-                else damping_state.switched
-            ),
-            terminal_failed=(
-                torch.zeros(
-                    (), dtype=torch.bool, device=map_result.mapped_x.device
-                )
-                if terminal_failed is None
-                else terminal_failed
-            ),
-            certification=(
-                None
-                if certification is None
-                else SCFPhysicalCertificationDiagnostics(certification)
-            ),
-            strategy=strategy_diagnostics,
+        diagnostics=_build_solver_diagnostics(
+            map_result,
+            damping_state,
+            certification,
+            terminal_failed,
+            strategy_diagnostics,
+            executed_trips,
         ),
         trace=trace,
     )
@@ -2511,6 +2544,7 @@ def finalize_scf_fock(
     certification: SCFCertificationCoreResult | None = None,
     terminal_failed: Tensor | None = None,
     strategy_diagnostics: SCFStrategyDiagnostics | None = None,
+    executed_trips: int | None = None,
 ) -> SCFSolveResult:
     """Finalize Fock mode from one spectrum of the selected mapped matrix."""
     final_evaluation = evaluate_hamiltonian(map_result.mapped_x, inputs)
@@ -2533,32 +2567,13 @@ def finalize_scf_fock(
         converged=converged,
         residual=residual,
         trajectory_status=trajectory_status,
-        diagnostics=SCFSolverDiagnostics(
-            final_damp=(
-                map_result.mapped_x.new_tensor(0.0)
-                if damping_state is None
-                else damping_state.value
-            ),
-            dynamic_damping_switched=(
-                torch.zeros(
-                    (), dtype=torch.bool, device=map_result.mapped_x.device
-                )
-                if damping_state is None
-                else damping_state.switched
-            ),
-            terminal_failed=(
-                torch.zeros(
-                    (), dtype=torch.bool, device=map_result.mapped_x.device
-                )
-                if terminal_failed is None
-                else terminal_failed
-            ),
-            certification=(
-                None
-                if certification is None
-                else SCFPhysicalCertificationDiagnostics(certification)
-            ),
-            strategy=strategy_diagnostics,
+        diagnostics=_build_solver_diagnostics(
+            map_result,
+            damping_state,
+            certification,
+            terminal_failed,
+            strategy_diagnostics,
+            executed_trips,
         ),
         trace=trace,
     )
@@ -2610,9 +2625,7 @@ def solve_scf_potential_simple(
     ),
 ) -> SCFSolveResult:
     """Solve potential mode with selected simple-mixing control."""
-    problem = SCFProblem(
-        inputs, SCFVariable.POTENTIAL, potential_layout=layout
-    )
+    problem = SCFProblem(inputs, SCFVariable.POTENTIAL, potential_layout=layout)
     return solve_scf_problem(
         guess,
         problem,

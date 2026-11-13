@@ -37,9 +37,9 @@ from dxtb._src.scf import (
     SCFCharges,
     SCFMapResult,
     SCFProblem,
-    SCFVariable,
     SCFStage,
     SCFStrategy,
+    SCFVariable,
     fock_initial_guess,
     fock_map,
 )
@@ -52,6 +52,9 @@ from dxtb._src.scf import (
     setup_scf_inputs,
     setup_solver_settings,
 )
+from dxtb._src.scf import solver as solver_module
+from dxtb._src.scf.guess import get_guess
+from dxtb._src.scf.iterator import get_refocc
 from dxtb._src.scf.solver import (
     _project_potential_padding,
     _solve_map,
@@ -59,8 +62,6 @@ from dxtb._src.scf.solver import (
     finalize_scf_fock,
     finalize_scf_potential,
 )
-from dxtb._src.scf.guess import get_guess
-from dxtb._src.scf.iterator import get_refocc
 from dxtb._src.typing import Tensor
 from dxtb._src.typing.exceptions import SCFConvergenceError
 from dxtb.scf import (
@@ -591,7 +592,9 @@ def test_solver_outcome_retains_the_convergence_tested_input(
     ),
 )
 def test_fixed_trip_outcome_retains_accepted_map_input(
-    converger: type, variable: SCFVariable
+    converger: type,
+    variable: SCFVariable,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Masked fixed-trip maps cannot replace the accepted root/result pair."""
     tolerance = 1.0e-10
@@ -620,13 +623,54 @@ def test_fixed_trip_outcome_retains_accepted_map_input(
     )
 
     assert short.converged and long.converged
-    assert short.map_count < short.solver_map_evaluations
-    assert long.map_count < long.solver_map_evaluations
-    # Solver initialization evaluates the raw map once before fixed trips.
-    assert short.solver_map_evaluations == 36
-    assert long.solver_map_evaluations == 46
+    assert short.map_count < 36
+    assert short.solver_map_evaluations == short.map_count
+    assert long.solver_map_evaluations == short.map_count
+    assert short.outcome.executed_trips == short.map_count - 1
+    assert long.outcome.executed_trips == long.map_count - 1
     assert short.diagnostic_map_evaluations == 0
     assert long.diagnostic_map_evaluations == 0
+
+    def disable_early_stop(_active: Tensor) -> bool:
+        """Force the static ``maxiter`` schedule for A/B root comparison."""
+        return False
+
+    with monkeypatch.context() as m:
+        m.setattr(
+            solver_module, "_can_stop_fixed_trip_early", disable_early_stop
+        )
+        static_short = _run_root(
+            case,
+            case.inputs,
+            tolerance=tolerance,
+            maxiter=35,
+            eager=False,
+            converger=converger,
+        )
+        static_long = _run_root(
+            case,
+            case.inputs,
+            tolerance=tolerance,
+            maxiter=45,
+            eager=False,
+            converger=converger,
+        )
+
+    assert static_short.converged and static_long.converged
+    assert static_short.map_count == short.map_count
+    assert static_long.map_count == long.map_count
+    # Static schedule evaluates initialization plus all ``maxiter`` trips.
+    assert static_short.solver_map_evaluations == 36
+    assert static_long.solver_map_evaluations == 46
+    assert static_short.outcome.executed_trips == 35
+    assert static_long.outcome.executed_trips == 45
+    torch.testing.assert_close(short.root, static_long.root, rtol=0, atol=0)
+    torch.testing.assert_close(
+        short.outcome.map_result.mapped_x,
+        static_long.outcome.map_result.mapped_x,
+        rtol=0,
+        atol=0,
+    )
     torch.testing.assert_close(short.root, long.root, rtol=0, atol=0)
     torch.testing.assert_close(
         short.outcome.map_result.mapped_x,
@@ -777,9 +821,7 @@ def test_nonconverged_root_reference_is_not_presented_as_a_root(
         eager=True,
     )
     assert not record.converged
-    assert (
-        record.map_count == 1 if maxiter == 0 else 1 <= record.map_count <= 2
-    )
+    assert record.map_count == 1 if maxiter == 0 else 1 <= record.map_count <= 2
     with pytest.raises(SCFConvergenceError, match="physical-root derivative"):
         _require_converged(record)
 
@@ -1052,9 +1094,7 @@ def test_simple_and_anderson_reach_the_same_h2_root_and_response(
     )
     for name in ("density", "occupation", "emo"):
         torch.testing.assert_close(
-            getattr(
-                records[LinearConverger].outcome.map_result.spectral, name
-            ),
+            getattr(records[LinearConverger].outcome.map_result.spectral, name),
             getattr(
                 records[AndersonConverger].outcome.map_result.spectral,
                 name,

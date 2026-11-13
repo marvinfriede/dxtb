@@ -43,13 +43,15 @@ from dxtb._src.wavefunction.filling import FermiStatus
 from .anderson import AndersonConverger, setup_anderson_converger_settings
 from .broyden import BroydenConverger, setup_broyden_converger_settings
 from .certification import SCFInternalCertificationProfile
+from .converger import LinearConverger
+from .cpscf import CPSCFSettings, prepare_response_root
 from .data import (
     PotentialLayout,
     SCFCharges,
     SCFInputs,
     SCFPotential,
-    scf_interactions_eligible,
     pack_charges,
+    scf_interactions_eligible,
     setup_scf_inputs,
 )
 from .implicit import _prepare_scf_root, _SCFMapTensorTree
@@ -60,16 +62,13 @@ from .map import (
     potential_initial_guess,
     unpack_potential,
 )
-from .converger import LinearConverger
 from .problem import SCFProblem, SCFVariable
-from .cpscf import CPSCFSettings, prepare_response_root
 from .solver import (
     FERMI_FAILURE_ELECTRON_COUNT,
     FERMI_FAILURE_INVALID_TEMPERATURE,
     FERMI_FAILURE_NONCONVERGENCE,
     FERMI_FAILURE_NONE,
     FERMI_FAILURE_TOO_MANY_ELECTRONS,
-    FixedTripControl,
     SCFSolveResult,
     SCFSolverSettings,
     SCFTrajectoryStatus,
@@ -81,7 +80,6 @@ from .solver import (
     finalize_scf,
     finalize_scf_fock,
     finalize_scf_potential,
-    fixed_trip_problem_control,
     setup_solver_settings,
     solve_scf_problem,
 )
@@ -95,7 +93,6 @@ __all__ = [
     "apply_eager_scf_policy",
     "scf_core_result",
     "run_eager_scf",
-    "fixed_trip_control",
     "prepare_system_fixed_trip",
     "run_prepared_implicit_scf",
     "run_system_fixed_trip",
@@ -160,8 +157,7 @@ def resolve_scf_plan(
         and not allow_implicit
     ):
         raise ValueError(
-            "SCF plan resolution requires unrolled "
-            "differentiation."
+            "SCF plan resolution requires unrolled " "differentiation."
         )
     if not config.requires_iterations:
         raise ValueError("SCF plan resolution requires an iterative SCF.")
@@ -179,8 +175,7 @@ def resolve_scf_plan(
     eligible, names = scf_interactions_eligible(interactions)
     if not eligible:
         raise NotImplementedError(
-            "SCF does not support interaction extension(s): "
-            f"{names}."
+            "SCF does not support interaction extension(s): " f"{names}."
         )
 
     variable = config.initial_variable
@@ -193,9 +188,7 @@ def resolve_scf_plan(
             "The SCF solver supports single-System SCF only; "
             "use evaluate_packed_systems or Calculator batch evaluation for batches."
         )
-    return SCFPlan(
-        "scf", variable, strategy_label, config.strategy
-    )
+    return SCFPlan("scf", variable, strategy_label, config.strategy)
 
 
 def scf_core_result(result: SCFSolveResult) -> SCFCoreResult:
@@ -552,13 +545,10 @@ def prepare_system_fixed_trip(
         raise ValueError(
             "The Fixed-trip controller requires differentiation='unrolled'."
         )
-    route = resolve_scf_plan(
-        config, interactions, ihelp, numbers, integrals
-    )
+    route = resolve_scf_plan(config, interactions, ihelp, numbers, integrals)
     if route.kind != "scf":
         raise NotImplementedError(
-            "The fixed-trip System API supports single-System "
-            "SCF only."
+            "The fixed-trip System API supports single-System " "SCF only."
         )
 
     n0, occupation, nel = get_refocc(
@@ -582,20 +572,6 @@ def prepare_system_fixed_trip(
         core_index_owner=core_index_owner,
     )
     return _variable_problem(guess, inputs, config)
-
-
-def fixed_trip_control(
-    x: Tensor, problem: SCFProblem, config: ConfigSCF
-) -> FixedTripControl:
-    """Return the resumable Fixed-trip controller of a System."""
-    settings, strategy = _prepare_solver(config, x.dtype)
-    return fixed_trip_problem_control(
-        x,
-        problem,
-        settings,
-        strategy,
-        certification_profile=_certification_profile(config),
-    )
 
 
 def run_system_fixed_trip(

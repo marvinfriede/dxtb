@@ -35,8 +35,9 @@ per-lane Results are packed into the public batched Result.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, fields, is_dataclass, replace
+from dataclasses import dataclass
 from functools import partial
+from typing import TYPE_CHECKING
 
 import torch
 from torch import Tensor
@@ -46,21 +47,15 @@ from dxtb import labels
 from dxtb._src.calculators.model import System
 from dxtb._src.calculators.result import Result
 from dxtb._src.calculators.singlepoint import (
-    _prepare_singlepoint,
     _singlepoint_impl,
-    _singlepoint_result,
     system_singlepoint,
 )
-from dxtb._src.scf.core import replace_tensor_leaves, tensor_leaves
 from dxtb._src.scf.data import scf_interactions_eligible
-from dxtb._src.scf.eager import (
-    fixed_trip_control,
-    scf_core_result,
-    prepare_system_fixed_trip,
-)
-from dxtb._src.scf.solver import finalize_fixed_trip_problem
 from dxtb._src.scf.iterator import get_refocc, reference_electron_count
 from dxtb._src.wavefunction.filling import spin_electron_violations
+
+if TYPE_CHECKING:
+    from dxtb._src.xtb.h0 import H0Setup, H0SetupNode
 
 __all__ = [
     "LaneGroup",
@@ -386,235 +381,10 @@ def evaluate_lane_group(
         stacked_fields,
         stacked_field_grads,
     )
-    if _requires_static_schedule():
-        mapped = torch.func.vmap(
-            partial(system_singlepoint, group.system), in_dims=in_dims
-        )(*args)
-    else:
-        mapped = _evaluate_group_adaptive(group.system, args, in_dims)
-    return tuple(_select_lane(mapped, lane) for lane in range(len(ids)))
-
-
-# Adaptive execution of mapped groups
-#
-# The fixed-trip controller runs ``maxiter`` map trips and freezes finished
-# lanes by masks. Outside of traced execution, a mapped group instead runs
-# the same controller in static chunks of trips, each chunk one ``vmap``
-# call, and stops after the chunk in which its last lane certified or failed
-# terminally. Lanes that finish inside a chunk are frozen by the shared
-# transition exactly as in the full schedule, so values, iteration counts,
-# status and derivatives are those of the full schedule.
-#
-# Lane-dependent tensors cross the ``vmap`` calls as flat leaves of the
-# immutable dataclass trees (prepared non-SCF terms, SCF problem, solver
-# state); everything else in those trees is lane-independent and is reused
-# as is.
-
-_ADAPTIVE_CHUNK_TRIPS = 1
-"""Map trips per ``vmap`` call of an adaptive group (performance only).
-
-Measured on CPU (``benchmarks/results/adaptive-chunk-sweep-cpu.json``,
-chunk lengths 1-16): one extra ``vmap`` call and host read costs a few
-milliseconds, far less than one map trip, so the shortest chunk avoids all
-overshoot trips and was fastest or tied in every case. Chunk length 1 is
-the measured CPU optimum; the CUDA optimum is unknown (every chunk boundary
-is a device-to-host read there) and must be measured separately.
-"""
-
-
-def _requires_static_schedule() -> bool:
-    """Return whether a mapped group must run the full static schedule.
-
-    Inside an active ``torch.func`` transform or ``torch.compile`` tracing,
-    the group is part of a traced computation and cannot stop on tensor
-    values.
-    """
-    return (
-        torch.compiler.is_compiling()
-        or torch._C._functorch.maybe_current_level() is not None
-    )
-
-
-def _evaluate_group_adaptive(
-    system: System,
-    args: tuple[Tensor | None, ...],
-    in_dims: tuple[int | None, ...],
-) -> Result:
-    """Map one group through the fixed-trip controller in static chunks.
-
-    Advancing stops once no lane is active (every lane certified or failed
-    terminally) or after the configured ``maxiter`` trips. Each stop
-    decision is one host read for the whole group.
-    """
-    capture: dict[str, tuple[object, tuple[str, ...]]] = {}
-    fixed, state = torch.func.vmap(
-        partial(_group_start, system, capture), in_dims=in_dims
+    mapped = torch.func.vmap(
+        partial(system_singlepoint, group.system), in_dims=in_dims
     )(*args)
-
-    maxiter = system.config.scf.maxiter
-    trip = 0
-    while trip < maxiter and bool(_group_active(capture, state).any()):
-        stop = min(trip + _ADAPTIVE_CHUNK_TRIPS, maxiter)
-        state = torch.func.vmap(
-            partial(_group_advance, capture, trip, stop), in_dims=(0, 0)
-        )(fixed, state)
-        trip = stop
-
-    return torch.func.vmap(partial(_group_finish, capture), in_dims=(0, 0, 0))(
-        fixed, state, args[0]
-    )
-
-
-def _group_start(
-    system: System,
-    capture: dict[str, tuple[object, tuple[str, ...]]],
-    positions: Tensor,
-    charge: Tensor,
-    spin: Tensor | None,
-    field: Tensor | None,
-    field_grad: Tensor | None,
-) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
-    """Prepare one lane and start its controller (inside ``vmap``)."""
-    prepared = _prepare_singlepoint(
-        system, positions, charge, spin, field, field_grad
-    )
-    if isinstance(prepared, Result):
-        raise RuntimeError("Mapped groups require an iterative SCF.")
-    x, problem = prepare_system_fixed_trip(
-        *prepared.scf_arguments(),
-        core_index=prepared.core_index,
-        core_index_owner=prepared.core_index_owner,
-    )
-    state = fixed_trip_control(x, problem, prepared.config.scf).start(x)
-    # Call-time objects (interaction list and cache, positions, the System)
-    # are not needed after this point and are not carried.
-    carried = replace(
-        prepared,
-        positions=None,
-        interactions=None,
-        interaction_data=None,
-        core_index_owner=None,
-    )
-    return (
-        _carry(capture, "fixed", (carried, problem)),
-        _carry(capture, "state", state),
-    )
-
-
-def _group_advance(
-    capture: dict[str, tuple[object, tuple[str, ...]]],
-    start: int,
-    stop: int,
-    fixed: tuple[Tensor, ...],
-    state: tuple[Tensor, ...],
-) -> tuple[Tensor, ...]:
-    """Advance one lane by trips ``start <= index < stop`` (inside ``vmap``)."""
-    prepared, problem = _restore(capture, "fixed", fixed)
-    solver_state = _restore(capture, "state", state)
-    control = fixed_trip_control(
-        solver_state.current_x, problem, prepared.config.scf
-    )
-    solver_state, _ = control.advance(solver_state, start, stop)
-    return _carry(capture, "state", solver_state)
-
-
-def _group_finish(
-    capture: dict[str, tuple[object, tuple[str, ...]]],
-    fixed: tuple[Tensor, ...],
-    state: tuple[Tensor, ...],
-    positions: Tensor,
-) -> Result:
-    """Finalize one lane and assemble its Result (inside ``vmap``)."""
-    prepared, problem = _restore(capture, "fixed", fixed)
-    solver_state = _restore(capture, "state", state)
-    control = fixed_trip_control(
-        solver_state.current_x, problem, prepared.config.scf
-    )
-    scf_result = finalize_fixed_trip_problem(
-        control, solver_state, solver_state.current_x
-    )
-    return _singlepoint_result(
-        replace(prepared, positions=positions),
-        scf_core_result(scf_result),
-    )
-
-
-def _group_active(
-    capture: dict[str, tuple[object, tuple[str, ...]]],
-    state: tuple[Tensor, ...],
-) -> Tensor:
-    """Return the per-lane ``active`` flags of a carried solver state."""
-    template, paths = capture["state"]
-    if "active" in paths:
-        return state[paths.index("active")]
-    return template.active  # type: ignore[attr-defined]
-
-
-def _carry(
-    capture: dict[str, tuple[object, tuple[str, ...]]],
-    key: str,
-    tree: object,
-) -> tuple[Tensor, ...]:
-    """Record ``tree`` as template and return its lane-batched leaves."""
-    leaves = tuple(
-        (path, value)
-        for path, value in tensor_leaves(tree)
-        if torch._C._functorch.is_batchedtensor(value)
-    )
-    values = tuple(value for _, value in leaves)
-    if _has_uncarried_lane_tensor(tree, {id(value) for value in values}):
-        raise RuntimeError(
-            "A lane-dependent tensor is held outside the carried dataclass "
-            "tree of a mapped group."
-        )
-    capture[key] = (tree, tuple(path for path, _ in leaves))
-    return values
-
-
-def _restore(
-    capture: dict[str, tuple[object, tuple[str, ...]]],
-    key: str,
-    values: tuple[Tensor, ...],
-):
-    """Rebuild a carried tree from its template and lane leaves."""
-    template, paths = capture[key]
-    return replace_tensor_leaves(template, dict(zip(paths, values)))
-
-
-def _has_uncarried_lane_tensor(
-    value: object, carried: set[int], seen: set[int] | None = None
-) -> bool:
-    """Return whether ``value`` reaches a transform tensor not in ``carried``.
-
-    Such a tensor would escape its ``vmap`` call inside the static template.
-    """
-    if isinstance(value, Tensor):
-        return id(
-            value
-        ) not in carried and torch._C._functorch.is_functorch_wrapped_tensor(
-            value
-        )
-    if value is None or isinstance(
-        value, (str, bytes, int, float, complex, torch.dtype, torch.device)
-    ):
-        return False
-    seen = set() if seen is None else seen
-    if id(value) in seen:
-        return False
-    seen.add(id(value))
-    if is_dataclass(value) and not isinstance(value, type):
-        children = [getattr(value, item.name) for item in fields(value)]
-    elif isinstance(value, (tuple, list, set, frozenset)):
-        children = list(value)
-    elif isinstance(value, dict):
-        children = list(value.values())
-    elif hasattr(value, "__dict__") and not isinstance(value, type):
-        children = list(vars(value).values())
-    else:
-        children = []
-    return any(
-        _has_uncarried_lane_tensor(child, carried, seen) for child in children
-    )
+    return tuple(_select_lane(mapped, lane) for lane in range(len(ids)))
 
 
 def _validate_group_electrons(
@@ -662,7 +432,7 @@ def _validate_group_electrons(
         )
 
 
-def _electron_setup(system: System):
+def _electron_setup(system: System) -> H0Setup | H0SetupNode:
     """Return the H0 setup that owns the reference occupation."""
     core = system._active_exact_core()
     h0_setup = core.h0_setup if core is not None else system.h0_setup
