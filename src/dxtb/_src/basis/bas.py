@@ -144,21 +144,44 @@ class Basis(TensorLike):
         # flag. This flag only moves the positions and the IndexHelper (see
         # `setup_integral_evaluation`). We are moving here, because we do not
         # want to move the whole parametrization back and forth.
+        self.numbers = self.numbers.to(device=self.device)
+        self.unique = self.unique.to(device=self.device)
+        self.ihelp = (
+            self.ihelp
+            if self.ihelp.device == self.device
+            else self.ihelp.to(device=self.device)
+        )
         self.ngauss = self.ngauss.to(device=self.device)
         self.slater = self.slater.to(device=self.device, dtype=self.dtype)
         self.pqn = self.pqn.to(device=self.device)
         self.valence = self.valence.to(device=self.device)
 
     @override
-    def to(
+    def _clone_tensorlike(
         self,
+        *,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> Self:
-        obj = super().to(device=device, dtype=dtype)
-        if device is not None:
-            obj.ihelp = self.ihelp.to(device=obj.device)
-        return obj
+        """Clone Basis tensors while preserving structural integer/bool dtypes."""
+        target_device = self.device if device is None else device
+        target_dtype = self.dtype if dtype is None else dtype
+        new = super()._clone_tensorlike(device=device, dtype=dtype)
+
+        # TensorLike treats every plain tensor slot as floating-point. Restore
+        # the integer and boolean structural tensors with only a device move.
+        new.numbers = self.numbers.to(device=target_device)
+        new.unique = self.unique.to(device=target_device)
+        new.ngauss = self.ngauss.to(device=target_device)
+        new.pqn = self.pqn.to(device=target_device)
+        new.valence = self.valence.to(device=target_device)
+        new.slater = self.slater.to(device=target_device, dtype=target_dtype)
+        new.ihelp = (
+            self.ihelp
+            if self.ihelp.device == target_device
+            else self.ihelp.to(device=target_device)
+        )
+        return new
 
     def create_cgtos(self) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
         """

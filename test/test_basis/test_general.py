@@ -117,15 +117,36 @@ def test_fail_higher_orbital_trafo():
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32, torch.float64])
 def test_change_type(dtype: torch.dtype) -> None:
-    """Test changing the `dtype` of the Basis class."""
-    number = torch.tensor([1])
+    """Test changing the `dtype` of the Basis class without corrupting int/bool slots."""
+    number = torch.tensor([8, 1, 1])
     ihelp = IndexHelper.from_numbers(number, GFN1_XTB)
 
-    bas = Basis(number, GFN1_XTB, ihelp)
+    bas = Basis(number, GFN1_XTB, ihelp, dtype=torch.float64)
     assert bas is not None
 
-    cls = bas.type(dtype)
-    assert cls.dtype == dtype
+    for converted in (bas.type(dtype), bas.to(dtype=dtype)):
+        assert converted.dtype == dtype
+        assert converted.slater.dtype == dtype
+        assert converted.numbers.dtype == bas.numbers.dtype
+        assert converted.unique.dtype == bas.unique.dtype
+        assert converted.ngauss.dtype == bas.ngauss.dtype
+        assert converted.pqn.dtype == bas.pqn.dtype
+        assert converted.valence.dtype == torch.bool
+        if dtype in (torch.float32, torch.float64):
+            alphas, coeffs = converted.create_cgtos()
+            assert all(a.dtype == dtype for a in alphas)
+            assert all(c.dtype == dtype for c in coeffs)
+
+    meta_bas = bas.to(device=torch.device("meta"), dtype=dtype)
+    assert meta_bas.device == torch.device("meta")
+    assert meta_bas.dtype == dtype
+    assert meta_bas.ihelp.device == torch.device("meta")
+    assert meta_bas.slater.dtype == dtype
+    assert meta_bas.ngauss.dtype == bas.ngauss.dtype
+    assert meta_bas.pqn.dtype == bas.pqn.dtype
+    assert meta_bas.valence.dtype == torch.bool
+    assert meta_bas.numbers.dtype == bas.numbers.dtype
+    assert meta_bas.unique.dtype == bas.unique.dtype
 
 
 def test_change_type_fail() -> None:
@@ -154,11 +175,18 @@ def test_change_device(device_str: str) -> None:
     number = torch.tensor([1])
     ihelp = IndexHelper.from_numbers(number, GFN1_XTB)
 
-    bas = Basis(number, GFN1_XTB, ihelp)
-    assert bas is not None
+    bas_orig = Basis(number, GFN1_XTB, ihelp)
+    assert bas_orig is not None
 
-    bas = bas.to(device)
+    bas = bas_orig.to(device)
     assert bas.device == device
+    assert bas.ihelp.device == device
+    assert bas.ngauss.dtype == bas_orig.ngauss.dtype
+    assert bas.pqn.dtype == bas_orig.pqn.dtype
+    assert bas.valence.dtype == torch.bool
+    alphas, coeffs = bas.create_cgtos()
+    assert all(a.device == device for a in alphas)
+    assert all(c.device == device for c in coeffs)
 
 
 def test_change_device_fail() -> None:
@@ -233,9 +261,9 @@ def test_non_valence_orthogonalization_is_metadata_independent() -> None:
 
 def test_basis_and_wrappers_honor_target_dtype_with_param_module() -> None:
     """Basis and integral wrappers cast existing ParamModule CGTOs to dtype."""
-    from dxtb import ParamModule, labels
+    from dxtb import GFN0_XTB, ParamModule, labels
     from dxtb._src.exlibs.available import has_libcint
-    from dxtb.integrals.wrappers import dipint, overlap, quadint
+    from dxtb.integrals.wrappers import dipint, hcore, overlap, quadint
 
     numbers = torch.tensor([8, 1, 1])
     positions_f32 = torch.tensor(
@@ -243,6 +271,7 @@ def test_basis_and_wrappers_honor_target_dtype_with_param_module() -> None:
         dtype=torch.float32,
     )
     pm_f64 = ParamModule(GFN1_XTB, dtype=torch.float64)
+    pm_gfn0_f64 = ParamModule(GFN0_XTB, dtype=torch.float64)
     ihelp = IndexHelper.from_numbers(numbers, pm_f64)
 
     bas_default = Basis(numbers, pm_f64, ihelp)
@@ -271,6 +300,18 @@ def test_basis_and_wrappers_honor_target_dtype_with_param_module() -> None:
             quadint(numbers, positions_f32, pm_f64, driver=drv).dtype
             == torch.float32
         )
+        assert (
+            hcore(numbers, positions_f32, pm_f64, charge=0.0, driver=drv).dtype
+            == torch.float32
+        )
+        assert (
+            hcore(
+                numbers, positions_f32, pm_gfn0_f64, charge=0.0, driver=drv
+            ).dtype
+            == torch.float32
+        )
+    assert pm_f64.dtype == torch.float64
+    assert pm_gfn0_f64.dtype == torch.float64
 
 
 @pytest.mark.parametrize("batched", [False, True])

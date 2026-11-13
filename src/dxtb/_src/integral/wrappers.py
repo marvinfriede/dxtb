@@ -199,10 +199,12 @@ def hcore(
     numbers, positions = _extract_active_atoms(numbers, positions)
 
     dd: DD = {"device": positions.device, "dtype": positions.dtype}
+    if numbers.device != positions.device:
+        numbers = numbers.to(device=positions.device)
     pm = par if isinstance(par, ParamModule) else ParamModule(par, **dd)
     ihelp = IndexHelper.from_numbers(numbers, pm)
     # set up H0 first: it validates the method name of the parametrization
-    setup = setup_h0(numbers, pm, ihelp, **dd)
+    setup = setup_h0(numbers, pm, ihelp, **dd).to(**dd)
     s = overlap(numbers, positions, pm, driver=driver)
     return build_hcore(setup, positions, s.to(**dd), charge)[0]
 
