@@ -37,8 +37,8 @@ from dxtb._src.scf import (
     SCFInternalCertificationProfile,
     SCFPhysicalState,
     SCFProblem,
-    SCFVariable,
     SCFSolverSettings,
+    SCFVariable,
 )
 from dxtb._src.scf import certification as certification_module
 from dxtb._src.scf import (
@@ -955,9 +955,7 @@ def test_certification_thresholds_are_explicit_and_variable_bound(
 ) -> None:
     """Explicit thresholds yield a verdict and reject variable mismatch."""
     _, problem, state = _problem_and_state(variable=variable)
-    result = certify_scf_state(
-        problem, state, _loose_thresholds(variable)
-    )
+    result = certify_scf_state(problem, state, _loose_thresholds(variable))
     assert result.certified, result.metrics
     strict = replace(
         _loose_thresholds(variable),
@@ -1443,7 +1441,37 @@ def test_terminal_nonfinite_candidate_does_not_reach_method(
                 )
         return proposal
 
-    monkeypatch.setattr(solver_module, "_converger_transition", check_transition)
+    monkeypatch.setattr(
+        solver_module, "_converger_transition", check_transition
+    )
+    early_outcome = _solve_map_control(
+        physical.x,
+        maxiter=2,
+        mix_guess=True,
+        x_atol=1.0e-8,
+        x_atol_max=1.0e-8,
+        map_fn=map_fn,
+        problem=problem,
+        method=method,
+        damping_settings=DynamicDampingSettings(),
+    )
+    assert calls == 2
+    assert transitions == 2
+    assert early_outcome.executed_trips == 1
+    assert not bool(early_outcome.converged)
+    assert bool(early_outcome.terminal_failed)
+    assert len(inactive_observations) == 1
+
+    def disable_early_stop(_active: torch.Tensor) -> bool:
+        """Force the full static schedule to test repeated frozen transitions."""
+        return False
+
+    calls = 0
+    transitions = 0
+    inactive_observations.clear()
+    monkeypatch.setattr(
+        solver_module, "_can_stop_fixed_trip_early", disable_early_stop
+    )
     outcome = _solve_map_control(
         physical.x,
         maxiter=2,
@@ -1457,6 +1485,7 @@ def test_terminal_nonfinite_candidate_does_not_reach_method(
     )
     assert calls == 3
     assert transitions == 3
+    assert outcome.executed_trips == 2
     assert not bool(outcome.converged)
     assert bool(outcome.terminal_failed)
     assert outcome.certification is not None
@@ -1467,6 +1496,9 @@ def test_terminal_nonfinite_candidate_does_not_reach_method(
         SCFCoreFailure.NONFINITE
     )
     assert torch.isfinite(outcome.root_x).all()
+    torch.testing.assert_close(
+        early_outcome.root_x, outcome.root_x, rtol=0.0, atol=0.0
+    )
     assert not torch.isfinite(outcome.map_result.spectral.density).all()
     assert len(inactive_observations) == 2
     for observation in inactive_observations[1:]:

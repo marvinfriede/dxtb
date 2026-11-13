@@ -23,8 +23,8 @@ Collection of utility functions for matrices/tensors.
 
 from __future__ import annotations
 
-from contextlib import AbstractContextManager, nullcontext
 import weakref
+from contextlib import AbstractContextManager, nullcontext
 from typing import Any, Optional, Tuple
 
 import torch
@@ -83,19 +83,22 @@ def unwrap_functorch_tensor(
         ``BatchedTensor`` (``vmap``), or ``FunctionalTensor``.
     allow_vmap : bool, optional
         If ``False`` (default), returns ``None`` whenever a
-        ``BatchedTensor`` or ``FunctionalTensor`` layer is encountered so
-        ``vmap`` batching and functionalization remain on the wrapped path.
-        If ``True``, also unwraps ``BatchedTensor`` and ``FunctionalTensor``
+        ``BatchedTensor`` layer is encountered so ``vmap`` batching remains
+        on the wrapped path. If ``True``, also unwraps ``BatchedTensor``
         layers to expose the underlying storage tensor across all lanes
         (used only for non-differentiable host schedule bounds).
+        ``FunctionalTensor`` layers are always rejected regardless of
+        ``allow_vmap``.
 
     Returns
     -------
     Tensor | None
         The unwrapped plain ``torch.Tensor``, or ``None`` when compiling,
         tracing, inside a Python dispatch mode, carrying a
-        ``__torch_function__`` override, encountering a disallowed wrapper,
-        or if private ``torch._C._functorch`` bindings are unavailable.
+        ``__torch_function__`` override, encountering ``FunctionalTensor``
+        or a disallowed ``BatchedTensor``, exceeding the 16-layer peel
+        bound, or if private ``torch._C._functorch`` bindings are
+        unavailable.
     """
     try:
         if (
@@ -115,7 +118,9 @@ def unwrap_functorch_tensor(
             return None
         raw = tensor
         for _ in range(16):
-            if ft.is_batchedtensor(raw) or ft.is_functionaltensor(raw):
+            if ft.is_functionaltensor(raw):
+                return None
+            if ft.is_batchedtensor(raw):
                 if not allow_vmap:
                     return None
                 raw = ft.get_unwrapped(raw)
@@ -124,6 +129,8 @@ def unwrap_functorch_tensor(
                 raw = ft.get_unwrapped(raw)
                 continue
             break
+        if ft.is_functorch_wrapped_tensor(raw):
+            return None
     except AttributeError:
         return None
     return raw if type(raw) is Tensor else None

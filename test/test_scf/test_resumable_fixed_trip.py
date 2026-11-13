@@ -27,6 +27,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import fields, replace
+from test.test_calculator.test_grouped_vmap_batching import (
+    H2,
+    H2O,
+    _geometry,
+    _model,
+    _setup,
+)
 
 import pytest
 import torch
@@ -44,13 +51,6 @@ from dxtb._src.scf.solver import (
     finalize_fixed_trip_problem,
     fixed_trip_problem_control,
     solve_scf_problem,
-)
-from test.test_calculator.test_grouped_vmap_batching import (
-    H2,
-    H2O,
-    _geometry,
-    _model,
-    _setup,
 )
 
 from ..utils import scf_strategy
@@ -191,6 +191,31 @@ def test_chunked_advance_matches_single_range(
         eager=False,
         certification_profile=profile,
     )
+
+    def disable_early_stop(_active: torch.Tensor) -> bool:
+        """Force the full static ``maxiter`` schedule for leaf comparison."""
+        return False
+
+    with monkeypatch.context() as m:
+        m.setattr(solver_mod, "_can_stop_fixed_trip_early", disable_early_stop)
+        static_reference = solve_scf_problem(
+            guess,
+            problem,
+            settings,
+            strategy,
+            eager=False,
+            certification_profile=profile,
+        )
+    _assert_identical(reference, static_reference)
+    assert reference.diagnostics is not None
+    assert static_reference.diagnostics is not None
+    assert static_reference.diagnostics.executed_trips == maxiter
+    expected_trips = (
+        0
+        if maxiter == 0 or physics == "fermi-failure"
+        else int(reference.iterations) - 1
+    )
+    assert reference.diagnostics.executed_trips == expected_trips
 
     control = fixed_trip_problem_control(
         guess, problem, settings, strategy, certification_profile=profile
@@ -413,6 +438,29 @@ def test_initial_status_and_short_schedules(
     recorded, iterations, converged, terminal = _BOUNDARY_OUTCOMES[
         (physics, maxiter, record)
     ]
+
+    def disable_early_stop(_active: torch.Tensor) -> bool:
+        """Force the static schedule to verify 0-trip leaf parity."""
+        return False
+
+    with monkeypatch.context() as m:
+        m.setattr(solver_mod, "_can_stop_fixed_trip_early", disable_early_stop)
+        static_reference = solve_scf_problem(
+            guess,
+            problem,
+            settings,
+            strategy,
+            eager=False,
+            record_initial_status=record,
+            certification_profile=profile,
+        )
+    _assert_identical(reference, static_reference)
+    assert reference.diagnostics is not None
+    assert static_reference.diagnostics is not None
+    assert static_reference.diagnostics.executed_trips == maxiter
+    assert reference.diagnostics.executed_trips == (
+        0 if maxiter == 0 or terminal else maxiter
+    )
     assert (reference.trajectory_status is not None) is recorded
     assert int(reference.iterations) == iterations
     assert bool(reference.converged) is converged

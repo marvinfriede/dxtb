@@ -19,17 +19,16 @@
 One homogeneous group (one shared ``System``, ``B`` conformers) is evaluated
 
 - ``vmap-static``:   as one mapped group with the full static fixed-trip
-  schedule (``maxiter`` map trips; the route used inside transforms),
-- ``vmap-adaptive``: as one mapped group advanced in chunks of
-  ``--chunk`` trips that stops once no lane is active (the default route of
-  eager/autograd calls), and
+  schedule (``maxiter`` map trips; CPU early stopping disabled),
+- ``vmap-adaptive``: as one mapped group under single-pass ``vmap`` that stops
+  once no lane is active (the default CPU fixed-trip route), and
 - ``eager``: lane by lane with the eager single-System route that stops at
   convergence (the route used for singleton groups).
 
 Per case the physical per-lane iterations, the number of raw SCF map
 evaluations (one per mapped trip for a group, one per lane iteration for
 eager lanes, including initial and final evaluations) and the number of
-adaptive chunks (one host check each) are recorded.
+executed fixed-trip loop trips are recorded.
 
 Both strategies use the same System and geometries. Modes:
 
@@ -62,6 +61,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import torch
 
@@ -129,34 +129,48 @@ def run_case(
     repeats: int,
     device: str,
     maxiter: int,
-    chunk: int,
 ) -> dict[str, object]:
-    from dxtb._src.calculators import lane_evaluation
     from dxtb._src.calculators.lane_evaluation import (
         LaneGroup,
         can_vmap_system,
         evaluate_lane_group,
         evaluate_systems_independently,
     )
+    from dxtb._src.scf import solver as solver_mod
     from dxtb._src.scf.problem import SCFProblem
+    from dxtb._src.scf.solver import FixedTripControl
 
-    counts = {"maps": 0, "chunks": 0}
+    counts = {"maps": 0, "executed_trips": 0}
     original_map = SCFProblem.map
-    original_advance = lane_evaluation._group_advance
+    original_advance = FixedTripControl.advance
+    original_can_stop = solver_mod._can_stop_fixed_trip_early
 
-    def counting_map(self, x):
+    def counting_map(self: Any, x: Any) -> Any:
         counts["maps"] += 1
         return original_map(self, x)
 
-    def counting_advance(*args):
-        counts["chunks"] += 1
-        return original_advance(*args)
+    def counting_advance(
+        self: Any,
+        state: Any,
+        start: int,
+        stop: int,
+        observations: Any = None,
+    ) -> Any:
+        out_state, out_obs = original_advance(
+            self, state, start, stop, observations=observations
+        )
+        counts["executed_trips"] += int(out_state.executed_trips) - int(
+            state.executed_trips
+        )
+        return out_state, out_obs
 
-    SCFProblem.map = counting_map
-    lane_evaluation._group_advance = counting_advance
-    lane_evaluation._ADAPTIVE_CHUNK_TRIPS = chunk
-    lane_evaluation._requires_static_schedule = lambda: (
-        strategy == "vmap-static"
+    def disable_early_stop(_active: Any) -> bool:
+        return False
+
+    SCFProblem.map = counting_map  # type: ignore[method-assign]
+    FixedTripControl.advance = counting_advance  # type: ignore[method-assign]
+    solver_mod._can_stop_fixed_trip_early = (
+        disable_early_stop if strategy == "vmap-static" else original_can_stop
     )
 
     dev = torch.device(device)
@@ -185,7 +199,7 @@ def run_case(
         ]
 
         _sync(dev)
-        counts.update(maps=0, chunks=0)
+        counts.update(maps=0, executed_trips=0)
         start = time.perf_counter()
         context = torch.no_grad() if mode == "energy" else _null()
         with context:
@@ -229,8 +243,7 @@ def run_case(
         "iterations": iterations,
         "converged": converged,
         "map_evaluations": counts["maps"],
-        "chunks": counts["chunks"],
-        "chunk_trips": chunk if strategy == "vmap-adaptive" else None,
+        "executed_trips": counts["executed_trips"],
         "energy_sum": energy_sum,
         "wall_s": timings,
         "wall_s_min": min(timings),
@@ -275,13 +288,6 @@ def main() -> None:
         help="SCF maxiter (fixed trips of the vmap route); default as Config",
     )
     parser.add_argument("--strategies", nargs="+", default=list(STRATEGIES))
-    parser.add_argument(
-        "--chunk",
-        type=int,
-        nargs="+",
-        default=[1],
-        help="map trips per adaptive vmap call (vmap-adaptive only)",
-    )
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--mem-gib", type=float, default=8.0)
     parser.add_argument("--output", type=Path)
@@ -296,7 +302,6 @@ def main() -> None:
             args.repeats,
             args.device,
             args.maxiter,
-            args.chunk[0],
         )
         print(json.dumps(result))
         return
@@ -324,7 +329,6 @@ def main() -> None:
         "mem_limit_gib": args.mem_gib,
         "repeats": args.repeats,
         "maxiter": args.maxiter,
-        "chunks": args.chunk,
         "cases": [],
     }
 
@@ -333,22 +337,12 @@ def main() -> None:
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(json.dumps(report, indent=2) + "\n")
 
-    variants = [
-        (strategy, chunk)
-        for strategy in args.strategies
-        for chunk in (args.chunk if strategy == "vmap-adaptive" else [0])
-    ]
     for name in args.molecules:
         for mode in args.modes:
-            for strategy, chunk in variants:
+            for strategy in args.strategies:
                 killed_at = None
                 for size in args.sizes:
-                    label = (
-                        f"{strategy}[{chunk}]"
-                        if strategy == "vmap-adaptive"
-                        else strategy
-                    )
-                    tag = f"{name}/{mode}/{label}/B={size}"
+                    tag = f"{name}/{mode}/{strategy}/B={size}"
                     if killed_at is not None:
                         entry = {"status": "skipped", "after_kill": killed_at}
                     else:
@@ -370,8 +364,6 @@ def main() -> None:
                                 args.device,
                                 "--maxiter",
                                 str(args.maxiter),
-                                "--chunk",
-                                str(max(chunk, 1)),
                             ],
                             int(args.mem_gib * 1024**3),
                         )
@@ -383,7 +375,7 @@ def main() -> None:
                                 f"{entry['peak_rss_mib']:.0f} MiB, "
                                 f"iter {max(entry['iterations'])}, "
                                 f"maps {entry['map_evaluations']}, "
-                                f"chunks {entry['chunks']}, "
+                                f"trips {entry['executed_trips']}, "
                                 f"converged {all(entry['converged'])}",
                                 flush=True,
                             )
@@ -402,9 +394,6 @@ def main() -> None:
                         mode=mode,
                         strategy=strategy,
                         group_size=size,
-                        chunk_trips=(
-                            chunk if strategy == "vmap-adaptive" else None
-                        ),
                     )
                     report["cases"].append(entry)
                     save()

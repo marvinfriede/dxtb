@@ -15,26 +15,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Adaptive (chunked) execution of mapped lane groups.
+Transform-compatible early stopping of single-pass ``vmap`` lane groups.
 
-Outside of ``torch.func`` transforms and ``torch.compile``, a mapped group
-runs the fixed-trip controller in chunks of trips and stops once no lane is
-active. Lanes that finish earlier are frozen by the shared transition, so the
-adaptive route must reproduce the full static schedule exactly: every Result
-leaf, derivatives, iteration counts, status, warnings and errors.
+On CPU, a mapped lane group runs a single ``torch.func.vmap`` call over
+``system_singlepoint`` and exits ``FixedTripControl.advance`` once no lane
+remains active across untransformed, autograd, and ``torch.func`` transformed
+evaluations. Lanes that finish earlier stay frozen via ``torch.where``,
+reproducing the full static ``maxiter`` schedule across every Result leaf,
+derivative, iteration count, status, warning, and error.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-
-import pytest
-import torch
-from torch.utils._pytree import keystr, tree_leaves_with_path
-
-from dxtb import GFN1_XTB, GFN2_XTB, OutputHandler, ParamModule, labels
-from dxtb._src.calculators import lane_evaluation
-from dxtb._src.calculators.packed_result import evaluate_packed_systems
 from test.test_calculator.test_grouped_vmap_batching import (
     DEVICE,
     DTYPE,
@@ -47,17 +40,41 @@ from test.test_calculator.test_grouped_vmap_batching import (
     _setup,
 )
 from test.utils import scf_strategy
+from typing import Any
 
-EXACT = {"rtol": 0.0, "atol": 0.0, "equal_nan": True}
+import pytest
+import torch
+from torch.utils._pytree import keystr, tree_leaves_with_path
+
+from dxtb import GFN1_XTB, GFN2_XTB, OutputHandler, ParamModule, labels
+from dxtb._src.calculators.packed_result import evaluate_packed_systems
+from dxtb._src.scf import solver as solver_mod
+from dxtb._src.scf.core import tensor_leaves
+from dxtb._src.scf.problem import SCFProblem
+from dxtb._src.scf.solver import FixedTripControl
+from dxtb._src.utils import tensors as tensors_mod
+from dxtb._src.utils.tensors import disable_functorch, unwrap_functorch_tensor
+
+EXACT: dict[str, Any] = {"rtol": 0.0, "atol": 0.0, "equal_nan": True}
+_ORIGINAL_CAN_STOP = solver_mod._can_stop_fixed_trip_early
+
+
+def _disable_early_stop(_active: torch.Tensor) -> bool:
+    """Disable CPU fixed-trip early stopping so static ``maxiter`` executes."""
+    return False
 
 
 def _route(monkeypatch: pytest.MonkeyPatch, static: bool) -> None:
+    """Select static ``maxiter`` or default CPU early-stopped fixed-trip mode."""
     monkeypatch.setattr(
-        lane_evaluation, "_requires_static_schedule", lambda: static
+        solver_mod,
+        "_can_stop_fixed_trip_early",
+        _disable_early_stop if static else _ORIGINAL_CAN_STOP,
     )
 
 
-def _leaves(value) -> list[tuple[str, torch.Tensor]]:
+def _leaves(value: object) -> list[tuple[str, torch.Tensor]]:
+    """Extract detached ``(path, tensor)`` leaves from a PyTree."""
     return [
         (keystr(path), leaf.detach())
         for path, leaf in tree_leaves_with_path(value)
@@ -65,7 +82,8 @@ def _leaves(value) -> list[tuple[str, torch.Tensor]]:
     ]
 
 
-def _assert_same_leaves(left, right) -> None:
+def _assert_same_leaves(left: object, right: object) -> None:
+    """Assert identical PyTree tensor leaf paths and bit-exact values."""
     left_leaves, right_leaves = _leaves(left), _leaves(right)
     assert [p for p, _ in left_leaves] == [p for p, _ in right_leaves]
     assert left_leaves
@@ -73,21 +91,46 @@ def _assert_same_leaves(left, right) -> None:
         torch.testing.assert_close(a, b, msg=path, **EXACT)
 
 
-def _count_advances(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]]:
-    ranges: list[tuple[int, int]] = []
-    original = lane_evaluation._group_advance
+def _spy_advance_trips(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Record ``out_state.executed_trips`` on each ``FixedTripControl.advance`` call."""
+    recorded: list[int] = []
+    original = FixedTripControl.advance
 
-    def counting(capture, start, stop, fixed, state):
-        ranges.append((start, stop))
-        return original(capture, start, stop, fixed, state)
+    def counting(
+        self: FixedTripControl,
+        state: Any,
+        start: int,
+        stop: int,
+        observations: Any = None,
+    ) -> Any:
+        """Forward ``FixedTripControl.advance`` and record ``executed_trips``."""
+        out_state, out_obs = original(
+            self, state, start, stop, observations=observations
+        )
+        recorded.append(int(out_state.executed_trips))
+        return out_state, out_obs
 
-    monkeypatch.setattr(lane_evaluation, "_group_advance", counting)
-    return ranges
+    monkeypatch.setattr(FixedTripControl, "advance", counting)
+    return recorded
+
+
+def _spy_problem_maps(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Count ``SCFProblem.map`` evaluations."""
+    calls: list[int] = []
+    original = SCFProblem.map
+
+    def counting(self: SCFProblem, x: torch.Tensor) -> Any:
+        """Increment call counter and delegate to ``SCFProblem.map``."""
+        calls.append(1)
+        return original(self, x)
+
+    monkeypatch.setattr(SCFProblem, "map", counting)
+    return calls
 
 
 # Values and derivatives
 
-_CONFIGS = {
+_CONFIGS: dict[str, tuple[int, dict[str, Any]]] = {
     "gfn1-potential": (labels.GFN1_XTB, {}),
     "gfn1-charge-anderson": (
         labels.GFN1_XTB,
@@ -99,8 +142,13 @@ _CONFIGS = {
 }
 
 
-def _differentiated_call(system, numbers, spin, params=()):
-    """Packed call with every differentiable input family."""
+def _differentiated_call(
+    system: Any,
+    numbers: tuple[int, ...],
+    spin: tuple[float, ...] | None,
+    params: tuple[torch.Tensor, ...] = (),
+) -> tuple[Any, tuple[torch.Tensor | None, ...]]:
+    """Run a packed mapped call differentiating every input family."""
     positions = tuple(
         _geometry(numbers, seed).requires_grad_(True) for seed in range(3)
     )
@@ -120,7 +168,7 @@ def _differentiated_call(system, numbers, spin, params=()):
         field=field,
         field_grad=field_grads,
     )
-    inputs = (*positions, field, *field_grads)
+    inputs: tuple[torch.Tensor, ...] = (*positions, field, *field_grads)
     if spin is None:
         inputs = (*inputs, charges)
     grads = torch.autograd.grad(
@@ -136,6 +184,7 @@ def _differentiated_call(system, numbers, spin, params=()):
 def test_adaptive_matches_static_values_and_derivatives(
     monkeypatch: pytest.MonkeyPatch, config: str
 ) -> None:
+    """Early-stopped mapped groups match static ``maxiter`` values and gradients."""
     method, settings = _CONFIGS[config]
     par = ParamModule(
         GFN1_XTB if method == labels.GFN1_XTB else GFN2_XTB,
@@ -145,6 +194,7 @@ def test_adaptive_matches_static_values_and_derivatives(
     for element in ("O", "H"):
         par.set_differentiable("element", element, "gam")
     system = _setup(_model(method, par=par, **settings), H2O)
+    trips = _spy_advance_trips(monkeypatch)
 
     outputs = {}
     for static in (True, False):
@@ -156,31 +206,44 @@ def test_adaptive_matches_static_values_and_derivatives(
             tuple(p for p in par.parameters() if p.requires_grad),
         )
 
+    assert len(trips) == 2
+    assert trips[0] == system.config.scf.maxiter
+    assert 0 < trips[1] < system.config.scf.maxiter
+
     static_result, static_grads = outputs[True]
     adaptive_result, adaptive_grads = outputs[False]
     _assert_same_leaves(static_result, adaptive_result)
     nonzero = 0
     for a, b in zip(static_grads, adaptive_grads):
         assert (a is None) == (b is None)
-        if a is not None:
+        if a is not None and b is not None:
             torch.testing.assert_close(a, b, **EXACT)
             nonzero += int(bool(a.abs().max() > 0))
     assert nonzero >= 8  # 3 positions, field, 3 field_grads, charges, params
 
 
-def test_adaptive_open_shell_explicit_spin(monkeypatch) -> None:
+def test_adaptive_open_shell_explicit_spin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Open-shell mapped groups with explicit spin stop early and match static."""
     system = _setup(_model(), OH)
+    trips = _spy_advance_trips(monkeypatch)
     outputs = {}
     for static in (True, False):
         _route(monkeypatch, static)
         outputs[static] = _differentiated_call(system, OH, (1.0, 1.0, 1.0))
+    assert trips[0] == system.config.scf.maxiter
+    assert 0 < trips[1] < system.config.scf.maxiter
     _assert_same_leaves(outputs[True][0], outputs[False][0])
     for a, b in zip(outputs[True][1], outputs[False][1]):
-        if a is not None:
+        if a is not None and b is not None:
             torch.testing.assert_close(a, b, **EXACT)
 
 
-def test_adaptive_derivatives_stay_lane_local(monkeypatch) -> None:
+def test_adaptive_derivatives_stay_lane_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Single-lane energy gradients inside an early-stopped group do not leak across lanes."""
     _route(monkeypatch, False)
     system = _setup(_model(), H2O)
     positions = tuple(
@@ -193,46 +256,29 @@ def test_adaptive_derivatives_stay_lane_local(monkeypatch) -> None:
     assert torch.count_nonzero(grads[2]) == 0
 
 
-# Stopping, chunking and map counts
+# Stopping and trip counts
 
 
-def test_group_stops_after_last_active_lane(monkeypatch) -> None:
-    """Map trips end with the chunk in which the slowest lane finished."""
-    ranges = _count_advances(monkeypatch)
+def test_group_stops_after_last_active_lane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mapped fixed-trip execution exits immediately after the slowest lane certifies."""
+    trips = _spy_advance_trips(monkeypatch)
     _route(monkeypatch, False)
     system = _setup(_model(maxiter=60), H2O)
     positions = tuple(_geometry(H2O, seed) for seed in range(4))
     result = evaluate_packed_systems((system,) * 4, positions)
 
     iterations = result.iterations.tolist()
-    assert bool(result.converged.all())
-    chunk = lane_evaluation._ADAPTIVE_CHUNK_TRIPS
-    trips = ranges[-1][1]
-    # iterations = 1 (initial map) + active trips; the last lane certifies
-    # inside the final chunk.
-    assert trips - chunk < max(iterations) - 1 <= trips < 60
-    assert ranges == [(i, i + chunk) for i in range(0, trips, chunk)]
+    assert result.converged is not None and bool(result.converged.all())
+    assert trips == [max(iterations) - 1]
+    assert trips[0] < 60
 
 
-@pytest.mark.parametrize("chunk", [1, 3, 16, 1000])
-def test_chunk_length_does_not_change_results(monkeypatch, chunk) -> None:
-    system = _setup(_model(maxiter=25), H2O)
-    positions = tuple(_geometry(H2O, seed) for seed in range(3))
-    charges = (0.0, 0.4, -0.3)
-
-    _route(monkeypatch, True)
-    reference = evaluate_packed_systems((system,) * 3, positions, chrg=charges)
-    _route(monkeypatch, False)
-    monkeypatch.setattr(lane_evaluation, "_ADAPTIVE_CHUNK_TRIPS", chunk)
-    ranges = _count_advances(monkeypatch)
-    adaptive = evaluate_packed_systems((system,) * 3, positions, chrg=charges)
-    _assert_same_leaves(reference, adaptive)
-    assert ranges[-1][1] <= 25
-    assert all(stop - start <= chunk for start, stop in ranges)
-
-
-def test_all_terminal_group_runs_no_trips(monkeypatch) -> None:
-    """A group whose lanes all fail at the initial map stops immediately."""
+def test_all_terminal_group_runs_no_trips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A group whose lanes all fail at the initial SCF map executes zero trips."""
     system = _setup(_model(), H2)
     positions = tuple(_geometry(H2, seed) for seed in range(2))
     _route(monkeypatch, True)
@@ -240,34 +286,41 @@ def test_all_terminal_group_runs_no_trips(monkeypatch) -> None:
         (system,) * 2, positions, chrg=(-6.5, -6.5)
     )
     _route(monkeypatch, False)
-    ranges = _count_advances(monkeypatch)
+    trips = _spy_advance_trips(monkeypatch)
     adaptive = evaluate_packed_systems(
         (system,) * 2, positions, chrg=(-6.5, -6.5)
     )
-    assert ranges == []
-    assert not bool(adaptive.converged.any())
+    assert trips == [0]
+    assert adaptive.converged is not None and not bool(adaptive.converged.any())
     _assert_same_leaves(reference, adaptive)
 
 
-def test_maxiter_exhaustion_runs_full_schedule(monkeypatch) -> None:
+def test_maxiter_exhaustion_runs_full_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unconverged groups execute all ``maxiter`` trips and match static leaves."""
     system = _setup(_model(maxiter=5), H2O)
     positions = tuple(_geometry(H2O, seed) for seed in range(2))
     _route(monkeypatch, True)
     reference = evaluate_packed_systems((system,) * 2, positions)
     _route(monkeypatch, False)
-    ranges = _count_advances(monkeypatch)
+    trips = _spy_advance_trips(monkeypatch)
     adaptive = evaluate_packed_systems((system,) * 2, positions)
-    assert ranges[-1][1] == 5
+    assert trips == [5]
     assert adaptive.iterations.tolist() == [6, 6]
-    assert not bool(adaptive.converged.any())
+    assert adaptive.converged is not None and not bool(adaptive.converged.any())
     _assert_same_leaves(reference, adaptive)
 
 
 # Failure and warning semantics
 
 
-def _outcome(call: Callable[[], object]):
+def _outcome(
+    call: Callable[[], object],
+) -> tuple[tuple[Any, ...], list[tuple[str, Any]]]:
+    """Capture outcome or exception tuple and emitted warnings from ``call``."""
     OutputHandler.clear_warnings()
+    outcome: tuple[Any, ...]
     try:
         result = call()
     except Exception as error:  # noqa: BLE001 - compared between routes
@@ -284,7 +337,7 @@ def _outcome(call: Callable[[], object]):
     return outcome, warnings
 
 
-_FAILURES = {
+_FAILURES: dict[str, tuple[tuple[int, ...], dict[str, Any], Any, Any, bool]] = {
     # name: (numbers, model settings, charges, spins, eager_status_policy)
     "unconverged-warn": (H2O, {"maxiter": 3}, None, None, True),
     "unconverged-force": (
@@ -304,12 +357,16 @@ _FAILURES = {
 
 
 @pytest.mark.parametrize("case", sorted(_FAILURES))
-def test_failure_semantics_match_static_schedule(monkeypatch, case) -> None:
+def test_failure_semantics_match_static_schedule(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """Warnings, exceptions, ``source_id``, and status leaves match static ``maxiter``."""
     numbers, settings, charges, spins, eager = _FAILURES[case]
     system = _setup(_model(**settings), numbers)
     positions = tuple(_geometry(numbers, seed) for seed in range(3))
 
-    def call():
+    def call() -> Any:
+        """Invoke ``evaluate_packed_systems`` for the failure fixture."""
         return evaluate_packed_systems(
             (system,) * 3,
             positions,
@@ -332,66 +389,84 @@ def test_failure_semantics_match_static_schedule(monkeypatch, case) -> None:
 
 
 def test_mixed_exhaustion_fixture_has_converged_and_unconverged_lanes(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The ``mixed-exhaustion`` fixture spans both certified and unconverged lanes."""
     _route(monkeypatch, False)
     system = _setup(_model(maxiter=8), H2O)
     positions = tuple(_geometry(H2O, seed) for seed in range(3))
     OutputHandler.clear_warnings()
     result = evaluate_packed_systems((system,) * 3, positions)
     OutputHandler.clear_warnings()
+    assert result.converged is not None
     converged = result.converged.tolist()
     assert any(converged) and not all(converged)
 
 
-# Routing
+# Routing and function transforms
 
 
-def _spy_adaptive(monkeypatch) -> list[int]:
-    calls: list[int] = []
-    original = lane_evaluation._evaluate_group_adaptive
-
-    def spy(*args, **kwargs):
-        calls.append(1)
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(lane_evaluation, "_evaluate_group_adaptive", spy)
-    return calls
-
-
-def test_eager_calls_use_the_adaptive_route(monkeypatch) -> None:
-    calls = _spy_adaptive(monkeypatch)
-    system = _setup(_model(), H2O)
+def test_eager_calls_use_the_adaptive_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both autograd-enabled and ``no_grad`` mapped calls stop early on CPU."""
+    trips = _spy_advance_trips(monkeypatch)
+    system = _setup(_model(maxiter=60), H2O)
     positions = tuple(_geometry(H2O, seed) for seed in range(2))
-    evaluate_packed_systems((system,) * 2, positions)
+    result = evaluate_packed_systems((system,) * 2, positions)
     with torch.no_grad():
         evaluate_packed_systems((system,) * 2, positions)
-    assert calls == [1, 1]
+    expected_trips = int(result.iterations.max()) - 1
+    assert 0 < expected_trips < 60
+    assert trips == [expected_trips, expected_trips]
 
 
 @pytest.mark.parametrize("transform", ["jacrev", "jacfwd", "jvp", "vmap"])
-def test_transforms_use_the_static_schedule(monkeypatch, transform) -> None:
-    """Inside torch.func transforms the full static schedule is used."""
-    system = _setup(_model(), H2O)
+def test_transforms_use_the_static_schedule(
+    monkeypatch: pytest.MonkeyPatch, transform: str
+) -> None:
+    """CPU ``torch.func`` transforms over mapped groups stop early and match static."""
+    maxiter = 60
+    system = _setup(_model(maxiter=maxiter), H2O)
     base = torch.stack([_geometry(H2O, seed) for seed in range(2)])
+    expected = evaluate_packed_systems((system,) * 2, tuple(base.unbind(0)))
+    expected_maps = int(expected.iterations.max())
 
     def energy(stacked: torch.Tensor) -> torch.Tensor:
+        """Sum total energy across a 2-lane mapped conformer group."""
         return evaluate_packed_systems(
             (system,) * 2, tuple(stacked.unbind(0))
         ).energy.sum()
 
-    calls = _spy_adaptive(monkeypatch)
-    if transform == "jacrev":
-        value = torch.func.jacrev(energy)(base)
-    elif transform == "jacfwd":
-        value = torch.func.jacfwd(energy)(base)
-    elif transform == "jvp":
-        value = torch.func.jvp(energy, (base,), (torch.ones_like(base),))[1]
-    else:
-        value = torch.func.vmap(energy)(torch.stack([base, base + 0.01]))
-    assert calls == []
+    def apply_transform() -> torch.Tensor:
+        """Evaluate the selected ``torch.func`` transform on ``energy``."""
+        if transform == "jacrev":
+            return torch.func.jacrev(energy)(base)
+        if transform == "jacfwd":
+            return torch.func.jacfwd(energy)(base)
+        if transform == "jvp":
+            return torch.func.jvp(energy, (base,), (torch.ones_like(base),))[1]
+        return torch.func.vmap(energy)(torch.stack([base, base + 0.01]))
 
-    # Eager reference through the adaptive route.
+    trips = _spy_advance_trips(monkeypatch)
+    maps = _spy_problem_maps(monkeypatch)
+    _route(monkeypatch, False)
+    value = apply_transform()
+    assert len(trips) == 1
+    assert 0 < trips[0] < maxiter
+    assert len(maps) == trips[0] + 1 < maxiter + 1
+    if transform != "vmap":
+        assert len(maps) == expected_maps
+
+    trips.clear()
+    maps.clear()
+    _route(monkeypatch, True)
+    static_value = apply_transform()
+    assert trips == [maxiter]
+    assert len(maps) == maxiter + 1
+    torch.testing.assert_close(value, static_value, **EXACT)
+
+    _route(monkeypatch, False)
     if transform == "vmap":
         reference = torch.stack(
             [energy(base).detach(), energy(base + 0.01).detach()]
@@ -402,43 +477,49 @@ def test_transforms_use_the_static_schedule(monkeypatch, transform) -> None:
         reference = (
             gradient.sum() if transform == "jvp" else gradient
         ).detach()
-    assert len(calls) >= 1
-    torch.testing.assert_close(value, reference, **TOL)
+    torch.testing.assert_close(
+        value, reference, rtol=TOL["rtol"], atol=TOL["atol"]
+    )
 
 
-def test_compiling_requires_the_static_schedule(monkeypatch) -> None:
-    assert not lane_evaluation._requires_static_schedule()
-    monkeypatch.setattr(torch.compiler, "is_compiling", lambda: True)
-    assert lane_evaluation._requires_static_schedule()
+def test_compiling_requires_the_static_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Active ``torch.compile`` tracing falls back to all ``maxiter`` trips."""
+    maxiter = 45
+    system = _setup(_model(maxiter=maxiter), H2O)
+    positions = tuple(_geometry(H2O, seed) for seed in range(2))
+    trips = _spy_advance_trips(monkeypatch)
+
+    early = evaluate_packed_systems((system,) * 2, positions)
+    assert len(trips) == 1 and 0 < trips[0] < maxiter
+
+    def always_compiling() -> bool:
+        """Simulate ``torch.compiler.is_compiling()`` returning ``True``."""
+        return True
+
+    trips.clear()
+    with monkeypatch.context() as m:
+        m.setattr(tensors_mod, "is_compiling", always_compiling)
+        compiled = evaluate_packed_systems((system,) * 2, positions)
+    assert trips == [maxiter]
+    _assert_same_leaves(compiled, early)
 
 
-def test_carry_rejects_lane_tensors_outside_the_dataclass_tree() -> None:
-    """A batched tensor held by a plain object cannot escape a vmap call."""
-
-    class Holder:
-        def __init__(self, value):
-            self.value = value
-
-    def stage(x):
-        lane_evaluation._carry({}, "state", (x * 2.0, Holder(x + 1.0)))
-        return x
-
-    with pytest.raises(RuntimeError, match="outside the carried"):
-        torch.func.vmap(stage)(torch.ones(2, 3))
-
-
-def test_forward_mode_dual_tensors_match_static_schedule(monkeypatch) -> None:
-    """Eager forward-mode AD (not a functorch level) runs adaptively."""
+def test_forward_mode_dual_tensors_match_static_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Eager forward-mode dual tensors stop early on CPU and match static ``maxiter``."""
     import torch.autograd.forward_ad as fwAD
 
-    system = _setup(_model(), H2O)
+    system = _setup(_model(maxiter=45), H2O)
     positions = [_geometry(H2O, seed) for seed in range(2)]
     generator = torch.Generator().manual_seed(3)
     tangents = [
         torch.randn(p.shape, generator=generator, dtype=DTYPE)
         for p in positions
     ]
-    calls = _spy_adaptive(monkeypatch)
+    trips = _spy_advance_trips(monkeypatch)
     tangent_out = {}
     for static in (True, False):
         _route(monkeypatch, static)
@@ -447,8 +528,11 @@ def test_forward_mode_dual_tensors_match_static_schedule(monkeypatch) -> None:
                 fwAD.make_dual(p, t) for p, t in zip(positions, tangents)
             )
             energy = evaluate_packed_systems((system,) * 2, dual).energy
-            tangent_out[static] = fwAD.unpack_dual(energy).tangent.clone()
-    assert calls == [1]
+            tangent = fwAD.unpack_dual(energy).tangent
+            assert tangent is not None
+            tangent_out[static] = tangent.clone()
+    assert trips[0] == 45
+    assert 0 < trips[1] < 45
     assert float(tangent_out[False].abs().max()) > 0.0
     torch.testing.assert_close(tangent_out[True], tangent_out[False], **EXACT)
 
@@ -456,8 +540,10 @@ def test_forward_mode_dual_tensors_match_static_schedule(monkeypatch) -> None:
 # Higher-order ordinary autograd
 
 
-def test_second_order_autograd_matches_static_schedule(monkeypatch) -> None:
-    """Double backward through the adaptive route (no ``torch.func``)."""
+def test_second_order_autograd_matches_static_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Double backward through early-stopped ``vmap`` matches static ``maxiter``."""
     par = ParamModule(GFN1_XTB, device=DEVICE, dtype=DTYPE)
     par.set_differentiable("element", "O", "gam")
     (gam,) = (p for p in par.parameters() if p.requires_grad)
@@ -466,6 +552,7 @@ def test_second_order_autograd_matches_static_schedule(monkeypatch) -> None:
     directions = tuple(
         torch.randn((3, 3), generator=generator, dtype=DTYPE) for _ in range(2)
     )
+    trips = _spy_advance_trips(monkeypatch)
 
     outputs = {}
     for static in (True, False):
@@ -474,18 +561,19 @@ def test_second_order_autograd_matches_static_schedule(monkeypatch) -> None:
             _geometry(H2O, seed).requires_grad_(True) for seed in range(2)
         )
         result = evaluate_packed_systems((system,) * 2, positions)
-        assert bool(result.converged.all())
+        assert result.converged is not None and bool(result.converged.all())
         gradient = torch.autograd.grad(
             result.energy.sum(), positions, create_graph=True
         )
         directional = sum((g * v).sum() for g, v in zip(gradient, directions))
-        # Hessian-vector product and d2E / d(gam) d(positions) . v
-        # The parameter-dependent setup graph is shared by both routes.
+        assert isinstance(directional, torch.Tensor)
         second = torch.autograd.grad(
             directional, (*positions, gam), retain_graph=True
         )
         outputs[static] = tuple(g.detach() for g in (*gradient, *second))
 
+    assert trips[0] == 30
+    assert 0 < trips[1] < 30
     for a, b in zip(outputs[True], outputs[False]):
         assert float(a.abs().max()) > 0.0
         torch.testing.assert_close(a, b, **EXACT)
@@ -494,12 +582,29 @@ def test_second_order_autograd_matches_static_schedule(monkeypatch) -> None:
 # Lanes finishing at different iterations
 
 
-def test_unequal_lane_iterations_match_and_freeze(monkeypatch) -> None:
-    """Earlier-certified lanes stay frozen while later lanes continue."""
+def _snapshot_batched_state(state: object) -> dict[str, torch.Tensor]:
+    """Unwrap and clone lane-batched tensor leaves of ``_SolverControlState``."""
+    ft = torch._C._functorch
+    captured: dict[str, torch.Tensor] = {}
+    for path, leaf in tensor_leaves(state):
+        if not ft.is_batchedtensor(leaf):
+            continue
+        raw = unwrap_functorch_tensor(leaf, allow_vmap=True)
+        assert raw is not None
+        with disable_functorch():
+            captured[path] = raw.detach().clone()
+    return captured
+
+
+def test_unequal_lane_iterations_match_and_freeze(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Earlier-certified lanes stay frozen while remaining lanes continue."""
     system = _setup(_model(maxiter=40), H2O)
     charges = (0.0, 0.4, -0.3)
 
-    def call():
+    def call() -> tuple[Any, tuple[torch.Tensor, ...]]:
+        """Evaluate energies and position gradients across heterogeneous lanes."""
         positions = tuple(
             _geometry(H2O, seed).requires_grad_(True) for seed in range(3)
         )
@@ -511,16 +616,24 @@ def test_unequal_lane_iterations_match_and_freeze(monkeypatch) -> None:
     static, static_gradient = call()
 
     _route(monkeypatch, False)
-    # One snapshot per trip (the freeze check below counts trips).
-    monkeypatch.setattr(lane_evaluation, "_ADAPTIVE_CHUNK_TRIPS", 1)
-    snapshots: list[tuple[torch.Tensor, ...]] = []
-    original = lane_evaluation._group_active
+    snapshots: list[dict[str, torch.Tensor]] = []
+    original_start = FixedTripControl.start
+    original_step = solver_mod._solver_control_step
 
-    def recording(capture, state):
-        snapshots.append(tuple(leaf.detach().clone() for leaf in state))
-        return original(capture, state)
+    def recording_start(self: FixedTripControl, guess: torch.Tensor) -> Any:
+        """Record initial post-``start`` lane state (0 executed trips)."""
+        state = original_start(self, guess)
+        snapshots.append(_snapshot_batched_state(state))
+        return state
 
-    monkeypatch.setattr(lane_evaluation, "_group_active", recording)
+    def recording_step(*args: Any, **kwargs: Any) -> Any:
+        """Record lane state after each executed fixed-trip pass."""
+        state = original_step(*args, **kwargs)
+        snapshots.append(_snapshot_batched_state(state))
+        return state
+
+    monkeypatch.setattr(FixedTripControl, "start", recording_start)
+    monkeypatch.setattr(solver_mod, "_solver_control_step", recording_step)
     adaptive, adaptive_gradient = call()
 
     iterations = adaptive.iterations.tolist()
@@ -532,18 +645,25 @@ def test_unequal_lane_iterations_match_and_freeze(monkeypatch) -> None:
     assert static.iterations.tolist() == iterations
     assert static.converged.tolist() == adaptive.converged.tolist()
 
-    # Snapshot k is the carried state after k trips; a lane certified after
-    # ``iterations - 1`` active trips. No carried leaf of a finished lane
-    # changes in the trips that later lanes still run.
     assert len(snapshots) == max(iterations)
     for lane, count in enumerate(iterations):
         done = count - 1
-        for later in snapshots[done + 1 :]:
-            for frozen, leaf in zip(snapshots[done], later):
-                torch.testing.assert_close(leaf[lane], frozen[lane], **EXACT)
+        frozen_state = snapshots[done]
+        assert frozen_state
+        for later_state in snapshots[done + 1 :]:
+            assert set(later_state) == set(frozen_state)
+            for path, frozen_leaf in frozen_state.items():
+                torch.testing.assert_close(
+                    later_state[path][lane],
+                    frozen_leaf[lane],
+                    msg=path,
+                    **EXACT,
+                )
     first, last = min(iterations) - 1, max(iterations) - 1
     late = iterations.index(max(iterations))
     assert any(
-        not torch.equal(a[late], b[late])
-        for a, b in zip(snapshots[first], snapshots[last])
+        not torch.equal(
+            snapshots[first][path][late], snapshots[last][path][late]
+        )
+        for path in snapshots[first]
     )

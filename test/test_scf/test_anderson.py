@@ -35,6 +35,7 @@ from dxtb._src.scf import (
 )
 from dxtb._src.scf import anderson as anderson_module
 from dxtb._src.scf import anderson_mix
+from dxtb._src.scf import solver as solver_module
 from dxtb._src.scf.anderson import AndersonConvergerSettings
 from dxtb._src.scf.problem import SCFProblem, SCFVariable
 
@@ -169,9 +170,7 @@ def test_anderson_transition_preserves_prior_state_immutability(
 
 @pytest.mark.parametrize("maxiter", [0, 1, 2])
 @pytest.mark.parametrize("mix_guess", [False, True])
-def test_anderson_finite_budget(
-    maxiter: int, mix_guess: bool
-) -> None:
+def test_anderson_finite_budget(maxiter: int, mix_guess: bool) -> None:
     """The six budget cases retain expected map counts and final values."""
     result = _run_anderson(
         maxiter=maxiter,
@@ -295,6 +294,7 @@ def test_anderson_converged_accelerated_step_does_not_advance_history(
     outcome = solve_common(guess, settings, constant_residual)
     assert outcome.converged.item() is True
     assert int(outcome.iterations) == 2
+    assert outcome.executed_trips == 1
     torch.testing.assert_close(
         outcome.map_result.mapped_x,
         constant_residual(guess + increment * settings.damp_init).mapped_x,
@@ -303,12 +303,31 @@ def test_anderson_converged_accelerated_step_does_not_advance_history(
         outcome.residual,
         torch.tensor([0.3125**0.5, 0.5], dtype=torch.float64),
     )
-    assert [step for step, _, _ in calls] == [1, 2, 3, 4]
+    assert [step for step, _, _ in calls] == [1, 2]
     assert calls[0][1] is not None and calls[0][1].item()
     assert calls[1][1] is not None and not calls[1][1].item()
     torch.testing.assert_close(calls[1][2].x_hist, calls[0][2].x_hist)
     torch.testing.assert_close(calls[1][2].f_hist, calls[0][2].f_hist)
-    for _, transition_active, state in calls[2:]:
+
+    def disable_early_stop(_active: torch.Tensor) -> bool:
+        """Force the static ``maxiter`` schedule to exercise frozen trips."""
+        return False
+
+    calls.clear()
+    with monkeypatch.context() as m:
+        m.setattr(
+            solver_module, "_can_stop_fixed_trip_early", disable_early_stop
+        )
+        static_outcome = solve_common(guess, settings, constant_residual)
+    assert static_outcome.executed_trips == 3
+    assert [step for step, _, _ in calls] == [1, 2, 3, 4]
+    torch.testing.assert_close(
+        outcome.map_result.mapped_x,
+        static_outcome.map_result.mapped_x,
+        rtol=0.0,
+        atol=0.0,
+    )
+    for _, transition_active, state in calls[1:]:
         assert transition_active is not None and not transition_active.item()
         torch.testing.assert_close(state.x_hist, calls[0][2].x_hist)
         torch.testing.assert_close(state.f_hist, calls[0][2].f_hist)
@@ -427,6 +446,24 @@ def test_anderson_history_freezes_after_two_active_transitions(
     outcome = solve_common(guess, settings, affine)
     assert outcome.converged.item() is True
     assert int(outcome.iterations) == 4
+    assert outcome.executed_trips == 3
+    assert [step for step, _, _ in states] == [1, 2, 3]
+    assert all(mask.item() for _, mask, _ in states[:2])
+    assert not states[2][1].item()
+    torch.testing.assert_close(states[2][2].x_hist, states[1][2].x_hist)
+    torch.testing.assert_close(states[2][2].f_hist, states[1][2].f_hist)
+
+    def disable_early_stop(_active: torch.Tensor) -> bool:
+        """Force the static ``maxiter`` schedule to exercise frozen trips."""
+        return False
+
+    states.clear()
+    with monkeypatch.context() as m:
+        m.setattr(
+            solver_module, "_can_stop_fixed_trip_early", disable_early_stop
+        )
+        static_outcome = solve_common(guess, settings, affine)
+    assert static_outcome.executed_trips == 4
     assert [step for step, _, _ in states] == [1, 2, 3, 4]
     assert all(mask.item() for _, mask, _ in states[:2])
     assert all(not mask.item() for _, mask, _ in states[2:])
@@ -606,7 +643,9 @@ def test_anderson_settings_rejects_broyden_and_resolves_damping() -> None:
                             config.strategy.stages[0],
                             converger=AndersonConverger(
                                 replace(
-                                    config.strategy.stages[0].converger.settings,
+                                    config.strategy.stages[
+                                        0
+                                    ].converger.settings,
                                     generations=0,
                                 )
                             ),
