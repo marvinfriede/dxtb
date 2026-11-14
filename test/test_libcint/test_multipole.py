@@ -90,7 +90,7 @@ def libcint_moment(
 ) -> Tensor:
     """Multipole integral from normalized libcint shells."""
     ihelp = IndexHelper.from_numbers(numbers, par)
-    setup = setup_libcint(Basis(numbers, par, ihelp, **dd), force_cpu=True)
+    setup = setup_libcint(Basis(numbers, par, ihelp, **dd).cpu())
     return build_multipole_libcint(setup, positions, intstring)
 
 
@@ -128,7 +128,9 @@ def run_single(dtype: torch.dtype, name: str, gfn: str) -> None:
     positions = sample["positions"].to(**dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
     bas = Basis(numbers, par, ihelp, **dd)
-    libcint_basis, structure = bas.create_libcint(positions)
+    libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(
+        positions
+    )
 
     def _run(i: int) -> None:
         # Native j/jj integrals are already ket-centered and normalized via
@@ -444,7 +446,7 @@ def test_standalone_origin_centered_builders_match_pytorch(gfn: str) -> None:
     ihelp = IndexHelper.from_numbers(numbers, par)
     bas = Basis(numbers, par, ihelp, **dd)
     pt_setup = setup_pytorch(bas)
-    lc_setup = setup_libcint(bas, force_cpu=True)
+    lc_setup = setup_libcint(bas)
 
     dip_pt = build_dipole_pytorch(pt_setup, positions)
     dip_lc = build_dipole_libcint(lc_setup, positions)

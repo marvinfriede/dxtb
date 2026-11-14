@@ -32,7 +32,8 @@ from tad_mctc.typing import PathLike, Tensor, TensorLike
 
 from dxtb import IndexHelper
 from dxtb._src.param import Param, ParamModule
-from dxtb._src.typing import Callable, Self, override
+from dxtb._src.typing import Any, Callable, Self, override
+from dxtb._src.utils.tensors import normalize_device
 from dxtb._src.xtb.h0 import (
     H0Setup,
     build_hcore,
@@ -118,9 +119,17 @@ class BaseHamiltonian(HamiltonianABC, TensorLike):
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
         setup: H0Setup | None = None,
-        **_,
+        **kwargs: Any,
     ) -> None:
-        super().__init__(device, dtype)
+        resolved_device = (
+            numbers.device if device is None else normalize_device(device)
+        )
+        resolved_dtype = (
+            par.dtype
+            if dtype is None and isinstance(par, ParamModule)
+            else dtype
+        )
+        super().__init__(resolved_device, resolved_dtype)
 
         # check device of input tensors
         if any(tensor.device != self.device for tensor in (numbers, ihelp)):
@@ -132,11 +141,21 @@ class BaseHamiltonian(HamiltonianABC, TensorLike):
         if par.is_none("hamiltonian"):
             raise RuntimeError("Parametrization does not specify Hamiltonian.")
 
-        setup = (
-            setup_h0(numbers, par, ihelp, device=device, dtype=dtype)
-            if setup is None
-            else setup
-        )
+        has_custom_cn = "cn" in kwargs
+        cn = kwargs.pop("cn", None)
+        if setup is None:
+            setup = setup_h0(
+                numbers,
+                par,
+                ihelp,
+                device=self.device,
+                dtype=self.dtype,
+                cn=cn,
+            )
+            if has_custom_cn and cn is None:
+                setup = replace(setup, cn=None)
+        elif has_custom_cn:
+            setup = replace(setup, cn=cn)
         self.setup = setup
         self.numbers = setup.numbers
         self.unique = setup.unique

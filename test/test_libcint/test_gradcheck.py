@@ -60,12 +60,13 @@ def gradchecker(
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
     bas = Basis(numbers, par, ihelp, **dd)
+    lc_setup = setup_libcint(bas.cpu())
 
     # variables to be differentiated
     pos = positions.clone().requires_grad_(True)
 
     def func(pos: Tensor) -> Tensor:
-        libcint_basis, structure = bas.create_libcint(pos)
+        libcint_basis, structure = lc_setup.create_libcint(pos)
         libcint_basis = libcint_basis.replace(spherical=False)
         return libcint.int1e(intstr, libcint_basis, structure)
 
@@ -130,9 +131,7 @@ def gradchecker_batch(
     for nums in numbers:
         nums = deflate(nums)
         ih = IndexHelper.from_numbers(nums, par)
-        setups.append(
-            setup_libcint(Basis(nums, par, ih, **dd), force_cpu=False)
-        )
+        setups.append(setup_libcint(Basis(nums, par, ih, **dd).cpu()))
 
     # variables to be differentiated
     pos = positions.clone().requires_grad_(True)

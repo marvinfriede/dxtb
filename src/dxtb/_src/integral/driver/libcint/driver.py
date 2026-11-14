@@ -98,7 +98,6 @@ class LibcintIntegralSetup(Node):
     coeffs: tuple[Tensor, ...] = child()
     active_atoms: Tensor | None = child(default=None, keep_dtype=True)
     shell_layout: ShellLayout = context()
-    force_cpu: bool = context(default=True)
 
     def _validate(self) -> None:
         if self.index.batch_mode != 0:
@@ -107,25 +106,24 @@ class LibcintIntegralSetup(Node):
             raise ValueError(
                 "Libcint setup numbers must match IndexHelper atom shape."
             )
-        if self.force_cpu:
-            tensors: list[Tensor] = [
-                self.numbers,
-                *self.alphas,
-                *self.coeffs,
-                self.index.shells_per_atom,
-                self.index.shells_to_ushell,
-                self.index.angular,
-                self.index.ushells_per_unique,
-                self.index.unique_angular,
-                self.index.shells_to_atom,
-                self.index.orbitals_to_shell,
-            ]
-            if self.active_atoms is not None:
-                tensors.append(self.active_atoms)
-            if any(tensor.device.type != "cpu" for tensor in tensors):
-                raise ValueError(
-                    "force_cpu=True requires CPU-resident libcint setup tensors."
-                )
+        tensors: list[Tensor] = [
+            self.numbers,
+            *self.alphas,
+            *self.coeffs,
+            self.index.shells_per_atom,
+            self.index.shells_to_ushell,
+            self.index.angular,
+            self.index.ushells_per_unique,
+            self.index.unique_angular,
+            self.index.shells_to_atom,
+            self.index.orbitals_to_shell,
+        ]
+        if self.active_atoms is not None:
+            tensors.append(self.active_atoms)
+        if any(tensor.device.type != "cpu" for tensor in tensors):
+            raise ValueError(
+                "LibcintIntegralSetup requires CPU-resident setup tensors."
+            )
 
     def _convert_child(
         self,
@@ -134,9 +132,8 @@ class LibcintIntegralSetup(Node):
         device: torch.device | str | None,
         dtype: torch.dtype | None,
     ) -> object:
-        if self.force_cpu:
-            device = torch.device("cpu")
-        return super()._convert_child(name, value, device, dtype)
+        del device
+        return super()._convert_child(name, value, torch.device("cpu"), dtype)
 
     def create_libcint(
         self,
@@ -153,7 +150,7 @@ class LibcintIntegralSetup(Node):
                 f"Expected positions of shape {(*self.numbers.shape, 3)}, "
                 f"got {tuple(positions.shape)}."
             )
-        if self.force_cpu and positions.device.type != "cpu":
+        if positions.device.type != "cpu":
             positions = positions.to(device=torch.device("cpu"))
 
         shells_by_element: dict[int, list[libcint.Shell]] = {}
@@ -184,7 +181,7 @@ class LibcintIntegralSetup(Node):
                     f"Expected mask of shape {tuple(numbers.shape)}, "
                     f"got {tuple(mask.shape)}."
                 )
-            if self.force_cpu and mask.device.type != "cpu":
+            if mask.device.type != "cpu":
                 mask = mask.to(device=torch.device("cpu"))
             if self.active_atoms is not None:
                 mask = mask & (numbers > 0)
@@ -202,12 +199,8 @@ class LibcintIntegralSetup(Node):
         )
 
 
-def setup_libcint(
-    basis: Basis,
-    *,
-    force_cpu: bool = True,
-) -> LibcintIntegralSetup:
-    """Build the authoritative libcint setup Node from a single-System Basis."""
+def setup_libcint(basis: Basis) -> LibcintIntegralSetup:
+    """Build the authoritative CPU-resident libcint setup Node from ``basis``."""
     ihelp = basis.ihelp
     if ihelp.batch_mode != 0:
         raise ValueError("Libcint setup requires one single System.")
@@ -234,11 +227,9 @@ def setup_libcint(
         ihelp.shells_to_atom,
         ihelp.orbitals_to_shell,
     )
-    if force_cpu and any(
-        tensor.device.type != "cpu" for tensor in source_tensors
-    ):
+    if any(tensor.device.type != "cpu" for tensor in source_tensors):
         raise ValueError(
-            "force_cpu=True requires CPU-resident libcint setup tensors."
+            "setup_libcint requires CPU-resident basis and IndexHelper tensors."
         )
 
     expansion = basis.expand()
@@ -248,14 +239,13 @@ def setup_libcint(
 
     numbers = basis.numbers.clone()
     active_atoms: Tensor | None = None
-    if numbers.device.type != "meta":
-        num_list = _to_int_list(basis.numbers)
-        if any(z <= 0 for z in num_list):
-            active_atoms = torch.tensor(
-                [idx for idx, z in enumerate(num_list) if z > 0],
-                dtype=torch.long,
-                device=numbers.device,
-            )
+    num_list = _to_int_list(basis.numbers)
+    if any(z <= 0 for z in num_list):
+        active_atoms = torch.tensor(
+            [idx for idx, z in enumerate(num_list) if z > 0],
+            dtype=torch.long,
+            device=numbers.device,
+        )
 
     return LibcintIntegralSetup(
         index=ihelp,
@@ -264,5 +254,4 @@ def setup_libcint(
         coeffs=expansion.coeffs,
         active_atoms=active_atoms,
         shell_layout=shell_layout,
-        force_cpu=force_cpu,
     )

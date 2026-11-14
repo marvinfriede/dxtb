@@ -319,7 +319,6 @@ def _single(
         ihelp,
         driver_type=driver,
         intlevel=labels.INTLEVEL_OVERLAP,
-        force_cpu_for_libcint=True,
         device=positions.device,
         dtype=positions.dtype,
     )

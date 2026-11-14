@@ -1959,9 +1959,6 @@ class Model:
                     algorithm=config.ints.algorithm,
                     device=dd["device"],
                     dtype=dd["dtype"],
-                    force_cpu_for_libcint=(
-                        config.ints.driver == labels.INTDRIVER_LIBCINT
-                    ),
                 )
 
         OutputHandler.write_stdout("done\n", v=4)

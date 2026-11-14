@@ -23,8 +23,6 @@ The GFN2-xTB Hamiltonian.
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 import torch
 
 from dxtb import IndexHelper
@@ -34,7 +32,7 @@ from dxtb._src.param.module import ParamModule
 from dxtb._src.typing import Any, Tensor
 
 from .base import BaseHamiltonian
-from .h0 import gather_hscale, setup_h0
+from .h0 import gather_hscale
 
 __all__ = ["GFN2Hamiltonian"]
 
@@ -53,21 +51,11 @@ class GFN2Hamiltonian(BaseHamiltonian):
         dtype: torch.dtype | None = None,
         **kwargs: Any,
     ) -> None:
-        setup = kwargs.pop("setup", None)
-        has_custom_cn = "cn" in kwargs
-        cn = kwargs.pop("cn", None)
-        if setup is None:
-            setup = setup_h0(
-                numbers, par, ihelp, device=device, dtype=dtype, cn=cn
-            )
-            if has_custom_cn and cn is None:
-                setup = replace(setup, cn=None)
-        elif has_custom_cn:
-            setup = replace(setup, cn=cn)
-        super().__init__(numbers, par, ihelp, device, dtype, setup=setup)
+        suppress_cn = "cn" in kwargs and kwargs["cn"] is None
+        super().__init__(numbers, par, ihelp, device, dtype, **kwargs)
 
         # coordination number function
-        if self.cn is None and not (has_custom_cn and cn is None):
+        if self.cn is None and not suppress_cn:
             # pylint: disable=import-outside-toplevel
             from tad_mctc.ncoord import cn_gfn2
 

@@ -295,7 +295,7 @@ def test_basis_construction_and_export() -> None:
     if has_libcint:
         from dxtb._src.integral.driver.libcint import setup_libcint
 
-        lc_setup = setup_libcint(b_gfn1.cpu(), force_cpu=True)
+        lc_setup = setup_libcint(b_gfn1.cpu())
         for a_ref, a_lc in zip(exp_ref.alphas, lc_setup.alphas):
             torch.testing.assert_close(a_ref.cpu(), a_lc, atol=0.0, rtol=0.0)
         for c_ref, c_lc in zip(exp_ref.coeffs, lc_setup.coeffs):

@@ -29,6 +29,7 @@ import torch
 from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
+from dxtb._src.integral.driver.libcint import setup_libcint
 from dxtb._src.typing import DD, Tensor
 
 if has_libcint is True:
@@ -52,13 +53,17 @@ def explicit(name: str, dd: DD, tol: float) -> None:
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
     bas = Basis(numbers, par, ihelp, **dd)
-    libcint_basis, structure = bas.create_libcint(positions)
+    libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(
+        positions
+    )
 
     # (3, norb, norb) -> (norb, norb, 3), required for reduction with extra=True
     grad = libcint.int1e("ipovlp", libcint_basis, structure).movedim(0, -1)
 
     # (norb, norb, 3) -> (nat, norb, 3)
-    grad = ihelp.reduce_orbital_to_atom(grad, dim=-3, extra=True)
+    grad = ihelp.to(device="cpu").reduce_orbital_to_atom(
+        grad, dim=-3, extra=True
+    )
 
     # also account for center j and negative because the integral calculates
     # the nabla w.r.t. the spatial coordinate, not the basis central position
@@ -96,7 +101,7 @@ def autograd(name: str, dd: DD, tol: float) -> None:
 
     # variable to be differentiated
     pos = positions.clone().requires_grad_(True)
-    libcint_basis, structure = bas.create_libcint(pos)
+    libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(pos)
     s = libcint.overlap(libcint_basis, structure)
 
     (g,) = torch.autograd.grad(s.sum(), pos)
@@ -131,9 +136,13 @@ def num_grad(bas: Basis, ihelp: IndexHelper, positions: Tensor) -> torch.Tensor:
 
     positions = positions.clone().detach()
 
+    lc_setup = setup_libcint(bas.cpu())
+
     def compute_overlap(positions: torch.Tensor) -> torch.Tensor:
-        libcint_basis, structure = bas.create_libcint(positions)
-        return libcint.overlap(libcint_basis, structure)
+        libcint_basis, structure = lc_setup.create_libcint(positions)
+        return libcint.overlap(libcint_basis, structure).to(
+            device=positions.device
+        )
 
     delta = 1e-6
 

@@ -25,7 +25,7 @@ from the parametrization. The basis set can also be printed in various formats.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple
+from typing import NamedTuple
 
 import torch
 from tad_mctc.data import pse
@@ -37,9 +37,6 @@ from dxtb._src.typing import Literal, Self, Tensor, TensorLike, override
 from .indexhelper import IndexHelper
 from .ortho import orthogonalize
 from .slater import slater_to_gauss
-
-if TYPE_CHECKING:
-    from dxtb._src.exlibs import libcint
 
 __all__ = ["Basis", "CGTOExpansion"]
 
@@ -124,15 +121,12 @@ class Basis(TensorLike):
         )
         self.numbers = numbers
         self.unique: Tensor = torch.unique(numbers)
-        self.meta = (
-            None
-            if isinstance(par, ParamModule) and par.is_none("meta")
-            else par.meta
-        )
         self.ihelp = ihelp
 
         if not isinstance(par, ParamModule):
             par = ParamModule(par, **self.dd)
+
+        self.meta = None if par.is_none("meta") else par.meta
 
         if par.is_none("hamiltonian.xtb.sto"):
             self.sto: Literal["gfn1", "gfn2"] = "gfn2"
@@ -149,11 +143,8 @@ class Basis(TensorLike):
         self.valence = par.get_elem_valence(self.unique)
         self.shells = par.get_elem_shells(self.unique)
 
-        # When a CUDA device is used, the parametrization remains on CPU, even
-        # when the libcint library is requested via the `force_cpu_for_libcint`
-        # flag. This flag only moves the positions and the IndexHelper (see
-        # `setup_integral_evaluation`). We are moving here, because we do not
-        # want to move the whole parametrization back and forth.
+        # Keep extracted basis tensors on the requested target device without
+        # mutating the device of an externally owned ParamModule.
         self.numbers = self.numbers.to(device=self.device)
         self.unique = self.unique.to(device=self.device)
         self.ihelp = (
@@ -437,22 +428,6 @@ class Basis(TensorLike):
             raise ValueError("No atoms for basis set printout found.")
 
         return fulltxt
-
-    def create_libcint(
-        self, positions: Tensor, mask: Tensor | None = None
-    ) -> tuple[libcint.Basis, libcint.Structure]:
-        """Create call-local libcint basis and structure for positions."""
-        if self.ihelp.batch_mode != 0 or self.unique.ndim > 1:
-            raise NotImplementedError(
-                "Libcint Basis conversion requires a single Structure."
-            )
-
-        # pylint: disable=import-outside-toplevel
-        from dxtb._src.integral.driver.libcint.driver import setup_libcint
-
-        return setup_libcint(self, force_cpu=False).create_libcint(
-            positions, mask=mask
-        )
 
 
 def format_contraction(shells: list[str], ngauss: Tensor) -> str:

@@ -255,9 +255,7 @@ def test_position_and_parameter_derivatives_and_transforms(
     torch.testing.assert_close(
         core_parameter_gradient, fd_param_grad, rtol=1e-6, atol=1e-7
     )
-    torch.testing.assert_close(
-        core_mixed, fd_mixed_grad, rtol=1e-6, atol=1e-7
-    )
+    torch.testing.assert_close(core_mixed, fd_mixed_grad, rtol=1e-6, atol=1e-7)
 
     pos_higher = positions.clone().requires_grad_(True)
     first = position_gradient(core, pos_higher)
@@ -265,9 +263,7 @@ def test_position_and_parameter_derivatives_and_transforms(
     second = torch.autograd.grad(
         (first * direction_ones).sum(), pos_higher, create_graph=True
     )[0]
-    third = torch.autograd.grad(
-        (second * direction_ones).sum(), pos_higher
-    )[0]
+    third = torch.autograd.grad((second * direction_ones).sum(), pos_higher)[0]
     assert torch.isfinite(second).all()
     assert torch.isfinite(third).all()
 
@@ -407,6 +403,35 @@ def test_node_screening_chunking_checkpoint_and_missing_plan() -> None:
         setup_integrals(Basis(batched_numbers, GFN1_XTB, batched_ihelp))
 
 
+def test_pytorch_setup_index_identity_validation_and_meta_conversion() -> None:
+    """setup_integrals preserves Basis.ihelp identity, validates kernel/device, and converts to meta."""
+    numbers = samples["H2O"]["numbers"]
+    par = ParamModule(GFN1_XTB, dtype=torch.float64)
+    ihelp = IndexHelper.from_numbers(numbers, par)
+    basis = Basis(numbers, par, ihelp, dtype=torch.float64)
+    assert basis.ihelp is ihelp
+
+    setup = setup_integrals(basis)
+    assert setup.index is basis.ihelp
+    assert setup.index is ihelp
+
+    with pytest.raises(ValueError, match="Unknown integral algorithm"):
+        setup_integrals(basis, algorithm="not_a_kernel")
+
+    meta_setup = setup.to(device="meta")
+    meta_leaves, _ = tree_flatten(meta_setup)
+    assert all(
+        leaf.device.type == "meta"
+        for leaf in meta_leaves
+        if isinstance(leaf, Tensor)
+    )
+
+    mismatched_basis = Basis(numbers, par, ihelp, dtype=torch.float64)
+    mismatched_basis.ihelp = ihelp.to(device="meta")
+    with pytest.raises(ValueError, match="must match Basis device"):
+        setup_integrals(mismatched_basis)
+
+
 @pytest.mark.skipif(
     not torch._dynamo.is_dynamo_supported(),
     reason="torch.compile is not supported for this Python/torch combination",
@@ -422,9 +447,9 @@ def test_node_plan_compiles_fullgraph_without_host_rebuild() -> None:
         return build_overlap(setup, geometry)
 
     torch._dynamo.reset()
-    actual = torch.compile(
-        eval_overlap, fullgraph=True, backend="aot_eager"
-    )(positions)
+    actual = torch.compile(eval_overlap, fullgraph=True, backend="aot_eager")(
+        positions
+    )
     torch.testing.assert_close(
         actual, eval_overlap(positions), rtol=1e-12, atol=1e-13
     )

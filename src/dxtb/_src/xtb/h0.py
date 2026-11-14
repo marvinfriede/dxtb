@@ -22,12 +22,6 @@ from tad_mctc.batch import real_pairs
 from tad_mctc.convert import any_to_tensor, symmetrize
 from tad_mctc.data import radii
 from tad_mctc.data.radii import ATOMIC_RADII
-from tad_mctc.tree import Node, child, context
-from tad_mctc.typing import Tensor
-from tad_mctc.units import EV2AU
-from tad_multicharge.model.eeq import EEQModel
-
-from dxtb import IndexHelper
 from tad_mctc.ncoord import (
     CNModel,
     cn_d3,
@@ -36,8 +30,14 @@ from tad_mctc.ncoord import (
     exp_count,
     gfn2_count,
 )
+from tad_mctc.tree import Node, child, context
+from tad_mctc.typing import Tensor
+from tad_mctc.units import EV2AU
+from tad_multicharge.model.eeq import EEQModel
+
+from dxtb import IndexHelper
 from dxtb._src.param import Param, ParamModule
-from dxtb._src.utils.tensors import structure_charge
+from dxtb._src.utils.tensors import normalize_device, structure_charge
 
 PAD = -1
 
@@ -284,13 +284,18 @@ def core_h0_setup(setup: H0Setup) -> H0SetupNode:
 
 def setup_h0_core(
     numbers: Tensor,
-    par: Param | ParamModule,
+    par: ParamModule,
     ihelp: IndexHelper,
     *,
     device: torch.device | None = None,
     dtype: torch.dtype | None = None,
 ) -> H0SetupNode:
     """Build and capture one H0 setup for the exact single-System path."""
+    if not isinstance(par, ParamModule):
+        raise TypeError(
+            "setup_h0_core requires a ParamModule instance, "
+            f"got {type(par).__name__}."
+        )
     return core_h0_setup(
         setup_h0(numbers, par, ihelp, device=device, dtype=dtype)
     )
@@ -311,7 +316,7 @@ def gather_hscale(
     shell = par.get("hamiltonian.xtb.shell")
 
     if method == "gfn1":
-        kpol = par.get("hamiltonian.xtb.kpol")
+        kpol = par.get("hamiltonian.xtb.kpol").to(**dd)
 
         # precompute kii values outside loop (slightly faster)
         kii: list[Tensor] = []
@@ -321,7 +326,7 @@ def gather_hscale(
                 kii.append(kpol)
             elif f"{label}{label}" in shell:
                 # Use view(-1)[0] to keep the value as a tensor.
-                kii.append(shell[f"{label}{label}"].param.view(-1)[0])
+                kii.append(shell[f"{label}{label}"].param.view(-1)[0].to(**dd))
             else:
                 kii.append(torch.tensor(1.0, **dd))
 
@@ -335,9 +340,9 @@ def gather_hscale(
                     key1 = f"{angular_labels[i]}{angular_labels[j]}"
                     key2 = f"{angular_labels[j]}{angular_labels[i]}"
                     if key1 in shell:
-                        value = shell[key1].param.view(-1)[0]
+                        value = shell[key1].param.view(-1)[0].to(**dd)
                     elif key2 in shell:
-                        value = shell[key2].param.view(-1)[0]
+                        value = shell[key2].param.view(-1)[0].to(**dd)
                     else:
                         value = (kii[i] + kii[j]) / 2.0
                 else:
@@ -349,12 +354,12 @@ def gather_hscale(
         return result
 
     if method == "gfn2":
-        wexp = par.get("hamiltonian.xtb.wexp")
+        wexp = par.get("hamiltonian.xtb.wexp").to(**dd)
 
         # ----------------------
         # Eq.37: Y(z^A_l, z^B_m)
         # ----------------------
-        zeta = par.get_elem_param(unique, "slater", pad_val=PAD)
+        zeta = par.get_elem_param(unique, "slater", pad_val=PAD).to(**dd)
         zi, zj = zeta.unsqueeze(-1), zeta.unsqueeze(-2)
         zmat = storch.safe_pow(
             2 * storch.safe_divide(storch.safe_sqrt(zi * zj), zi + zj), wexp
@@ -373,9 +378,9 @@ def gather_hscale(
                 # mentions this.
                 # tblite: xtb/gfn2.f90::new_gfn2_h0spec
                 if key1 in shell:
-                    value = shell[key1].param.view(-1)[0]
+                    value = shell[key1].param.view(-1)[0].to(**dd)
                 elif key2 in shell:
-                    value = shell[key2].param.view(-1)[0]
+                    value = shell[key2].param.view(-1)[0].to(**dd)
                 elif PAD not in (label_i, label_j):
                     key_ii, key_jj = (
                         f"{label_i}{label_i}",
@@ -386,8 +391,8 @@ def gather_hscale(
                             f"GFN2 Core Hamiltonian: missing shell parameters '{key_ii}'/'{key_jj}'."
                         )
                     value = 0.5 * (
-                        shell[key_ii].param.view(-1)[0]
-                        + shell[key_jj].param.view(-1)[0]
+                        shell[key_ii].param.view(-1)[0].to(**dd)
+                        + shell[key_jj].param.view(-1)[0].to(**dd)
                     )
                 else:
                     value = torch.tensor(1.0, **dd)  # dummy for padding
@@ -395,12 +400,12 @@ def gather_hscale(
         return result
 
     if method == "gfn0":
-        wexp = par.get("hamiltonian.xtb.wexp")
+        wexp = par.get("hamiltonian.xtb.wexp").to(**dd)
 
         # --------------------------------------------
         # Eq.10 (GFN0) / Eq.37 (GFN2): Y(z^A_l, z^B_m)
         # --------------------------------------------
-        zeta = par.get_elem_param(unique, "slater", pad_val=1)
+        zeta = par.get_elem_param(unique, "slater", pad_val=1).to(**dd)
         zi, zj = zeta.unsqueeze(-1), zeta.unsqueeze(-2)
         zweight = storch.safe_pow(
             2.0 * storch.safe_divide(storch.safe_sqrt(zi * zj), zi + zj), wexp
@@ -411,9 +416,9 @@ def gather_hscale(
             for j, label_j in enumerate(angular_labels):
                 key1, key2 = f"{label_i}{label_j}", f"{label_j}{label_i}"
                 if key1 in shell:
-                    value = par.get(f"hamiltonian.xtb.shell.{key1}")
+                    value = par.get(f"hamiltonian.xtb.shell.{key1}").to(**dd)
                 elif key2 in shell:
-                    value = par.get(f"hamiltonian.xtb.shell.{key2}")
+                    value = par.get(f"hamiltonian.xtb.shell.{key2}").to(**dd)
                 elif PAD in (label_i, label_j):
                     value = torch.tensor(1.0, **dd)
                 else:
@@ -436,12 +441,13 @@ def setup_h0(
     cn: CNModel | Callable[[Tensor, Tensor], Tensor] | None = None,
 ) -> H0Setup:
     """Gather all composition-dependent data needed to build H0."""
-    if device is not None and (
-        numbers.device != device or ihelp.device != device
-    ):
+    target_device = (
+        numbers.device if device is None else normalize_device(device)
+    )
+    if numbers.device != target_device or ihelp.device != target_device:
         raise ValueError("All input tensors must be on the same device")
     if not isinstance(par, ParamModule):
-        par = ParamModule(par, device=device, dtype=dtype)
+        par = ParamModule(par, device=target_device, dtype=dtype)
     if par.is_none("meta.name"):
         raise ValueError("The parametrization must specify a method name.")
     assert par.meta is not None
@@ -449,7 +455,7 @@ def setup_h0(
     if name not in ("gfn0", "gfn1", "gfn2"):
         raise ValueError(f"Unsupported Hamiltonian type: {par.meta.name}")
     dd = {
-        "device": numbers.device if device is None else device,
+        "device": target_device,
         "dtype": par.dtype if dtype is None else dtype,
     }
     unique = torch.unique(numbers)
@@ -459,25 +465,29 @@ def setup_h0(
 
     # atom-resolved parameters
     rad = ATOMIC_RADII(**dd)[unique]
-    en = par.get_elem_param(unique, "en", pad_val=PAD)
+    en = par.get_elem_param(unique, "en", pad_val=PAD).to(**dd)
     enscale = (
         torch.tensor(0.0, **dd)
         if par.is_none("hamiltonian.xtb.enscale")
-        else par.get("hamiltonian.xtb.enscale")
+        else par.get("hamiltonian.xtb.enscale").to(**dd)
     )
 
     # shell-resolved element parameters
     if name == "gfn2":
         valence = torch.ones(
-            len(ihelp.unique_angular), device=numbers.device, dtype=torch.bool
+            len(ihelp.unique_angular), device=target_device, dtype=torch.bool
         )
     else:
-        valence = par.get_elem_valence(unique, pad_val=PAD)
+        valence = par.get_elem_valence(unique, pad_val=PAD).to(
+            device=target_device
+        )
     element_pad = 0 if name == "gfn0" else PAD
-    kcn = par.get_elem_param(unique, "kcn", pad_val=element_pad)
-    selfenergy = par.get_elem_param(unique, "levels", pad_val=element_pad)
-    shpoly = par.get_elem_param(unique, "shpoly", pad_val=PAD)
-    refocc = par.get_elem_param(unique, "refocc", pad_val=PAD)
+    kcn = par.get_elem_param(unique, "kcn", pad_val=element_pad).to(**dd)
+    selfenergy = par.get_elem_param(unique, "levels", pad_val=element_pad).to(
+        **dd
+    )
+    shpoly = par.get_elem_param(unique, "shpoly", pad_val=PAD).to(**dd)
+    refocc = par.get_elem_param(unique, "refocc", pad_val=PAD).to(**dd)
 
     # shell-pair-resolved pair parameters
     hscale = gather_hscale(name, unique, ihelp, valence, par, dd)
@@ -485,7 +495,7 @@ def setup_h0(
     # produced when Model.setup runs inside torch.func.grad (notably on older
     # supported PyTorch versions). Atomic numbers are structural integer
     # inputs, so extract their scalar values individually for the pair lookup.
-    kpair = par.get_pair_param([int(number) for number in unique])
+    kpair = par.get_pair_param([int(number) for number in unique]).to(**dd)
 
     # unit conversion (dxtb keeps H0 in Hartree; parameter tables are in eV)
     selfenergy = selfenergy * EV2AU
@@ -523,17 +533,18 @@ def setup_h0(
             # electronic energy afterwards. dxtb keeps H0 in Hartree, so
             # convert every energy-like H0 table with tad-mctc's canonical
             # conversion here.
-            "kq": par.get_elem_param(unique, "kq", pad_val=0) * EV2AU,
-            "kqat": par.get_elem_param(unique, "kqat", pad_val=0) * EV2AU,
-            "h0rad": par.get_elem_param(unique, "h0rad", pad_val=1),
-            "kdiff": par.get("hamiltonian.xtb.kdiff"),
-            "enshell": par.get("hamiltonian.xtb.enshell"),
-            "enscale4": par.get("hamiltonian.xtb.enscale4"),
+            "kq": par.get_elem_param(unique, "kq", pad_val=0).to(**dd) * EV2AU,
+            "kqat": par.get_elem_param(unique, "kqat", pad_val=0).to(**dd)
+            * EV2AU,
+            "h0rad": par.get_elem_param(unique, "h0rad", pad_val=1).to(**dd),
+            "kdiff": par.get("hamiltonian.xtb.kdiff").to(**dd),
+            "enshell": par.get("hamiltonian.xtb.enshell").to(**dd),
+            "enscale4": par.get("hamiltonian.xtb.enscale4").to(**dd),
             "eeq_model": eeq,
             "cn_radii": radii.COV_D3(**dd),
             "cn_cutoff": _resolve_cn_cutoff(par.get("eeq.cutoff")),
-            "cn_max": par.get("eeq.cn_max"),
-            "cn_kcn": par.get("eeq.kcn"),
+            "cn_max": par.get("eeq.cn_max").to(**dd),
+            "cn_kcn": par.get("eeq.kcn").to(**dd),
         }
         cn_function = None
 

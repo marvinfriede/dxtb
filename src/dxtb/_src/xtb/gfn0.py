@@ -28,12 +28,12 @@ from functools import partial
 import torch
 from tad_mctc import Structure
 from tad_mctc.convert import any_to_tensor
+from tad_mctc.ncoord import CNModel, erf_count
 from tad_multicharge.model.base import SolveMode
 from tad_multicharge.model.eeq import EEQModel
 
 from dxtb import IndexHelper
 from dxtb._src.components.interactions import Potential
-from tad_mctc.ncoord import CNModel, erf_count
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import Any, Self, Tensor, override
 from dxtb._src.utils.tensors import structure_charge
@@ -56,9 +56,6 @@ class GFN0Hamiltonian(BaseHamiltonian):
         dtype: torch.dtype | None = None,
         **kwargs: Any,
     ) -> None:
-        if not isinstance(par, ParamModule):
-            par = ParamModule(par, device=device, dtype=dtype)
-
         super().__init__(
             numbers, par, ihelp, device, dtype, setup=kwargs.get("setup")
         )

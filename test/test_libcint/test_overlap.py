@@ -34,6 +34,7 @@ from tad_mctc.math import einsum
 from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint, has_pyscf
+from dxtb._src.integral.driver.libcint import setup_libcint
 from dxtb._src.typing import DD, Tensor
 
 if has_libcint is True:
@@ -111,14 +112,14 @@ def run_single(dtype: torch.dtype, name: str) -> None:
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
     bas = Basis(numbers, par, ihelp, **dd)
-    libcint_basis, structure = bas.create_libcint(positions)
+    libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(
+        positions
+    )
 
     # dxtb's libcint overlap (shells are unit-normalized at construction)
     dxtb_overlap = libcint.overlap(libcint_basis, structure)
     diag = dxtb_overlap.diagonal(dim1=-1, dim2=-2)
-    torch.testing.assert_close(
-        diag, torch.ones_like(diag), atol=tol, rtol=0.0
-    )
+    torch.testing.assert_close(diag, torch.ones_like(diag), atol=tol, rtol=0.0)
 
     # PySCF's M(...) disables primitive normalization on the nwchem Cartesian
     # coefficients, so normalize the PySCF reference before comparing.
@@ -185,14 +186,14 @@ def run_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
     bas = Basis(numbers, par, ihelp, **dd)
-    libcint_basis, structure = bas.create_libcint(positions)
+    libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(
+        positions
+    )
 
     # dxtb's libcint overlap (shells are unit-normalized at construction)
     dxtb_overlap = libcint.overlap(libcint_basis, structure)
     diag = dxtb_overlap.diagonal(dim1=-1, dim2=-2)
-    torch.testing.assert_close(
-        diag, torch.ones_like(diag), atol=tol, rtol=0.0
-    )
+    torch.testing.assert_close(diag, torch.ones_like(diag), atol=tol, rtol=0.0)
 
     # Normalize PySCF's unnormalized spherical reference overlap
     mol = M(numbers, positions, parse_arg=False)  # type: ignore
@@ -253,7 +254,9 @@ def run_grad(dtype: torch.dtype, name: str) -> None:
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
     bas = Basis(numbers, par, ihelp, **dd)
-    libcint_basis, structure = bas.create_libcint(positions)
+    libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(
+        positions
+    )
     int1 = libcint.int1e("ipovlp", libcint_basis, structure)
 
     mol = M(numbers, positions, parse_arg=False)  # type: ignore

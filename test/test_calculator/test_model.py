@@ -557,9 +557,13 @@ def test_calculator_holds_the_system() -> None:
     assert calc.opts is calc.system.config
 
 
-def test_calculator_model_parameter_updates_and_repeated_gradients_single_and_batch() -> None:
+def test_calculator_model_parameter_updates_and_repeated_gradients_single_and_batch() -> (
+    None
+):
     """Calculator prepares call-local setups so parameter backward and mutations work repeatedly."""
-    from dxtb._src.calculators.packed_result import build_calculator_lane_systems
+    from dxtb._src.calculators.packed_result import (
+        build_calculator_lane_systems,
+    )
 
     numbers_1d = torch.tensor([8, 1, 1], device=DEVICE)
     pos_1d = torch.tensor(
@@ -569,9 +573,7 @@ def test_calculator_model_parameter_updates_and_repeated_gradients_single_and_ba
     par.set_differentiable("element", "O", "gam")
     gam_param = par.get("element.O.gam")
 
-    calc_1d = Calculator(
-        numbers_1d, par, opts={"verbosity": 0}, **DD
-    )
+    calc_1d = Calculator(numbers_1d, par, opts={"verbosity": 0}, **DD)
     sys_initial = calc_1d.system
     assert calc_1d._ncalcs == 0
 
@@ -694,3 +696,212 @@ def test_packed_system_setup_captures_classical_cache_once(
         packed.classical_cache["Repulsion"].arep.sum(), arep
     )
     assert torch.isfinite(grad_arep).all() and grad_arep.abs().sum() > 0
+
+
+@pytest.mark.parametrize("method", ["gfn0", "gfn1", "gfn2"])
+@pytest.mark.parametrize(
+    "driver",
+    [
+        pytest.param("pytorch", id="pytorch"),
+        pytest.param(
+            "libcint",
+            id="libcint",
+            marks=pytest.mark.skipif(
+                not has_libcint, reason="libcint not available"
+            ),
+        ),
+    ],
+)
+def test_param_module_ownership_and_zero_eval_constructions(
+    method: str, driver: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Model owns one ParamModule; setup and geometry evaluation construct zero."""
+    from dxtb import GFN0_XTB, IndexHelper, labels
+
+    parametrization = {
+        "gfn0": GFN0_XTB,
+        "gfn1": GFN1_XTB,
+        "gfn2": GFN2_XTB,
+    }[method]
+    driver_id = (
+        labels.INTDRIVER_LIBCINT
+        if driver == "libcint"
+        else labels.INTDRIVER_PYTORCH
+    )
+    opts = {"verbosity": 0, "int_driver": driver_id}
+
+    numbers = torch.tensor([8, 1, 1], device=DEVICE)
+    pos1 = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.81], [0.0, 1.75, -0.45]], **DD
+    )
+    pos2 = pos1 + torch.tensor(
+        [[0.0, 0.0, 0.03], [0.04, -0.02, 0.05], [-0.03, 0.02, -0.04]], **DD
+    )
+
+    pm = ParamModule(parametrization, **DD)
+
+    init_calls = 0
+    orig_init = ParamModule.__init__
+
+    def spy_init(self, *args, **kwargs):
+        nonlocal init_calls
+        init_calls += 1
+        return orig_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(ParamModule, "__init__", spy_init)
+
+    # Structural IndexHelper.from_numbers constructs zero ParamModule instances
+    # for both Param and ParamModule inputs and yields identical structural maps.
+    ihelp_from_param = IndexHelper.from_numbers(numbers, parametrization)
+    ihelp_from_module = IndexHelper.from_numbers(numbers, pm)
+    assert init_calls == 0
+    assert torch.equal(ihelp_from_param.angular, ihelp_from_module.angular)
+    assert torch.equal(
+        ihelp_from_param.shells_to_ushell, ihelp_from_module.shells_to_ushell
+    )
+    assert torch.equal(
+        ihelp_from_param.orbitals_to_shell, ihelp_from_module.orbitals_to_shell
+    )
+
+    OutputHandler.verbosity = 0
+    # Direct Model.setup with an owned ParamModule constructs zero extra modules.
+    model = Model(par=pm, config=Config.create(int_driver=driver_id))
+    _ = model.setup(numbers)
+    assert init_calls == 0
+
+    # Calculator with ParamModule constructs zero extra modules across setup and
+    # repeated singlepoint / geometry-gradient evaluations.
+    calc_pm = Calculator(numbers, pm, opts=opts, **DD)
+    assert calc_pm.model.par is pm
+    assert init_calls == 0
+
+    res1 = calc_pm.singlepoint(pos1)
+    res2 = calc_pm.singlepoint(pos2)
+    f1 = calc_pm.forces(pos1.clone().requires_grad_(True))
+    f2 = calc_pm.forces(pos2.clone().requires_grad_(True))
+    assert (
+        torch.isfinite(res1.energy).all() and torch.isfinite(res2.energy).all()
+    )
+    assert torch.isfinite(f1).all() and torch.isfinite(f2).all()
+    assert init_calls == 0
+
+    # Calculator with plain Param converts exactly once at construction and zero
+    # times during subsequent geometry evaluations.
+    calc_par = Calculator(numbers, parametrization, opts=opts, **DD)
+    assert init_calls == 1
+    _ = calc_par.singlepoint(pos1)
+    _ = calc_par.forces(pos2.clone().requires_grad_(True))
+    assert init_calls == 1
+
+
+def test_internal_numerical_setups_reject_raw_param_and_hamiltonians_wrap_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Internal setup nodes require ParamModule; standalone Hamiltonians wrap once."""
+    from dxtb import GFN0_XTB, IndexHelper, labels
+    from dxtb._src.integral.evaluation import setup_integral_evaluation
+    from dxtb._src.xtb.gfn0 import GFN0Hamiltonian
+    from dxtb._src.xtb.gfn1 import GFN1Hamiltonian
+    from dxtb._src.xtb.gfn2 import GFN2Hamiltonian
+    from dxtb._src.xtb.h0 import setup_h0_core
+
+    numbers = torch.tensor([8, 1, 1], device=DEVICE)
+    ihelp_gfn1 = IndexHelper.from_numbers(numbers, GFN1_XTB)
+
+    with pytest.raises(TypeError, match="ParamModule"):
+        setup_integral_evaluation(
+            numbers,
+            GFN1_XTB,  # type: ignore[arg-type]
+            ihelp_gfn1,
+            driver_type=labels.INTDRIVER_PYTORCH,
+            intlevel=labels.INTLEVEL_OVERLAP,
+        )
+
+    with pytest.raises(TypeError, match="ParamModule"):
+        setup_h0_core(numbers, GFN1_XTB, ihelp_gfn1)  # type: ignore[arg-type]
+
+    init_calls = 0
+    orig_init = ParamModule.__init__
+
+    def spy_init(self, *args, **kwargs):
+        nonlocal init_calls
+        init_calls += 1
+        return orig_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(ParamModule, "__init__", spy_init)
+
+    for cls, par in (
+        (GFN0Hamiltonian, GFN0_XTB),
+        (GFN1Hamiltonian, GFN1_XTB),
+        (GFN2Hamiltonian, GFN2_XTB),
+    ):
+        init_calls = 0
+        ihelp = IndexHelper.from_numbers(numbers, par)
+        _ = cls(numbers, par, ihelp, **DD)
+        assert init_calls == 1
+
+    pm = ParamModule(GFN1_XTB, **DD)
+    init_calls = 0
+    _ = GFN1Hamiltonian(numbers, pm, ihelp_gfn1, **DD)
+    assert init_calls == 0
+
+    # Externally owned float64 ParamModule with explicit float32 target dtype
+    # builds clean float32 Hamiltonians and System setups without mutating pm,
+    # and Calculator(..., pm, dtype=None) inherits pm.dtype.
+    pos32 = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.81], [0.0, 1.75, -0.45]],
+        device=DEVICE,
+        dtype=torch.float32,
+    )
+    for cls, par in (
+        (GFN0Hamiltonian, GFN0_XTB),
+        (GFN1Hamiltonian, GFN1_XTB),
+        (GFN2Hamiltonian, GFN2_XTB),
+    ):
+        monkeypatch.undo()
+        pm64 = ParamModule(par, device=DEVICE, dtype=torch.float64)
+        params_before = dict(pm64.named_parameters())
+        buffers_before = dict(pm64.named_buffers())
+        monkeypatch.setattr(ParamModule, "__init__", spy_init)
+        init_calls = 0
+
+        ih = IndexHelper.from_numbers(numbers, pm64)
+        ham32 = cls(numbers, pm64, ih, device=DEVICE, dtype=torch.float32)
+        assert ham32.dtype == torch.float32
+        sys32 = Model(
+            par=pm64, config=Config.create(int_driver=labels.INTDRIVER_PYTORCH)
+        ).setup(numbers, dd={"device": DEVICE, "dtype": torch.float32})
+        res32 = sys32.singlepoint(pos32)
+        assert res32.energy.dtype == torch.float32
+        assert torch.isfinite(res32.energy).all()
+        calc_inherit = Calculator(
+            numbers,
+            pm64,
+            device=DEVICE,
+            opts={"verbosity": 0, "int_driver": labels.INTDRIVER_PYTORCH},
+        )
+        assert calc_inherit.dtype == torch.float64
+        assert init_calls == 0
+        for k, v in pm64.named_parameters():
+            assert v is params_before[k] and (
+                not v.is_floating_point() or v.dtype == torch.float64
+            )
+        for k, v in pm64.named_buffers():
+            assert v is buffers_before[k] and (
+                not v.is_floating_point() or v.dtype == torch.float64
+            )
+
+    from dxtb._src.xtb.h0 import setup_h0
+
+    meta_setup = setup_h0(numbers, pm, ihelp_gfn1).to(device="meta")
+    ham_meta = GFN1Hamiltonian(
+        numbers.to(device="meta"),
+        pm,
+        ihelp_gfn1.to(device="meta"),
+        setup=meta_setup,
+    )
+    assert ham_meta.device.type == "meta"
+    with pytest.raises(
+        ValueError, match="All input tensors must be on the same device"
+    ):
+        setup_h0(numbers, pm, ihelp_gfn1.to(device="meta"))

@@ -34,8 +34,7 @@ from dataclasses import replace
 import torch
 from tad_mctc.exceptions import DeviceError, DtypeError
 
-from dxtb import IndexHelper, OutputHandler
-from dxtb import labels
+from dxtb import IndexHelper, OutputHandler, labels
 from dxtb._src.calculators.model import Model, System
 from dxtb._src.calculators.properties.vibration import (
     IRResult,
@@ -106,9 +105,7 @@ def _convert_system_dtype(
             else system.integral_setup.to(dtype=dtype)
         )
         h0_setup = (
-            None
-            if system.h0_setup is None
-            else system.h0_setup.to(dtype=dtype)
+            None if system.h0_setup is None else system.h0_setup.to(dtype=dtype)
         )
     return replace(
         system,
@@ -215,9 +212,7 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
         d4_setup=d4_setup,
         ies_setup=ies_setup,
         halogen_setup=halogen_setup,
-        d3_setups=(
-            tuple(new_d3_setups) if new_d3_setups else system.d3_setups
-        ),
+        d3_setups=(tuple(new_d3_setups) if new_d3_setups else system.d3_setups),
         es2_setup=es2_setup,
         es3_setup=es3_setup,
         aes2_setup=aes2_setup,
@@ -353,8 +348,13 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                 numbers = numbers.clone()
             self.numbers = numbers
 
+            resolved_dtype = (
+                par.dtype
+                if dtype is None and isinstance(par, ParamModule)
+                else dtype
+            )
             # "cpu" or "cuda" would not compare equal to `tensor.device`
-            super().__init__(normalize_device(device), dtype)
+            super().__init__(normalize_device(device), resolved_dtype)
             dd = {"device": self.device, "dtype": self.dtype}
 
             # Internally, we will always use the differentiable parameter model.
@@ -409,7 +409,9 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                 interaction=interaction,
                 auto_int_level=auto_int_level,
             )
-            self.system = self.model.setup(numbers, batch_mode=batch_mode, dd=dd)
+            self.system = self.model.setup(
+                numbers, batch_mode=batch_mode, dd=dd
+            )
 
             self.opts = self.system.config
             self.ihelp = self.system.ihelp
@@ -447,7 +449,9 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                 c_copy.label = f"__dxtb_lane_setup_{idx}_{comp.label}"
             eval_classicals.append(c_copy)
 
-        eval_interactions = [copy.copy(inter) for inter in self.model.interaction]
+        eval_interactions = [
+            copy.copy(inter) for inter in self.model.interaction
+        ]
         setup_model = Model(
             par=self.model.par,
             config=self.opts,
@@ -456,9 +460,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             auto_int_level=False,
         )
         setup_dd = (
-            self.model.par.dd
-            if self.dtype != self.model.par.dtype
-            else self.dd
+            self.model.par.dd if self.dtype != self.model.par.dtype else self.dd
         )
         eval_sys = setup_model.setup(
             self.numbers,

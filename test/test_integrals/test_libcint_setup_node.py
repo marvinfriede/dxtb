@@ -29,13 +29,18 @@ from torch.utils._pytree import tree_flatten, tree_unflatten
 from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, Calculator, IndexHelper, labels
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs import libcint
-from dxtb._src.exlibs.available import has_libcint
+from dxtb._src.exlibs.available import has_libcint, has_pyscf
 from dxtb._src.integral.driver.libcint import (
     LibcintIntegralSetup,
     build_overlap_libcint,
     setup_libcint,
 )
+from dxtb._src.integral.driver.pytorch import (
+    build_overlap as build_overlap_pytorch,
+)
+from dxtb._src.integral.driver.pytorch import setup_integrals
 from dxtb._src.integral.evaluation import (
+    IntegralSetup,
     build_integral_matrices,
     setup_integral_evaluation,
 )
@@ -49,9 +54,8 @@ pytestmark = pytest.mark.skipif(not has_libcint, reason="libcint not available")
 def _basis_and_setup(
     numbers: torch.Tensor,
     parametrization: ParamModule,
-    force_cpu: bool,
 ) -> tuple[Basis, LibcintIntegralSetup]:
-    device = torch.device("cpu") if force_cpu else numbers.device
+    device = torch.device("cpu")
     backend_numbers = numbers.to(device=device)
     ihelp = IndexHelper.from_numbers(backend_numbers, parametrization).to(
         device=device
@@ -63,7 +67,47 @@ def _basis_and_setup(
         device=device,
         dtype=parametrization.dtype,
     )
-    return basis, setup_libcint(basis, force_cpu=force_cpu)
+    return basis, setup_libcint(basis)
+
+
+def _raw_libcint_from_basis(
+    basis: Basis,
+    positions: torch.Tensor,
+) -> tuple[Any, Any]:
+    """Build raw tad-libcint objects directly from Basis.expand() without setup_libcint."""
+    expansion = basis.expand()
+    unique_numbers = basis.unique.tolist()
+    shell_counts = basis.ihelp.ushells_per_unique.tolist()
+    angular = basis.ihelp.unique_angular.tolist()
+    shells_by_element: dict[int, list[Any]] = {}
+    shell_idx = 0
+    for number, count in zip(unique_numbers, shell_counts):
+        if count == 0:
+            if shell_idx < len(angular) and angular[shell_idx] < 0:
+                shell_idx += 1
+            continue
+        elem_shells = []
+        for _ in range(count):
+            angmom = int(angular[shell_idx])
+            if angmom >= 0:
+                elem_shells.append(
+                    libcint.Shell(
+                        angmom=angmom,
+                        alphas=expansion.alphas[shell_idx],
+                        coeffs=expansion.coeffs[shell_idx],
+                    ).normalized()
+                )
+            shell_idx += 1
+        if int(number) > 0 and elem_shells:
+            shells_by_element[int(number)] = elem_shells
+    active = basis.numbers > 0
+    return (
+        libcint.Basis(shells=shells_by_element),
+        libcint.Structure(
+            numbers=basis.numbers[active].cpu(),
+            positions=positions[active].to(device=torch.device("cpu")),
+        ),
+    )
 
 
 def _leaves(value: Any) -> tuple[torch.Tensor, ...]:
@@ -72,21 +116,21 @@ def _leaves(value: Any) -> tuple[torch.Tensor, ...]:
 
 
 @pytest.mark.parametrize("method", ["gfn1", "gfn2"])
-@pytest.mark.parametrize("force_cpu", [True, False])
 def test_libcint_setup_node_schema_snapshot_and_conversion(
-    method: str, force_cpu: bool
+    method: str,
 ) -> None:
-    """All captured libcint tensors are visible and preserve source dtypes."""
+    """All captured libcint tensors are CPU-resident, visible, and preserve dtypes."""
     numbers = samples["H2O"]["numbers"]
     par = ParamModule(
         GFN1_XTB if method == "gfn1" else GFN2_XTB, dtype=torch.float64
     )
-    basis, core = _basis_and_setup(numbers, par, force_cpu=force_cpu)
+    basis, core = _basis_and_setup(numbers, par)
     assert type(core) is LibcintIntegralSetup
     assert isinstance(core, Node)
     assert not hasattr(core, "ihelp")
     assert not hasattr(core, "par")
     assert not hasattr(core, "basis_setups")
+    assert not hasattr(core, "force_cpu")
     assert core.index is basis.ihelp
 
     leaves = _leaves(core)
@@ -103,7 +147,6 @@ def test_libcint_setup_node_schema_snapshot_and_conversion(
     flat, spec = tree_flatten(core)
     rebuilt = tree_unflatten(flat, spec)
     assert type(rebuilt) is LibcintIntegralSetup
-    assert rebuilt.force_cpu is force_cpu
     assert rebuilt.shell_layout == core.shell_layout
     assert torch.equal(rebuilt.index.shells_to_atom, core.index.shells_to_atom)
     assert torch.equal(
@@ -115,15 +158,26 @@ def test_libcint_setup_node_schema_snapshot_and_conversion(
     meta = core.to(device="meta")
     for converted in (f32, f64, meta):
         assert type(converted) is LibcintIntegralSetup
-        assert converted.force_cpu is force_cpu
-    target_device = "cpu" if force_cpu else "meta"
-    assert all(leaf.device.type == target_device for leaf in _leaves(meta))
+    assert all(leaf.device.type == "cpu" for leaf in _leaves(meta))
     assert all(a.dtype == torch.float32 for a in f32.alphas)
     assert all(c.dtype == torch.float32 for c in f32.coeffs)
     assert all(a.dtype == torch.float64 for a in f64.alphas)
     assert all(c.dtype == torch.float64 for c in f64.coeffs)
     assert f32.numbers.dtype == numbers.dtype
     assert f32.index.angular.dtype == core.index.angular.dtype
+
+    outer = IntegralSetup(
+        driver_type=labels.INTDRIVER_LIBCINT,
+        intlevel=labels.INTLEVEL_OVERLAP,
+        logical_device=torch.device("cpu"),
+        backend=core,
+    )
+    outer_meta = outer.to(device="meta")
+    assert outer_meta.logical_device == torch.device("meta")
+    assert outer_meta.libcint is not None
+    assert all(
+        leaf.device.type == "cpu" for leaf in _leaves(outer_meta.libcint)
+    )
 
     stacked = stack((core, core))
     assert type(stacked) is LibcintIntegralSetup
@@ -144,10 +198,8 @@ def test_libcint_setup_node_schema_snapshot_and_conversion(
 
 
 @pytest.mark.parametrize("method", ["gfn0", "gfn1", "gfn2"])
-@pytest.mark.parametrize("force_cpu", [True, False])
-def test_libcint_system_node_history_and_force_cpu_parity(
+def test_libcint_system_node_history_and_parity(
     method: str,
-    force_cpu: bool,
 ) -> None:
     """Node-backed libcint setup preserves matrices, gradients, and history."""
     numbers = samples["H2O"]["numbers"]
@@ -178,11 +230,10 @@ def test_libcint_system_node_history_and_force_cpu_parity(
         node_ihelp,
         driver_type=labels.INTDRIVER_LIBCINT,
         intlevel=labels.INTLEVEL_QUADRUPOLE,
-        force_cpu_for_libcint=force_cpu,
     )
     assert core_outer is not None and core_outer.libcint is not None
     assert type(core_outer.libcint) is LibcintIntegralSetup
-    assert core_outer.libcint.force_cpu is force_cpu
+    assert core_outer.logical_device == numbers.device
     core = core_outer.libcint
 
     a = positions.clone().requires_grad_()
@@ -230,7 +281,7 @@ def test_libcint_core_basis_keeps_slater_parameter_graph(method: str) -> None:
     parameter_name = "parameter_tree.element.H.slater.param"
     parameter = dict(par.named_parameters())[parameter_name]
     parameter.requires_grad_(True)
-    basis, setup = _basis_and_setup(numbers, par, force_cpu=True)
+    basis, setup = _basis_and_setup(numbers, par)
     objective = sum(alpha.square().sum() for alpha in setup.alphas) + sum(
         coeff.square().sum() for coeff in setup.coeffs
     )
@@ -240,28 +291,83 @@ def test_libcint_core_basis_keeps_slater_parameter_graph(method: str) -> None:
 
     positions = samples["H2O"]["positions"].to(dtype=torch.float64)
     core_overlap = build_overlap_libcint(setup, positions)
-    direct_overlap = libcint.overlap(*basis.create_libcint(positions))
     core_gradient = torch.autograd.grad(
         core_overlap.square().sum(), parameter, retain_graph=True
     )[0]
-    direct_gradient = torch.autograd.grad(
-        direct_overlap.square().sum(), parameter
+    raw_overlap = libcint.overlap(*_raw_libcint_from_basis(basis, positions))
+    raw_gradient = torch.autograd.grad(
+        raw_overlap.square().sum(), parameter, retain_graph=True
     )[0]
+    pt_overlap = build_overlap_pytorch(setup_integrals(basis), positions)
+    pt_gradient = torch.autograd.grad(pt_overlap.square().sum(), parameter)[0]
     assert torch.isfinite(core_gradient).all()
     assert core_gradient.abs().sum() > 0
-    torch.testing.assert_close(core_gradient, direct_gradient)
+    torch.testing.assert_close(core_gradient, raw_gradient, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(
+        core_gradient, pt_gradient, atol=1e-11, rtol=1e-11
+    )
+
+    eps = 1e-6
+    base_slater = parameter.detach().clone()
+    fd_gradient = torch.zeros_like(base_slater)
+    flat_fd = fd_gradient.reshape(-1)
+    for idx in range(flat_fd.numel()):
+        step = torch.zeros_like(base_slater)
+        step.reshape(-1)[idx] = eps
+        losses = []
+        for sign in (1.0, -1.0):
+            pm_step = ParamModule(parametrization, dtype=torch.float64)
+            with torch.no_grad():
+                dict(pm_step.named_parameters())[parameter_name].copy_(
+                    base_slater + sign * step
+                )
+            _, setup_step = _basis_and_setup(numbers, pm_step)
+            losses.append(
+                build_overlap_libcint(setup_step, positions)
+                .square()
+                .sum()
+                .item()
+            )
+        flat_fd[idx] = (losses[0] - losses[1]) / (2.0 * eps)
+    torch.testing.assert_close(core_gradient, fd_gradient, atol=1e-7, rtol=1e-7)
 
 
 def test_libcint_node_preserves_higher_angular_shell_order() -> None:
-    """The wrapper's derived AO order matches explicit Basis construction."""
+    """The wrapper's derived AO order matches raw tad-libcint, PyTorch, and PySCF."""
+    assert not hasattr(Basis, "create_libcint")
     numbers = samples["SiH4"]["numbers"]
     positions = samples["SiH4"]["positions"].to(dtype=torch.float64)
     par = ParamModule(GFN2_XTB, dtype=positions.dtype)
-    basis, core = _basis_and_setup(numbers, par, force_cpu=True)
+    basis, core = _basis_and_setup(numbers, par)
+    assert not hasattr(basis, "create_libcint")
+
     core_overlap = build_overlap_libcint(core, positions)
-    direct_overlap = libcint.overlap(*basis.create_libcint(positions))
-    assert core_overlap.shape == direct_overlap.shape
-    torch.testing.assert_close(core_overlap, direct_overlap)
+    raw_overlap = libcint.overlap(*_raw_libcint_from_basis(basis, positions))
+    pt_overlap = build_overlap_pytorch(setup_integrals(basis), positions)
+    assert core_overlap.shape == raw_overlap.shape
+    assert core_overlap.shape == pt_overlap.shape
+    torch.testing.assert_close(core_overlap, raw_overlap, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(core_overlap, pt_overlap, atol=1e-13, rtol=1e-13)
+
+    if has_pyscf:
+        from tad_mctc.convert import numpy_to_tensor
+        from tad_mctc.math import einsum
+
+        from dxtb._src.exlibs.pyscf.mol import M
+
+        from ..test_libcint.ao_order import reorder_pyscf_ao
+
+        assert M is not False
+        mol = M(numbers, positions, xtb_version="gfn2", parse_arg=False)
+        pyscf_overlap = reorder_pyscf_ao(
+            numpy_to_tensor(mol.intor("int1e_ovlp"), dtype=positions.dtype),
+            basis.ihelp,
+        )
+        norm = pyscf_overlap.diagonal(dim1=-1, dim2=-2).rsqrt()
+        pyscf_overlap = einsum("ij,i,j->ij", pyscf_overlap, norm, norm)
+        torch.testing.assert_close(
+            core_overlap, pyscf_overlap, atol=1e-10, rtol=1e-10
+        )
 
 
 @pytest.mark.parametrize("name", ["H2", "LiH", "H2O", "SiH4", "CH4"])
@@ -270,7 +376,7 @@ def test_libcint_node_wrapper_maps_match_index_helper(name: str) -> None:
     numbers = samples[name]["numbers"]
     positions = samples[name]["positions"].to(dtype=torch.float64)
     par = ParamModule(GFN2_XTB, dtype=positions.dtype)
-    _, core = _basis_and_setup(numbers, par, force_cpu=True)
+    _, core = _basis_and_setup(numbers, par)
     libcint_basis, structure = core.create_libcint(positions)
     layout = libcint_basis.layout(structure.numbers)
     np.testing.assert_array_equal(
@@ -286,17 +392,22 @@ def test_libcint_node_wrapper_maps_match_index_helper(name: str) -> None:
     assert layout.nao == core.index.nao
 
 
-def test_setup_libcint_rejects_non_cpu_force_cpu_source() -> None:
-    """Direct construction and setup reject non-CPU sources when force_cpu."""
+def test_setup_libcint_rejects_non_cpu_source() -> None:
+    """Direct construction and setup reject non-CPU setup tensors."""
     numbers = samples["H2"]["numbers"]
     par = ParamModule(GFN2_XTB, dtype=torch.float64)
-    basis, core = _basis_and_setup(numbers, par, force_cpu=False)
+    basis, core = _basis_and_setup(numbers, par)
     basis.slater = basis.slater.to(device="meta")
-    with pytest.raises(ValueError, match="CPU-resident libcint setup tensors"):
-        setup_libcint(basis, force_cpu=True)
-    meta_core = core.to(device="meta")
-    with pytest.raises(ValueError, match="CPU-resident libcint setup tensors"):
-        meta_core.replace(force_cpu=True)
+    with pytest.raises(ValueError, match="CPU-resident"):
+        setup_libcint(basis)
+    with pytest.raises(ValueError, match="CPU-resident"):
+        LibcintIntegralSetup(
+            index=core.index.to(device="meta"),
+            numbers=core.numbers.to(device="meta"),
+            alphas=tuple(a.to(device="meta") for a in core.alphas),
+            coeffs=tuple(c.to(device="meta") for c in core.coeffs),
+            shell_layout=core.shell_layout,
+        )
 
 
 def test_libcint_setup_node_is_used_by_system_and_call_data_is_local() -> None:
@@ -527,7 +638,7 @@ def test_zero_padded_single_system_moments_match_unpadded_on_both_drivers() -> (
     ovlp_pt, dip_pt, quad_pt = evaluate_pytorch_moments(
         setup_pytorch(bas_pad), pos_pad, labels.INTLEVEL_QUADRUPOLE
     )
-    lc_setup = setup_libcint(bas_pad, force_cpu=True)
+    lc_setup = setup_libcint(bas_pad)
     assert lc_setup.active_atoms is not None
     ovlp_lc, dip_lc, quad_lc = evaluate_libcint_moments(
         lc_setup, pos_pad, labels.INTLEVEL_QUADRUPOLE
@@ -607,7 +718,7 @@ def _functional_cgto_loss(
         def forward(self) -> torch.Tensor:
             ih = IndexHelper.from_numbers(numbers, self.mod)
             bas = Basis(numbers, self.mod, ih, dtype=torch.float64)
-            lc = setup_libcint(bas, force_cpu=True)
+            lc = setup_libcint(bas)
             return sum(a.square().sum() for a in lc.alphas) + sum(
                 c.square().sum() for c in lc.coeffs
             )
@@ -624,7 +735,7 @@ def test_setup_libcint_rejects_mismatched_numbers_and_index_helper() -> None:
     mismatched_basis = Basis(torch.unique(numbers), par, ihelp)
 
     with pytest.raises(ValueError, match="matching IndexHelper"):
-        setup_libcint(mismatched_basis, force_cpu=True)
+        setup_libcint(mismatched_basis)
 
 
 def test_libcint_noncontiguous_padding_unsorted_masks_and_unstack() -> None:
@@ -720,7 +831,7 @@ def test_libcint_noncontiguous_padding_unsorted_masks_and_unstack() -> None:
     ov_mask = libcint.overlap(b_mask, s_mask)
     nums_feh = torch.tensor([26, 1], dtype=torch.long)
     pos_feh = pos_pad[[1, 5]]
-    _, lc_feh = _basis_and_setup(nums_feh, par, force_cpu=True)
+    _, lc_feh = _basis_and_setup(nums_feh, par)
     ov_feh = libcint.overlap(*lc_feh.create_libcint(pos_feh))
     torch.testing.assert_close(ov_mask, ov_feh, atol=0.0, rtol=0.0)
 
@@ -736,7 +847,7 @@ def test_libcint_noncontiguous_padding_unsorted_masks_and_unstack() -> None:
         x * 1.05 for x in par_alt.element["H"].slater
     ]
     _, lc_feh_alt = _basis_and_setup(
-        nums_feh, ParamModule(par_alt, dtype=torch.float64), force_cpu=True
+        nums_feh, ParamModule(par_alt, dtype=torch.float64)
     )
     stacked = stack((lc_feh, lc_feh_alt))
     leaves, _ = tree_flatten(stacked)

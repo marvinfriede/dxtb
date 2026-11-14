@@ -94,7 +94,7 @@ class IntegralSetup(Node):
 
     @property
     def device(self) -> torch.device:
-        """Return the logical System device while allowing force-CPU leaves."""
+        """Return the logical System device while allowing CPU-resident backend leaves."""
         assert self.logical_device is not None
         return self.logical_device
 
@@ -140,7 +140,6 @@ def setup_integral_evaluation(
     driver_type: int,
     intlevel: int,
     algorithm: str | None = None,
-    force_cpu_for_libcint: bool = True,
     device: torch.device | None = None,
     dtype: torch.dtype | None = None,
 ) -> IntegralSetup | None:
@@ -159,6 +158,11 @@ def setup_integral_evaluation(
     :meth:`~dxtb._src.calculators.model.Model.setup_functional` or
     :class:`~dxtb.Calculator`).
     """
+    if not isinstance(par, ParamModule):
+        raise TypeError(
+            "setup_integral_evaluation requires a ParamModule instance, "
+            f"got {type(par).__name__}."
+        )
     if intlevel < labels.INTLEVEL_OVERLAP:
         return None
     if ihelp.batch_mode != 0:
@@ -176,24 +180,14 @@ def setup_integral_evaluation(
     target_dtype = par.dtype if dtype is None else dtype
     backend_device = (
         torch.device("cpu")
-        if driver_type == labels.INTDRIVER_LIBCINT and force_cpu_for_libcint
+        if driver_type == labels.INTDRIVER_LIBCINT
         else target_device
     )
 
-    backend_numbers = (
-        numbers
-        if numbers.device == backend_device
-        else numbers.to(device=backend_device)
-    )
-    backend_ihelp = (
-        ihelp
-        if ihelp.device == backend_device
-        else ihelp.to(device=backend_device)
-    )
     basis = Basis(
-        backend_numbers,
+        numbers,
         par,
-        backend_ihelp,
+        ihelp,
         device=backend_device,
         dtype=target_dtype,
     )
@@ -205,7 +199,7 @@ def setup_integral_evaluation(
             **({} if algorithm is None else {"algorithm": algorithm}),
         )
     else:
-        backend = setup_libcint(basis, force_cpu=force_cpu_for_libcint)
+        backend = setup_libcint(basis)
 
     return IntegralSetup(
         driver_type=driver_type,

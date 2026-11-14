@@ -67,14 +67,18 @@ def setup_integrals(
     algorithm: str = DEFAULT_ALGORITHM,
 ) -> PytorchIntegralSetup:
     """Build the authoritative PyTorch integral setup Node from ``basis``."""
-    if basis.ihelp.batch_mode != 0:
-        raise ValueError("PyTorch integral setup requires one single System.")
-    get_kernel(algorithm)
-    expansion = basis.expand()
     dev = basis.device
-    index = (
-        basis.ihelp if basis.ihelp.device == dev else basis.ihelp.to(device=dev)
-    )
+    index = basis.ihelp
+    if index.batch_mode != 0:
+        raise ValueError("PyTorch integral setup requires one single System.")
+    if index.device != dev:
+        raise ValueError(
+            f"Basis IndexHelper device ({index.device}) must match Basis "
+            f"device ({dev})."
+        )
+    # Validate the kernel before creating the setup.
+    _ = get_kernel(algorithm)
+    expansion = basis.expand()
     dtype = (
         expansion.alphas[0].dtype if expansion.alphas else basis.slater.dtype
     )

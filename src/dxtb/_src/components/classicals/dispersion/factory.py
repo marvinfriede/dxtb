@@ -77,9 +77,14 @@ def new_dispersion(
     ValueError
         D4 parametrization is requested but no charge given.
     """
+    resolved_dtype = (
+        par.dtype
+        if dtype is None and isinstance(par, ParamModule)
+        else (dtype if dtype is not None else get_default_dtype())
+    )
     dd: DD = {
-        "device": device,
-        "dtype": dtype if dtype is not None else get_default_dtype(),
+        "device": numbers.device if device is None else device,
+        "dtype": resolved_dtype,
     }
 
     # also accept a plain `Param` (wrapped into a `ParamModule`)
@@ -92,25 +97,29 @@ def new_dispersion(
 
     if not par.is_none("dispersion.d3") and par.is_none("dispersion.d4"):
         param = {
-            "a1": par.get("dispersion.d3.a1"),
-            "a2": par.get("dispersion.d3.a2"),
-            "s6": par.get("dispersion.d3.s6"),
-            "s8": par.get("dispersion.d3.s8"),
-            "s9": par.get("dispersion.d3.s9"),
+            key: (
+                val.to(**dd)
+                if isinstance(val := par.get(f"dispersion.d3.{key}"), Tensor)
+                else val
+            )
+            for key in ("a1", "a2", "s6", "s8", "s9")
         }
-        return DispersionD3(numbers, param, device=device, dtype=dtype)
+        return DispersionD3(numbers, param, device=device, dtype=resolved_dtype)
 
     if not par.is_none("dispersion.d4") and par.is_none("dispersion.d3"):
         param = {
-            "a1": par.get("dispersion.d4.a1"),
-            "a2": par.get("dispersion.d4.a2"),
-            "s6": par.get("dispersion.d4.s6"),
-            "s8": par.get("dispersion.d4.s8"),
-            "s9": par.get("dispersion.d4.s9"),
-            "s10": par.get("dispersion.d4.s10"),
+            key: (
+                val.to(**dd)
+                if isinstance(val := par.get(f"dispersion.d4.{key}"), Tensor)
+                else val
+            )
+            for key in ("a1", "a2", "s6", "s8", "s9", "s10")
         }
         if "alp" in par.get("dispersion.d4"):
-            param["alp"] = par.get("dispersion.d4.alp")
+            alp_val = par.get("dispersion.d4.alp")
+            param["alp"] = (
+                alp_val.to(**dd) if isinstance(alp_val, Tensor) else alp_val
+            )
 
         # None values are not set in `DiffParam`
         sc_is_set = "sc" in par.get("dispersion.d4")
@@ -128,14 +137,18 @@ def new_dispersion(
                 ref_charges=ref_charges,
                 charge=charge,
                 device=device,
-                dtype=dtype,
+                dtype=resolved_dtype,
             )
 
         # Classical part of self-consistent D4 is only ATM term
         param["s6"] = torch.tensor(0.0, **dd)
         param["s8"] = torch.tensor(0.0, **dd)
         return DispersionD4(
-            numbers, param, ref_charges="gfn2", device=device, dtype=dtype
+            numbers,
+            param,
+            ref_charges="gfn2",
+            device=device,
+            dtype=resolved_dtype,
         )
 
     if not par.is_none("dispersion.d3") and not par.is_none("dispersion.d4"):

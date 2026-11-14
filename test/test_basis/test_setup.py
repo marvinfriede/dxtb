@@ -27,6 +27,7 @@ from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs import libcint
 from dxtb._src.exlibs.available import has_libcint
+from dxtb._src.integral.driver.libcint import setup_libcint
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
@@ -61,11 +62,13 @@ def test_single(dtype: torch.dtype, name: str):
     ihelp = IndexHelper.from_numbers(numbers, par)
     bas = Basis(numbers, par, ihelp, **dd)
 
-    libcint_basis, structure = bas.create_libcint(positions)
+    libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(
+        positions
+    )
     assert isinstance(libcint_basis, libcint.Basis)
     assert isinstance(structure, libcint.Structure)
-    assert torch.equal(structure.numbers, numbers)
-    assert torch.equal(structure.positions, positions)
+    assert torch.equal(structure.numbers, numbers.cpu())
+    assert torch.equal(structure.positions, positions.cpu())
 
     for number, shells in libcint_basis.shells.items():
         if number == 1:
@@ -89,7 +92,9 @@ def test_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
         positions = sample["positions"].to(**dd)
         ihelp = IndexHelper.from_numbers(numbers, par)
         bas = Basis(numbers, par, ihelp, **dd)
-        libcint_basis, structure = bas.create_libcint(positions)
+        libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(
+            positions
+        )
         assert isinstance(libcint_basis, libcint.Basis)
-        assert torch.equal(structure.positions, positions)
-        assert torch.equal(structure.numbers, numbers)
+        assert torch.equal(structure.positions, positions.cpu())
+        assert torch.equal(structure.numbers, numbers.cpu())

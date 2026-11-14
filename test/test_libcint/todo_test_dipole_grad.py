@@ -26,6 +26,7 @@ import torch
 from dxtb import GFN1_XTB, IndexHelper
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
+from dxtb._src.integral.driver.libcint import setup_libcint
 from dxtb._src.typing import DD, Tensor
 
 if has_libcint is True:
@@ -60,8 +61,8 @@ def num_grad(
             dtype=positions.dtype,
             device=positions.device,
         )
-        basis, structure = bas.create_libcint(pos)
-        return libcint.int1e(intstr, basis, structure)
+        basis, structure = setup_libcint(bas.cpu()).create_libcint(pos)
+        return libcint.int1e(intstr, basis, structure).to(device=pos.device)
 
     # Loop over all atoms and their x, y, z coordinates
     for atom in range(positions.shape[0] - 1):
@@ -99,7 +100,7 @@ def test_grad(dtype: torch.dtype, name: str):
     ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
     bas = Basis(numbers, GFN1_XTB, ihelp, **dd)
 
-    basis, structure = bas.create_libcint(pos)
+    basis, structure = setup_libcint(bas.cpu()).create_libcint(pos)
 
     INTSTR = "r0"
 

@@ -74,7 +74,9 @@ def gradchecker(name: str, gfn: Param) -> tuple[
         bas = Basis(numbers, par, ihelp, **dd)
 
         # variable to be differentiated
-        libcint_basis, structure = bas.create_libcint(positions)
+        libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(
+            positions
+        )
         return libcint.overlap(libcint_basis, structure)
 
     return func, slater
@@ -148,9 +150,7 @@ def gradchecker_batch(name1: str, name2: str, gfn: Param) -> tuple[
             active = nums > 0
             nums_active, pos_active = nums[active], pos[active]
             ihelp = IndexHelper.from_numbers(nums_active, par)
-            setup = setup_libcint(
-                Basis(nums_active, par, ihelp, **dd), force_cpu=False
-            )
+            setup = setup_libcint(Basis(nums_active, par, ihelp, **dd).cpu())
             matrices.append(build_overlap_libcint(setup, pos_active))
         return pack(matrices)
 

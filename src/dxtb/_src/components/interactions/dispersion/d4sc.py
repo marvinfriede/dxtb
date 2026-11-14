@@ -696,10 +696,22 @@ def new_d4sc(
         Instance of the :class:`.DispersionD4SC` class or ``None`` if
         no :class:`.DispersionD4SC` is used.
     """
-    dd: DD = {
-        "device": device,
-        "dtype": dtype if dtype is not None else get_default_dtype(),
-    }
+    if device is not None:
+        if normalize_device(device) != numbers.device:
+            raise DeviceError(
+                f"Passed device ({device}) and device of `numbers` tensor "
+                f"({numbers.device}) do not match."
+            )
+
+    target_device = (
+        numbers.device if device is None else normalize_device(device)
+    )
+    resolved_dtype = (
+        par.dtype
+        if dtype is None and isinstance(par, ParamModule)
+        else (dtype if dtype is not None else get_default_dtype())
+    )
+    dd: DD = {"device": target_device, "dtype": resolved_dtype}
 
     # also accept a plain `Param` (wrapped into a `ParamModule`)
     if not isinstance(par, ParamModule):
@@ -714,26 +726,14 @@ def new_d4sc(
     if par.is_false("dispersion.d4.sc"):
         return None
 
-    if device is not None:
-        if normalize_device(device) != numbers.device:
-            raise DeviceError(
-                f"Passed device ({device}) and device of `numbers` tensor "
-                f"({numbers.device}) do not match."
-            )
-
-    dd: DD = {
-        "device": device,
-        "dtype": dtype if dtype is not None else get_default_dtype(),
-    }
-
     param = d4.Param(
         **{
-            "a1": par.get("dispersion.d4.a1"),
-            "a2": par.get("dispersion.d4.a2"),
-            "s6": par.get("dispersion.d4.s6"),
-            "s8": par.get("dispersion.d4.s8"),
-            "s9": par.get("dispersion.d4.s9"),
-            "s10": par.get("dispersion.d4.s10"),
+            key: (
+                val.to(**dd)
+                if isinstance(val := par.get(f"dispersion.d4.{key}"), Tensor)
+                else val
+            )
+            for key in ("a1", "a2", "s6", "s8", "s9", "s10")
         }
     )
 

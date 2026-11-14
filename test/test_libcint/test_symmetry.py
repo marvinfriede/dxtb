@@ -29,6 +29,7 @@ from tad_mctc.batch import pack
 from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
+from dxtb._src.integral.driver.libcint import setup_libcint
 from dxtb._src.typing import DD, Tensor
 
 if has_libcint is True:
@@ -87,7 +88,9 @@ def test_single(dtype: torch.dtype, intstr: str, name: str) -> None:
     ihelp = IndexHelper.from_numbers(numbers, par)
     bas = Basis(numbers, par, ihelp, **dd)
 
-    libcint_basis, structure = bas.create_libcint(positions)
+    libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(
+        positions
+    )
     i = libcint.int1e(intstr, libcint_basis, structure, packed=False)
 
     nao = ihelp.nao
@@ -116,7 +119,9 @@ def test_batch(dtype: torch.dtype, name1: str, name2: str, intstr: str) -> None:
         positions = sample["positions"].to(**dd)
         ihelp = IndexHelper.from_numbers(numbers, par)
         bas = Basis(numbers, par, ihelp, **dd)
-        libcint_basis, structure = bas.create_libcint(positions)
+        libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(
+            positions
+        )
         i = libcint.int1e(intstr, libcint_basis, structure, packed=False)
         int_list.append(i.reshape((3, 3, ihelp.nao, ihelp.nao)))
         ao_counts.append(ihelp.nao)
