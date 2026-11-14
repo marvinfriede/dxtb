@@ -796,9 +796,21 @@ def _prepare_singlepoint(
             f"to '{config.ints.level}'."
         )
 
+    candidate_index = core.index if core is not None else None
+    core_index = (
+        candidate_index
+        if candidate_index is not None
+        and all(
+            getattr(candidate_index, name).device
+            == getattr(system.ihelp, name).device
+            for name in candidate_index._child_names
+        )
+        else None
+    )
     matrices, refocc = build_integral_matrices(
         integral_setup,
         h0_setup,
+        core_index if core_index is not None else system.ihelp,
         positions,
         charge,
     )
@@ -828,16 +840,6 @@ def _prepare_singlepoint(
         *call_components, device=positions.device, dtype=positions.dtype
     )
     interaction_data = _interaction_data(system, positions, call_interactions)
-    candidate_index = core.index if core is not None else None
-    core_index = (
-        candidate_index
-        if candidate_index is not None
-        and candidate_index.shells_to_atom.device
-        == system.ihelp.shells_to_atom.device
-        and candidate_index.orbitals_to_shell.device
-        == system.ihelp.orbitals_to_shell.device
-        else None
-    )
 
     return _PreparedSinglepoint(
         positions=positions,

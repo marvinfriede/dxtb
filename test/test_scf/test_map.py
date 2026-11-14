@@ -55,7 +55,6 @@ from dxtb._src.scf import (
     SCFPotential,
     fock_initial_guess,
     fock_map,
-    scf_interactions_eligible,
     interaction_energy_from_charges,
     pack_charges,
     pack_potential,
@@ -63,6 +62,7 @@ from dxtb._src.scf import (
     potential_initial_guess,
     potential_layout,
     potential_map,
+    scf_interactions_eligible,
     scf_map,
     setup_scf_inputs,
     unpack_charges,
@@ -72,6 +72,8 @@ from dxtb._src.scf import (
 from dxtb._src.scf.core import (
     SCFInteractionSet,
 )
+from dxtb._src.scf.guess import get_guess
+from dxtb._src.scf.iterator import get_refocc
 from dxtb._src.scf.map import (
     _transitional_diagonalize,
     evaluate_hamiltonian,
@@ -82,8 +84,6 @@ from dxtb._src.scf.solver import (
     free_energy_from_spectral,
     solve_scf_simple,
 )
-from dxtb._src.scf.guess import get_guess
-from dxtb._src.scf.iterator import get_refocc
 from dxtb._src.scf.utils import get_density
 from dxtb._src.wavefunction import filling
 
@@ -158,6 +158,7 @@ def _prepare_case(
     integrals, refocc = build_integral_matrices(
         system.integral_setup,
         system.h0_setup,
+        system.ihelp,
         positions,
         charge_tensor,
     )
@@ -1121,7 +1122,9 @@ def test_gfn2_potential_map_uses_each_packed_row(row: int) -> None:
             length *= size
         if length < perturbed.shape[-1]:
             assert torch.all(perturbed[r_idx, length:] == defaults.PADNZ)
-            assert torch.all(expected.mapped_x[r_idx, length:] == defaults.PADNZ)
+            assert torch.all(
+                expected.mapped_x[r_idx, length:] == defaults.PADNZ
+            )
 
 
 class _MutatingPotentialInteraction(Interaction):
@@ -1296,8 +1299,7 @@ def test_core_has_no_legacy_mutation_owners(
         {"ihelp", "interaction_data"}
     )
     assert all(
-        type(value).__name__
-        not in {"InteractionList", "InteractionListCache"}
+        type(value).__name__ not in {"InteractionList", "InteractionListCache"}
         for value in (inputs.index, inputs.interactions)
     )
 
@@ -1441,6 +1443,7 @@ def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
         integrals, _ = build_integral_matrices(
             current_system.integral_setup,
             current_system.h0_setup,
+            current_system.ihelp,
             positions,
             case.charge,
         )
@@ -1572,6 +1575,7 @@ def test_interaction_aggregates_match_legacy() -> None:
     integrals, _ = build_integral_matrices(
         system.integral_setup,
         system.h0_setup,
+        system.ihelp,
         case.positions,
         case.charge,
     )

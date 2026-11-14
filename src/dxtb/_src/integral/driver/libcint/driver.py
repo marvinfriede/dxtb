@@ -28,7 +28,6 @@ from typing import TYPE_CHECKING
 import torch
 from tad_mctc.tree import Node, child, context
 
-from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis, _to_int_list
 from dxtb._src.typing import Tensor
 
@@ -92,7 +91,6 @@ class LibcintIntegralSetup(Node):
     tensors are not consumed across calls.
     """
 
-    index: IndexHelper = child()
     numbers: Tensor = child(keep_dtype=True)
     alphas: tuple[Tensor, ...] = child()
     coeffs: tuple[Tensor, ...] = child()
@@ -100,26 +98,61 @@ class LibcintIntegralSetup(Node):
     shell_layout: ShellLayout = context()
 
     def _validate(self) -> None:
-        if self.index.batch_mode != 0:
-            raise ValueError("Libcint setup requires one single System.")
-        if self.numbers.shape != self.index.shells_per_atom.shape:
+        if (
+            self.numbers.ndim < 1
+            or self.numbers.is_floating_point()
+            or self.numbers.dtype is torch.bool
+        ):
             raise ValueError(
-                "Libcint setup numbers must match IndexHelper atom shape."
+                "LibcintIntegralSetup.numbers must be a non-scalar integer tensor."
             )
-        tensors: list[Tensor] = [
-            self.numbers,
-            *self.alphas,
-            *self.coeffs,
-            self.index.shells_per_atom,
-            self.index.shells_to_ushell,
-            self.index.angular,
-            self.index.ushells_per_unique,
-            self.index.unique_angular,
-            self.index.shells_to_atom,
-            self.index.orbitals_to_shell,
-        ]
+        n_ushells = len(self.alphas)
+        if len(self.coeffs) != n_ushells:
+            raise ValueError(
+                "LibcintIntegralSetup alphas and coeffs must have equal length."
+            )
+        batch_shape = self.numbers.shape[:-1]
+        for alpha, coeff in zip(self.alphas, self.coeffs):
+            if (
+                alpha.ndim < 1
+                or alpha.shape != coeff.shape
+                or alpha.shape[:-1] != batch_shape
+            ):
+                raise ValueError(
+                    "LibcintIntegralSetup CGTO tensors must share non-scalar "
+                    "shapes matching numbers batch dimensions."
+                )
+
+        tensors: list[Tensor] = [self.numbers, *self.alphas, *self.coeffs]
         if self.active_atoms is not None:
+            if (
+                self.active_atoms.is_floating_point()
+                or self.active_atoms.dtype is torch.bool
+                or self.active_atoms.ndim != self.numbers.ndim
+                or self.active_atoms.shape[:-1] != batch_shape
+                or self.active_atoms.shape[-1] > self.numbers.shape[-1]
+            ):
+                raise ValueError(
+                    "LibcintIntegralSetup.active_atoms must be an integer "
+                    "index tensor bounded by numbers."
+                )
             tensors.append(self.active_atoms)
+
+        seen_elements: set[int] = set()
+        for number, element_shells in self.shell_layout:
+            if number <= 0 or number in seen_elements or not element_shells:
+                raise ValueError(
+                    "LibcintIntegralSetup.shell_layout entries must map "
+                    "distinct positive atomic numbers to non-empty shell tuples."
+                )
+            seen_elements.add(number)
+            for angmom, shell_idx in element_shells:
+                if angmom < 0 or shell_idx < 0 or shell_idx >= n_ushells:
+                    raise ValueError(
+                        "LibcintIntegralSetup.shell_layout shell metadata is "
+                        "out of bounds."
+                    )
+
         if any(tensor.device.type != "cpu" for tensor in tensors):
             raise ValueError(
                 "LibcintIntegralSetup requires CPU-resident setup tensors."
@@ -248,7 +281,6 @@ def setup_libcint(basis: Basis) -> LibcintIntegralSetup:
         )
 
     return LibcintIntegralSetup(
-        index=ihelp,
         numbers=numbers,
         alphas=expansion.alphas,
         coeffs=expansion.coeffs,

@@ -212,7 +212,7 @@ def _case(
     )
     system = calculator.model.setup(numbers, dd=calculator.dd)
     integrals, refocc = build_integral_matrices(
-        system.integral_setup, system.h0_setup, positions, charge
+        system.integral_setup, system.h0_setup, system.ihelp, positions, charge
     )
     n0, occupation, nel = get_refocc(refocc, charge, spin, system.ihelp)
     interactions = InteractionList(
@@ -880,6 +880,7 @@ def _no2_trajectory_energy(
     matrices, refocc = build_integral_matrices(
         model_system.integral_setup,
         model_system.h0_setup,
+        model_system.ihelp,
         positions,
         base_case.charge,
     )

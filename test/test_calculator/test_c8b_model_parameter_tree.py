@@ -248,9 +248,9 @@ def test_functional_repulsion_parameter_reaches_setup_and_energy() -> None:
     assert not hasattr(system_a.exact_core, "par")
     assert system_a.exact_core.integral is not None
     assert system_a.exact_core.integral.backend is not None
-    assert (
-        system_a.exact_core.index is system_a.exact_core.integral.backend.index
-    )
+    assert system_a.exact_core.index is system_a.ihelp
+    assert not hasattr(system_a.exact_core.integral, "index")
+    assert not hasattr(system_a.exact_core.integral.backend, "index")
     assert not torch.equal(energy_a, energy_b)
     torch.testing.assert_close(energy_a2, energy_a)
     torch.testing.assert_close(
@@ -408,7 +408,9 @@ def test_integral_backend_node_matches_driver(
     backend = system.exact_core.integral.backend
     assert isinstance(backend, expected_type)
     assert system.exact_core.integral.logical_device == system.numbers.device
-    assert system.exact_core.index is backend.index
+    assert system.exact_core.index is system.ihelp
+    assert not hasattr(system.exact_core.integral, "index")
+    assert not hasattr(backend, "index")
     assert system._active_exact_core() is system.exact_core
 
 
@@ -483,6 +485,7 @@ def test_no_integral_setup_keeps_backend_child_absent() -> None:
     assert system.exact_core is not None
     assert system.integral_setup is None
     assert system.exact_core.integral is None
+    assert system.exact_core.index is system.ihelp
     assert system._active_exact_core() is system.exact_core
 
 

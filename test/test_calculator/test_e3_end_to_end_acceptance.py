@@ -28,15 +28,15 @@ from dxtb._src.calculators.model import Model, ModelParameterNode
 from dxtb._src.calculators.singlepoint import _interaction_data
 from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.scf.eager import run_prepared_implicit_scf
-from dxtb._src.scf.implicit import implicit_root
 from dxtb._src.scf.guess import get_guess
+from dxtb._src.scf.implicit import implicit_root
 from dxtb._src.scf.iterator import get_refocc
 from dxtb.config import Config
 from dxtb.scf import (
     SCFDifferentiation,
-    SCFVariable,
     SCFStage,
     SCFStrategy,
+    SCFVariable,
     strategy_preset,
 )
 
@@ -638,7 +638,7 @@ def test_unrolled_trajectory_vs_converged_implicit_root_derivatives() -> None:
         chrg = p.new_zeros((1,))
         spin = p.new_zeros((1,))
         integrals, refocc = build_integral_matrices(
-            sys_conv.integral_setup, sys_conv.h0_setup, p, chrg
+            sys_conv.integral_setup, sys_conv.h0_setup, sys_conv.ihelp, p, chrg
         )
         n0, occupation, nel = get_refocc(refocc, chrg, spin, sys_conv.ihelp)
         interaction_data = _interaction_data(sys_conv, p, sys_conv.interactions)

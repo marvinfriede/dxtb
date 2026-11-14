@@ -893,7 +893,11 @@ def test_charge_mode_residual_orientation_sensitivity_is_orbital_anisotropy() ->
 
         chrg = positions.new_zeros((1,))
         integrals, refocc = build_integral_matrices(
-            system.integral_setup, system.h0_setup, positions, chrg
+            system.integral_setup,
+            system.h0_setup,
+            system.ihelp,
+            positions,
+            chrg,
         )
         n0, occupation, nel = get_refocc(refocc, chrg, None, system.ihelp)
         guess = get_guess(

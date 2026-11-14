@@ -81,12 +81,17 @@ def test_system_owns_registered_pair_nodes_and_conversion_is_isolated(
     setup = system.integral_setup.pytorch
     assert type(setup) is PytorchIntegralSetup
     assert isinstance(setup, Node)
-    assert isinstance(setup.index, IndexHelper)
-    assert setup.index is system.ihelp
+    assert not hasattr(setup, "index")
+    assert system.exact_core is not None
+    assert system.exact_core.index is system.ihelp
     assert type(setup.pair_plan) is PairPlan
     assert type(setup.pair_plan.classes) is tuple
     assert all(type(item) is PairClass for item in setup.pair_plan.classes)
-    assert setup.pair_plan.atom is setup.index.shells_to_atom
+    assert setup.pair_plan.atom is system.ihelp.shells_to_atom
+    assert torch.equal(
+        setup.pair_plan.orbitals_to_atom,
+        system.ihelp.orbitals_to_atom,
+    )
     assert not hasattr(setup, "ihelp")
     assert not hasattr(setup, "basis")
     assert not hasattr(setup, "param")
@@ -106,12 +111,17 @@ def test_system_owns_registered_pair_nodes_and_conversion_is_isolated(
         any(leaf is tensor for leaf in leaves)
         for tensor in (
             setup.pair_plan.atom,
-            setup.index.orbitals_to_shell,
+            setup.pair_plan.orbitals_to_atom,
             *(item.ib for item in setup.pair_plan.classes),
             *(item.jk for item in setup.pair_plan.classes),
             *(item.idx for item in setup.pair_plan.classes),
             *(item.weight for item in setup.pair_plan.classes),
         )
+    )
+    assert all(
+        all(leaf is not getattr(system.ihelp, name) for leaf in leaves)
+        for name in system.ihelp._child_names
+        if name != "shells_to_atom"
     )
     assert setup.algorithm not in leaves
 
@@ -121,8 +131,9 @@ def test_system_owns_registered_pair_nodes_and_conversion_is_isolated(
         tensor.clone()
         for tensor in (
             setup.pair_plan.atom,
-            setup.index.shells_to_atom,
-            setup.index.orbitals_to_shell,
+            setup.pair_plan.orbitals_to_atom,
+            system.ihelp.shells_to_atom,
+            system.ihelp.orbitals_to_shell,
             setup.pair_plan.classes[0].ib,
             setup.pair_plan.classes[0].jk,
             setup.pair_plan.classes[0].idx,
@@ -135,14 +146,18 @@ def test_system_owns_registered_pair_nodes_and_conversion_is_isolated(
         other_cls.jk[0] = other_cls.jk[0] + 1
         other_cls.idx[0] = other_cls.idx[0] + 1
         other_cls.weight[0] = other_cls.weight[0] + 7.0
-        other.index.shells_to_atom[0] = other.index.shells_to_atom[0] + 1
+        other.pair_plan.atom[0] = other.pair_plan.atom[0] + 1
+        other.pair_plan.orbitals_to_atom[0] = (
+            other.pair_plan.orbitals_to_atom[0] + 1
+        )
     assert torch.equal(setup.pair_plan.atom, system_originals[0])
-    assert torch.equal(setup.index.shells_to_atom, system_originals[1])
-    assert torch.equal(setup.index.orbitals_to_shell, system_originals[2])
-    assert torch.equal(setup.pair_plan.classes[0].ib, system_originals[3])
-    assert torch.equal(setup.pair_plan.classes[0].jk, system_originals[4])
-    assert torch.equal(setup.pair_plan.classes[0].idx, system_originals[5])
-    assert torch.equal(setup.pair_plan.classes[0].weight, system_originals[6])
+    assert torch.equal(setup.pair_plan.orbitals_to_atom, system_originals[1])
+    assert torch.equal(system.ihelp.shells_to_atom, system_originals[2])
+    assert torch.equal(system.ihelp.orbitals_to_shell, system_originals[3])
+    assert torch.equal(setup.pair_plan.classes[0].ib, system_originals[4])
+    assert torch.equal(setup.pair_plan.classes[0].jk, system_originals[5])
+    assert torch.equal(setup.pair_plan.classes[0].idx, system_originals[6])
+    assert torch.equal(setup.pair_plan.classes[0].weight, system_originals[7])
 
     def fail_prepare(*args, **kwargs):
         raise AssertionError("Node conversion must not rebuild the pair plan")
@@ -154,7 +169,7 @@ def test_system_owns_registered_pair_nodes_and_conversion_is_isolated(
     assert all(value.dtype == torch.float32 for value in converted_dtype.alphas)
     assert all(value.dtype == torch.float32 for value in converted_dtype.coeffs)
     assert converted_dtype.pair_plan.atom.dtype == torch.int64
-    assert converted_dtype.index.orbitals_to_shell.dtype == torch.int64
+    assert converted_dtype.pair_plan.orbitals_to_atom.dtype == torch.int64
     assert converted_dtype.pair_plan.classes[0].ib.dtype == torch.int64
     assert converted_dtype.pair_plan.classes[0].idx.dtype == torch.int64
     assert converted_dtype.pair_plan.classes[0].weight.dtype == torch.float32
@@ -329,7 +344,7 @@ def test_node_screening_chunking_checkpoint_and_missing_plan() -> None:
     )
     unplanned_pairs = select_pairs(
         compute_1d_os,
-        core.index,
+        calc.system.ihelp,
         alphas,
         coeffs,
         positions,
@@ -341,7 +356,7 @@ def test_node_screening_chunking_checkpoint_and_missing_plan() -> None:
 
     unplanned = assemble_matrix(
         compute_1d_os,
-        core.index,
+        calc.system.ihelp,
         alphas,
         coeffs,
         positions,
@@ -412,8 +427,9 @@ def test_pytorch_setup_index_identity_validation_and_meta_conversion() -> None:
     assert basis.ihelp is ihelp
 
     setup = setup_integrals(basis)
-    assert setup.index is basis.ihelp
-    assert setup.index is ihelp
+    assert not hasattr(setup, "index")
+    assert setup.pair_plan.atom is ihelp.shells_to_atom
+    assert torch.equal(setup.pair_plan.orbitals_to_atom, ihelp.orbitals_to_atom)
 
     with pytest.raises(ValueError, match="Unknown integral algorithm"):
         setup_integrals(basis, algorithm="not_a_kernel")
@@ -453,3 +469,92 @@ def test_node_plan_compiles_fullgraph_without_host_rebuild() -> None:
     torch.testing.assert_close(
         actual, eval_overlap(positions), rtol=1e-12, atol=1e-13
     )
+
+
+def test_orbitals_to_atom_preserves_negative_sentinels_and_multipole_grad() -> (
+    None
+):
+    """Precomputed orbitals_to_atom preserves -999 padding sentinels and matches two-stage spread."""
+    from dxtb._src.integral.driver.pytorch.impls.pairs import _orbitals_to_atom
+    from dxtb._src.utils import wrap_gather
+
+    # Construct synthetic padded shell/orbital index maps with negative sentinels
+    # in both shells_to_atom and orbitals_to_shell.
+    shells_to_atom = torch.tensor([-999, 0, -999, 2], dtype=torch.int64)
+    orbitals_to_shell = torch.tensor(
+        [0, 1, -999, 2, 3, 3, -999, 1], dtype=torch.int64
+    )
+    orb_to_atom = _orbitals_to_atom(shells_to_atom, orbitals_to_shell)
+    assert orb_to_atom.tolist() == [-999, 0, -999, -999, 2, 2, -999, 0]
+
+    empty_map = _orbitals_to_atom(
+        shells_to_atom, torch.empty(0, dtype=torch.int64)
+    )
+    assert empty_map.shape == (0,) and empty_map.dtype == torch.int64
+
+    positions_a = torch.tensor(
+        [[1.3, -0.7, 0.5], [9.9, -8.8, 7.7], [-0.4, 2.1, -1.2]],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    positions_b = positions_a.detach().clone().requires_grad_(True)
+
+    # Compare single-stage wrap_gather against the original two-stage spread.
+    single_stage = wrap_gather(positions_a, -2, orb_to_atom, extra=True)
+    shell_pos = wrap_gather(positions_b, -2, shells_to_atom, extra=True)
+    two_stage = wrap_gather(shell_pos, -2, orbitals_to_shell, extra=True)
+    torch.testing.assert_close(single_stage, two_stage, atol=0.0, rtol=0.0)
+
+    weights = torch.linspace(
+        -0.5, 1.2, single_stage.numel(), dtype=torch.float64
+    ).reshape_as(single_stage)
+    (grad_single,) = torch.autograd.grad(
+        (single_stage * weights).sum(), positions_a
+    )
+    (grad_two,) = torch.autograd.grad((two_stage * weights).sum(), positions_b)
+    torch.testing.assert_close(grad_single, grad_two, atol=0.0, rtol=0.0)
+    # Unreferenced atom 1 receives exact zero gradient.
+    assert torch.equal(grad_single[1], torch.zeros(3, dtype=torch.float64))
+
+
+def test_stacked_pytorch_setup_vmap_multipole_moments() -> None:
+    """Stacked PytorchIntegralSetup supports vmap across overlap, dipole, and quadrupole."""
+    from dxtb._src.integral.driver.pytorch import evaluate_moments
+
+    par = ParamModule(GFN2_XTB, dtype=torch.float64)
+    nums_c2 = torch.tensor([6, 6])
+    nums_n2 = torch.tensor([7, 7])
+    pos_c2 = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.1, -0.2, 2.3]], dtype=torch.float64
+    )
+    pos_n2 = torch.tensor(
+        [[0.0, 0.1, 0.0], [-0.2, 0.0, 2.1]], dtype=torch.float64
+    )
+    ih_c2 = IndexHelper.from_numbers(nums_c2, par)
+    ih_n2 = IndexHelper.from_numbers(nums_n2, par)
+    setup_c2 = setup_integrals(Basis(nums_c2, par, ih_c2, dtype=torch.float64))
+    setup_n2 = setup_integrals(Basis(nums_n2, par, ih_n2, dtype=torch.float64))
+
+    stacked_setup = stack((setup_c2, setup_n2))
+    stacked_pos = torch.stack((pos_c2, pos_n2))
+    assert stacked_setup.pair_plan.orbitals_to_atom.shape[0] == 2
+
+    def moments_for_lane(
+        lane_setup: PytorchIntegralSetup, lane_pos: Tensor
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """Evaluate overlap, dipole, and quadrupole moments for one stacked lane."""
+        ovlp, dip, quad = evaluate_moments(
+            lane_setup, lane_pos, labels.INTLEVEL_QUADRUPOLE
+        )
+        assert dip is not None and quad is not None
+        return ovlp, dip, quad
+
+    mapped_o, mapped_d, mapped_q = vmap(moments_for_lane)(
+        stacked_setup, stacked_pos
+    )
+    ref_c2 = moments_for_lane(setup_c2, pos_c2)
+    ref_n2 = moments_for_lane(setup_n2, pos_n2)
+    for idx, ref in enumerate((ref_c2, ref_n2)):
+        _assert_matrix_parity(mapped_o[idx], ref[0])
+        _assert_matrix_parity(mapped_d[idx], ref[1])
+        _assert_matrix_parity(mapped_q[idx], ref[2])

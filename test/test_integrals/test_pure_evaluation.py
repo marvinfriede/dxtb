@@ -53,24 +53,31 @@ def test_integral_matrices_are_history_independent(driver: int) -> None:
     )
     setup = calc.system.integral_setup
     h0_setup = calc.system.h0_setup
+    ihelp = calc.system.ihelp
     assert setup is not None and h0_setup is not None
+    assert calc.system.exact_core is not None
+    assert calc.system.exact_core.index is ihelp
+    assert not hasattr(setup, "index")
     core_setup = setup.pytorch
     structural_snapshot = None
     structural_ids = None
     if driver == labels.INTDRIVER_PYTORCH:
         assert isinstance(core_setup, PytorchIntegralSetup)
+        assert not hasattr(core_setup, "index")
         structural_snapshot = [
-            core_setup.index.shells_to_atom.clone(),
-            core_setup.index.orbitals_to_shell.clone(),
+            ihelp.shells_to_atom.clone(),
+            ihelp.orbitals_to_shell.clone(),
             core_setup.pair_plan.atom.clone(),
+            core_setup.pair_plan.orbitals_to_atom.clone(),
         ]
         structural_ids = (
             id(core_setup),
             id(core_setup.pair_plan),
-            id(core_setup.index),
-            id(core_setup.index.shells_to_atom),
-            id(core_setup.index.orbitals_to_shell),
+            id(ihelp),
+            id(ihelp.shells_to_atom),
+            id(ihelp.orbitals_to_shell),
             id(core_setup.pair_plan.atom),
+            id(core_setup.pair_plan.orbitals_to_atom),
             tuple(
                 (
                     id(pair_class),
@@ -88,22 +95,23 @@ def test_integral_matrices_are_history_independent(driver: int) -> None:
         )
     if setup.libcint is not None:
         assert not hasattr(setup.libcint, "par")
+        assert not hasattr(setup.libcint, "index")
 
     moved = positions.clone()
     moved[1, 0] += 0.08
 
     first, refocc1 = build_integral_matrices(
-        setup, h0_setup, positions, charge=0.0
+        setup, h0_setup, ihelp, positions, charge=0.0
     )
     assert first.overlap.device == positions.device
     assert first.hcore.device == positions.device
     assert refocc1.device == positions.device
     second, refocc2 = build_integral_matrices(
-        setup, h0_setup, moved, charge=0.0
+        setup, h0_setup, ihelp, moved, charge=0.0
     )
     assert not hasattr(calc, "integrals")
     repeated, refocc3 = build_integral_matrices(
-        setup, h0_setup, positions.clone(), charge=0.0
+        setup, h0_setup, ihelp, positions.clone(), charge=0.0
     )
 
     for name in ("overlap", "dipole", "quadrupole", "hcore"):
@@ -125,21 +133,23 @@ def test_integral_matrices_are_history_independent(driver: int) -> None:
         assert structural_ids is not None
         assert id(core_setup) == structural_ids[0]
         assert id(core_setup.pair_plan) == structural_ids[1]
-        assert id(core_setup.index) == structural_ids[2]
-        assert id(core_setup.index.shells_to_atom) == structural_ids[3]
-        assert id(core_setup.index.orbitals_to_shell) == structural_ids[4]
+        assert id(ihelp) == structural_ids[2]
+        assert id(ihelp.shells_to_atom) == structural_ids[3]
+        assert id(ihelp.orbitals_to_shell) == structural_ids[4]
         assert id(core_setup.pair_plan.atom) == structural_ids[5]
+        assert id(core_setup.pair_plan.orbitals_to_atom) == structural_ids[6]
         for current, original in zip(
             (
-                core_setup.index.shells_to_atom,
-                core_setup.index.orbitals_to_shell,
+                ihelp.shells_to_atom,
+                ihelp.orbitals_to_shell,
                 core_setup.pair_plan.atom,
+                core_setup.pair_plan.orbitals_to_atom,
             ),
             structural_snapshot,
         ):
             assert torch.equal(current, original)
         for pair_class, snapshot in zip(
-            core_setup.pair_plan.classes, structural_ids[6]
+            core_setup.pair_plan.classes, structural_ids[7]
         ):
             (
                 pair_class_id,
@@ -170,9 +180,11 @@ def test_integral_matrices_are_history_independent(driver: int) -> None:
         )
         fresh_setup = fresh_calc.system.integral_setup
         assert fresh_setup is not None
+        assert fresh_calc.system.h0_setup is not None
         fresh, _ = build_integral_matrices(
             fresh_setup,
             fresh_calc.system.h0_setup,
+            fresh_calc.system.ihelp,
             positions,
             charge=0.0,
         )
@@ -183,7 +195,7 @@ def test_integral_matrices_are_history_independent(driver: int) -> None:
 
     def loss(geometry: Tensor) -> Tensor:
         matrices, refocc = build_integral_matrices(
-            setup, h0_setup, geometry, charge=0.0
+            setup, h0_setup, ihelp, geometry, charge=0.0
         )
         assert matrices.dipole is not None
         assert matrices.quadrupole is not None
@@ -277,10 +289,18 @@ def test_pytorch_integral_node_conversion_preserves_pair_plan() -> None:
     assert setup is not None
     assert type(setup) is PytorchIntegralSetup
 
+    assert not hasattr(setup, "index")
     converted = setup.to(device="cpu", dtype=torch.float32)
+    assert not hasattr(converted, "index")
     assert converted.pair_plan is not setup.pair_plan
-    assert converted.index.shells_to_atom.device == torch.device("cpu")
-    assert torch.equal(converted.pair_plan.atom, converted.index.shells_to_atom)
+    assert converted.pair_plan.atom.device == torch.device("cpu")
+    assert converted.pair_plan.orbitals_to_atom.device == torch.device("cpu")
+    assert torch.equal(
+        converted.pair_plan.atom, calc.system.ihelp.shells_to_atom
+    )
+    assert torch.equal(
+        converted.pair_plan.orbitals_to_atom, setup.pair_plan.orbitals_to_atom
+    )
     assert converted.pair_plan.nao == setup.pair_plan.nao
     assert len(converted.pair_plan.classes) == len(setup.pair_plan.classes)
     for old, new in zip(setup.pair_plan.classes, converted.pair_plan.classes):
@@ -366,12 +386,13 @@ def test_pure_integral_levels_match_legacy(
     ref_matrices, ref_refocc = build_integral_matrices(
         ref_calc.system.integral_setup,
         ref_calc.system.h0_setup,
+        ref_calc.system.ihelp,
         positions,
         charge=0.0,
     )
 
     matrices, refocc = build_integral_matrices(
-        setup, h0_setup, positions, charge=0.0
+        setup, h0_setup, calc.system.ihelp, positions, charge=0.0
     )
     assert matrices.overlap.device == positions.device
     assert matrices.hcore.device == positions.device
@@ -490,6 +511,7 @@ def test_fresh_system_rebuild_preserves_basis_parameter_gradients(
         matrices, _ = build_integral_matrices(
             system.integral_setup,
             system.h0_setup,
+            system.ihelp,
             positions,
             charge=0.0,
         )
@@ -586,7 +608,11 @@ assert calc.system.integral_setup is not None
 assert calc.system.integral_setup.pytorch is not None
 assert calc.system.integral_setup.libcint is None
 matrices, _ = build_integral_matrices(
-    calc.system.integral_setup, calc.system.h0_setup, positions, charge=0.0
+    calc.system.integral_setup,
+    calc.system.h0_setup,
+    calc.system.ihelp,
+    positions,
+    charge=0.0,
 )
 assert torch.isfinite(matrices.overlap).all()
 assert "tad_libcint" not in sys.modules
@@ -661,12 +687,13 @@ def test_pure_integral_evaluation_supports_torch_transforms() -> None:
     )
     setup = calc.system.integral_setup
     h0_setup = calc.system.h0_setup
+    ihelp = calc.system.ihelp
     assert setup is not None and setup.pytorch is not None
     assert h0_setup is not None
 
     def evaluate(geometry: Tensor) -> tuple[Tensor, ...]:
         matrices, refocc = build_integral_matrices(
-            setup, h0_setup, geometry, charge=0.0
+            setup, h0_setup, ihelp, geometry, charge=0.0
         )
         assert matrices.dipole is not None
         assert matrices.quadrupole is not None

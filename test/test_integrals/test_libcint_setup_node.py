@@ -127,17 +127,17 @@ def test_libcint_setup_node_schema_snapshot_and_conversion(
     basis, core = _basis_and_setup(numbers, par)
     assert type(core) is LibcintIntegralSetup
     assert isinstance(core, Node)
+    assert not hasattr(core, "index")
     assert not hasattr(core, "ihelp")
     assert not hasattr(core, "par")
     assert not hasattr(core, "basis_setups")
     assert not hasattr(core, "force_cpu")
-    assert core.index is basis.ihelp
 
     leaves = _leaves(core)
     expected_n_shells = 4 if method == "gfn1" else 3
     assert len(core.alphas) == expected_n_shells
     assert len(core.coeffs) == expected_n_shells
-    assert len(leaves) == 13 + 2 * expected_n_shells
+    assert len(leaves) == 1 + 2 * expected_n_shells
     assert all(leaf.device.type == "cpu" for leaf in leaves)
     assert all(a.dtype == torch.float64 for a in core.alphas)
     assert all(c.dtype == torch.float64 for c in core.coeffs)
@@ -148,10 +148,7 @@ def test_libcint_setup_node_schema_snapshot_and_conversion(
     rebuilt = tree_unflatten(flat, spec)
     assert type(rebuilt) is LibcintIntegralSetup
     assert rebuilt.shell_layout == core.shell_layout
-    assert torch.equal(rebuilt.index.shells_to_atom, core.index.shells_to_atom)
-    assert torch.equal(
-        rebuilt.index.orbitals_to_shell, core.index.orbitals_to_shell
-    )
+    assert torch.equal(rebuilt.numbers, core.numbers)
 
     f32 = core.to(dtype=torch.float32)
     f64 = f32.to(dtype=torch.float64)
@@ -164,7 +161,6 @@ def test_libcint_setup_node_schema_snapshot_and_conversion(
     assert all(a.dtype == torch.float64 for a in f64.alphas)
     assert all(c.dtype == torch.float64 for c in f64.coeffs)
     assert f32.numbers.dtype == numbers.dtype
-    assert f32.index.angular.dtype == core.index.angular.dtype
 
     outer = IntegralSetup(
         driver_type=labels.INTDRIVER_LIBCINT,
@@ -172,6 +168,7 @@ def test_libcint_setup_node_schema_snapshot_and_conversion(
         logical_device=torch.device("cpu"),
         backend=core,
     )
+    assert not hasattr(outer, "index")
     outer_meta = outer.to(device="meta")
     assert outer_meta.logical_device == torch.device("meta")
     assert outer_meta.libcint is not None
@@ -183,7 +180,7 @@ def test_libcint_setup_node_schema_snapshot_and_conversion(
     assert type(stacked) is LibcintIntegralSetup
     assert stacked.alphas[0].shape[0] == 2
     assert stacked.coeffs[0].shape[0] == 2
-    assert stacked.index.shells_to_atom.shape[0] == 2
+    assert stacked.numbers.shape[0] == 2
 
     # The Node owns precomputed CGTO tensors rather than aliasing Basis.slater.
     old_alphas = tuple(a.clone() for a in core.alphas)
@@ -240,18 +237,20 @@ def test_libcint_system_node_history_and_parity(
     b = positions.clone()
     b[1, 0] += 0.07
     core_a, refocc_a = build_integral_matrices(
-        core_outer, calc.system.h0_setup, a, 0.0
+        core_outer, calc.system.h0_setup, node_ihelp, a, 0.0
     )
     sys_a, sys_refocc = build_integral_matrices(
-        system_outer, calc.system.h0_setup, a, 0.0
+        system_outer, calc.system.h0_setup, calc.system.ihelp, a, 0.0
     )
     for name in ("overlap", "dipole", "quadrupole", "hcore"):
         torch.testing.assert_close(getattr(core_a, name), getattr(sys_a, name))
     torch.testing.assert_close(refocc_a, sys_refocc)
 
-    build_integral_matrices(core_outer, calc.system.h0_setup, b, 0.0)
+    build_integral_matrices(
+        core_outer, calc.system.h0_setup, node_ihelp, b, 0.0
+    )
     repeated, refocc_repeated = build_integral_matrices(
-        core_outer, calc.system.h0_setup, a, 0.0
+        core_outer, calc.system.h0_setup, node_ihelp, a, 0.0
     )
     for name in ("overlap", "dipole", "quadrupole", "hcore"):
         torch.testing.assert_close(
@@ -376,20 +375,20 @@ def test_libcint_node_wrapper_maps_match_index_helper(name: str) -> None:
     numbers = samples[name]["numbers"]
     positions = samples[name]["positions"].to(dtype=torch.float64)
     par = ParamModule(GFN2_XTB, dtype=positions.dtype)
-    _, core = _basis_and_setup(numbers, par)
+    basis, core = _basis_and_setup(numbers, par)
     libcint_basis, structure = core.create_libcint(positions)
     layout = libcint_basis.layout(structure.numbers)
     np.testing.assert_array_equal(
-        layout.shell_atom, core.index.shells_to_atom.detach().cpu().numpy()
+        layout.shell_atom, basis.ihelp.shells_to_atom.detach().cpu().numpy()
     )
     np.testing.assert_array_equal(
-        layout.shell_angmom, core.index.angular.detach().cpu().numpy()
+        layout.shell_angmom, basis.ihelp.angular.detach().cpu().numpy()
     )
     np.testing.assert_array_equal(
         layout.ao_loc[1:] - layout.ao_loc[:-1],
-        core.index.orbitals_per_shell.detach().cpu().numpy(),
+        basis.ihelp.orbitals_per_shell.detach().cpu().numpy(),
     )
-    assert layout.nao == core.index.nao
+    assert layout.nao == basis.ihelp.nao
 
 
 def test_setup_libcint_rejects_non_cpu_source() -> None:
@@ -402,7 +401,6 @@ def test_setup_libcint_rejects_non_cpu_source() -> None:
         setup_libcint(basis)
     with pytest.raises(ValueError, match="CPU-resident"):
         LibcintIntegralSetup(
-            index=core.index.to(device="meta"),
             numbers=core.numbers.to(device="meta"),
             alphas=tuple(a.to(device="meta") for a in core.alphas),
             coeffs=tuple(c.to(device="meta") for c in core.coeffs),
@@ -484,7 +482,7 @@ def test_libcint_eval_does_not_reexpand_cgtos_and_builds_basis_once(
     )
     s2g_calls = 0
     lc_basis_calls = 0
-    build_integral_matrices(isetup, calc.system.h0_setup, positions, 0.0)
+    build_integral_matrices(isetup, calc.system.h0_setup, ihelp, positions, 0.0)
     assert s2g_calls == 0
     assert lc_basis_calls == 1
 
@@ -513,6 +511,7 @@ def test_libcint_native_ket_moments_match_pytorch(name: str) -> None:
             build_integral_matrices(
                 calc.system.integral_setup,
                 calc.system.h0_setup,
+                calc.system.ihelp,
                 positions,
                 0.0,
             )[0]
@@ -521,6 +520,7 @@ def test_libcint_native_ket_moments_match_pytorch(name: str) -> None:
         matrices = build_integral_matrices(
             calc.system.integral_setup,
             calc.system.h0_setup,
+            calc.system.ihelp,
             variable_positions,
             0.0,
         )[0]
@@ -676,13 +676,17 @@ def test_independent_backward_passes_and_functional_slater_jacrev() -> None:
         assert isetup is not None and h0_setup is not None
 
         p1 = pos1.clone().requires_grad_(True)
-        m1, _ = build_integral_matrices(isetup, h0_setup, p1, 0.0)
+        m1, _ = build_integral_matrices(
+            isetup, h0_setup, calc.system.ihelp, p1, 0.0
+        )
         assert m1.quadrupole is not None
         (m1.overlap.square().sum() + m1.quadrupole.square().sum()).backward()
         assert p1.grad is not None and torch.isfinite(p1.grad).all()
 
         p2 = pos2.clone().requires_grad_(True)
-        m2, _ = build_integral_matrices(isetup, h0_setup, p2, 0.0)
+        m2, _ = build_integral_matrices(
+            isetup, h0_setup, calc.system.ihelp, p2, 0.0
+        )
         assert m2.quadrupole is not None
         (m2.overlap.square().sum() + m2.quadrupole.square().sum()).backward()
         assert p2.grad is not None and torch.isfinite(p2.grad).all()
@@ -788,8 +792,8 @@ def test_libcint_noncontiguous_padding_unsorted_masks_and_unstack() -> None:
         device=torch.device("cpu"),
         dtype=torch.float64,
     )
-    m_pt, _ = build_integral_matrices(pt_pad, h0_pad, pos_pad, 0.0)
-    m_lc, _ = build_integral_matrices(lc_pad, h0_pad, pos_pad, 0.0)
+    m_pt, _ = build_integral_matrices(pt_pad, h0_pad, ihelp_pad, pos_pad, 0.0)
+    m_lc, _ = build_integral_matrices(lc_pad, h0_pad, ihelp_pad, pos_pad, 0.0)
 
     nums_act = torch.tensor([26, 14, 1], dtype=torch.long)
     pos_act = pos_pad[[1, 3, 5]]
@@ -810,7 +814,7 @@ def test_libcint_noncontiguous_padding_unsorted_masks_and_unstack() -> None:
         device=torch.device("cpu"),
         dtype=torch.float64,
     )
-    m_act, _ = build_integral_matrices(lc_act, h0_act, pos_act, 0.0)
+    m_act, _ = build_integral_matrices(lc_act, h0_act, ihelp_act, pos_act, 0.0)
 
     torch.testing.assert_close(
         m_lc.overlap, m_pt.overlap, atol=1e-13, rtol=1e-13
@@ -858,4 +862,139 @@ def test_libcint_noncontiguous_padding_unsorted_masks_and_unstack() -> None:
         build_overlap_libcint(lc_feh_alt, pos_feh),
         atol=0.0,
         rtol=0.0,
+    )
+
+
+@pytest.mark.cuda
+def test_cuda_system_with_cpu_libcint_and_native_pytorch_no_index_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B8: CUDA System owns CUDA canonical index with CPU libcint and zero per-geometry index transfers."""
+    cuda_device = torch.device("cuda:0")
+    numbers = samples["H2O"]["numbers"].to(device=cuda_device)
+    pos_a = samples["H2O"]["positions"].to(
+        device=cuda_device, dtype=torch.float64
+    )
+    pos_b = pos_a.clone()
+    pos_b[1, 0] += 0.09
+
+    calc_pt = Calculator(
+        numbers,
+        GFN2_XTB,
+        device=cuda_device,
+        dtype=torch.float64,
+        opts={
+            "verbosity": 0,
+            "int_driver": labels.INTDRIVER_PYTORCH,
+            "int_level": labels.INTLEVEL_QUADRUPOLE,
+        },
+    )
+    calc_lc = Calculator(
+        numbers,
+        GFN2_XTB,
+        device=cuda_device,
+        dtype=torch.float64,
+        opts={
+            "verbosity": 0,
+            "int_driver": labels.INTDRIVER_LIBCINT,
+            "int_level": labels.INTLEVEL_QUADRUPOLE,
+        },
+    )
+
+    # Verify ownership and residency on CUDA.
+    for calc in (calc_pt, calc_lc):
+        assert calc.system.ihelp.device == cuda_device
+        assert calc.system.exact_core is not None
+        assert calc.system.exact_core.index is calc.system.ihelp
+        assert calc.system.exact_core.index.device == cuda_device
+        assert calc.system.integral_setup is not None
+        assert calc.system.integral_setup.logical_device == cuda_device
+    assert calc_pt.system.integral_setup.pytorch is not None
+    assert calc_pt.system.integral_setup.pytorch.device == cuda_device
+    assert calc_lc.system.integral_setup.libcint is not None
+    assert calc_lc.system.integral_setup.libcint.device.type == "cpu"
+
+    def forbid_index_to(self: IndexHelper, *args: Any, **kwargs: Any) -> Any:
+        raise AssertionError(
+            "IndexHelper.to must not run during CUDA geometry evaluation"
+        )
+
+    monkeypatch.setattr(IndexHelper, "to", forbid_index_to)
+
+    # Repeated independent evaluations, matrix output devices, and nuclear gradients.
+    for geometry in (pos_a, pos_b, pos_a.clone()):
+        p_pt = geometry.clone().requires_grad_(True)
+        p_lc = geometry.clone().requires_grad_(True)
+        m_pt, occ_pt = build_integral_matrices(
+            calc_pt.system.integral_setup,
+            calc_pt.system.h0_setup,
+            calc_pt.system.ihelp,
+            p_pt,
+            0.0,
+        )
+        m_lc, occ_lc = build_integral_matrices(
+            calc_lc.system.integral_setup,
+            calc_lc.system.h0_setup,
+            calc_lc.system.ihelp,
+            p_lc,
+            0.0,
+        )
+        for mat_pt, mat_lc in (
+            (m_pt.overlap, m_lc.overlap),
+            (m_pt.dipole, m_lc.dipole),
+            (m_pt.quadrupole, m_lc.quadrupole),
+            (m_pt.hcore, m_lc.hcore),
+            (occ_pt, occ_lc),
+        ):
+            assert mat_pt is not None and mat_lc is not None
+            assert mat_pt.device == cuda_device
+            assert mat_lc.device == cuda_device
+            torch.testing.assert_close(mat_lc, mat_pt, atol=2e-11, rtol=2e-11)
+
+        res_pt = calc_pt.system.singlepoint(p_pt)
+        res_lc = calc_lc.system.singlepoint(p_lc)
+        assert res_pt.energy.device == cuda_device
+        assert res_lc.energy.device == cuda_device
+        (g_pt,) = torch.autograd.grad(res_pt.energy.sum(), p_pt)
+        (g_lc,) = torch.autograd.grad(res_lc.energy.sum(), p_lc)
+        assert g_pt.device == cuda_device and g_lc.device == cuda_device
+        torch.testing.assert_close(
+            res_lc.energy, res_pt.energy, atol=2e-9, rtol=2e-9
+        )
+        torch.testing.assert_close(g_lc, g_pt, atol=2e-8, rtol=2e-8)
+
+    monkeypatch.undo()
+
+    # Slater-parameter gradients on CUDA for both native PyTorch and CPU-resident libcint.
+    param_grads = []
+    for driver in (labels.INTDRIVER_PYTORCH, labels.INTDRIVER_LIBCINT):
+        par = ParamModule(GFN2_XTB, device=cuda_device, dtype=torch.float64)
+        slater = dict(par.named_parameters())[
+            "parameter_tree.element.H.slater.param"
+        ]
+        slater.requires_grad_(True)
+        calc = Calculator(
+            numbers,
+            par,
+            device=cuda_device,
+            dtype=torch.float64,
+            opts={"verbosity": 0, "int_driver": driver},
+        )
+        matrices, _ = build_integral_matrices(
+            calc.system.integral_setup,
+            calc.system.h0_setup,
+            calc.system.ihelp,
+            pos_a,
+            0.0,
+        )
+        (grad_slater,) = torch.autograd.grad(
+            matrices.overlap.square().sum() + matrices.hcore.square().sum(),
+            slater,
+        )
+        assert grad_slater.device == cuda_device
+        assert torch.isfinite(grad_slater).all()
+        assert grad_slater.abs().sum() > 0
+        param_grads.append(grad_slater)
+    torch.testing.assert_close(
+        param_grads[1], param_grads[0], atol=1e-10, rtol=1e-10
     )

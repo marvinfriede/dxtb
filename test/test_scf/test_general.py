@@ -118,6 +118,7 @@ def test_scf_solve_rejects_batched_input_and_runs_single_system() -> None:
     integrals_single, refocc_single = build_integral_matrices(
         calc_single.system.integral_setup,
         calc_single.system.h0_setup,
+        calc_single.system.ihelp,
         positions_single,
         charge_single,
     )

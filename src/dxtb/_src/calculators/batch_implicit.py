@@ -721,10 +721,6 @@ def _validate_system_and_positions(
             "Converged-root conformer batching requires a single-System "
             "owner (numbers.ndim == 1 and batch_mode == 0)."
         )
-    if not system._ihelp_compatible():
-        raise ValueError(
-            "System IndexHelper is incompatible with the captured System setup."
-        )
     if positions.ndim != 3 or positions.shape[0] < 1:
         raise ValueError(
             "Converged-root conformer batching expects positions with shape "
@@ -753,10 +749,15 @@ def _validate_system_and_positions(
         )
     )
     if floating_setup is not None:
-        if floating_setup.device != system_device:
+        floating_setup_device = (
+            integral_setup.device
+            if system.h0_setup is None and integral_setup is not None
+            else floating_setup.device
+        )
+        if floating_setup_device != system_device:
             raise DeviceError(
                 "System floating setup is on "
-                f"'{floating_setup.device}', but System numbers are on "
+                f"'{floating_setup_device}', but System numbers are on "
                 f"'{system_device}'."
             )
         if core is not None and floating_setup.dtype != core.effective_dtype:
@@ -770,6 +771,10 @@ def _validate_system_and_positions(
             "Dtype mismatch: System floating setup is of type "
             f"'{expected_dtype}', but positions are of type "
             f"'{positions.dtype}'."
+        )
+    if core is None and not system._ihelp_compatible():
+        raise ValueError(
+            "System IndexHelper is incompatible with the captured System setup."
         )
 
     if field is not None and config.ints.level < labels.INTLEVEL_DIPOLE:
@@ -819,10 +824,11 @@ def _validate_system_and_positions(
     core_index = (
         candidate_index
         if candidate_index is not None
-        and candidate_index.shells_to_atom.device
-        == system.ihelp.shells_to_atom.device
-        and candidate_index.orbitals_to_shell.device
-        == system.ihelp.orbitals_to_shell.device
+        and all(
+            getattr(candidate_index, name).device
+            == getattr(system.ihelp, name).device
+            for name in candidate_index._child_names
+        )
         else None
     )
     return core, numbers, config, integral_setup, h0_setup, route, core_index
@@ -846,6 +852,7 @@ def _build_lane_inputs(
     matrices, refocc = build_integral_matrices(
         integral_setup,
         h0_setup,
+        core_index if core_index is not None else system.ihelp,
         lane_positions,
         lane_charge,
     )

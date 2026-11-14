@@ -73,7 +73,7 @@ def test_pure_multipole_reuses_setup_without_call_state(
     )
     direct = assemble_matrix(
         get_kernel(algorithm),
-        setup.index,
+        ihelp,
         list(setup.alphas),
         list(setup.coeffs),
         positions,
@@ -139,9 +139,7 @@ def test_pure_multipole_supports_jvp_and_vmap(
         return build(setup, pos)
 
     value, derivative = jvp(eval_multipole, (positions,), (tangent,))
-    batched = vmap(eval_multipole)(
-        torch.stack((positions, positions.clone()))
-    )
+    batched = vmap(eval_multipole)(torch.stack((positions, positions.clone())))
 
     assert torch.isfinite(value).all()
     assert torch.isfinite(derivative).all()

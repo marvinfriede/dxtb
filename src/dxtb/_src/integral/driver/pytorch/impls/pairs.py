@@ -46,7 +46,9 @@ import torch
 from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
+from dxtb._src.basis.indexhelper import PAD
 from dxtb._src.typing import Tensor
+from dxtb._src.utils import wrap_gather
 
 from .pipeline import (
     OVERLAP_COMPONENTS,
@@ -95,18 +97,101 @@ class PairClass(Node):
     idx: Tensor = child(keep_dtype=True)
     weight: Tensor = child()
 
+    def _validate(self) -> None:
+        if self.ub < 0 or self.uk < 0 or self.lb < 0 or self.lk < 0:
+            raise ValueError(
+                "PairClass indices and angular momenta must be >= 0."
+            )
+        for name in ("ib", "jk", "idx"):
+            tensor = getattr(self, name)
+            if tensor.dtype is not torch.int64:
+                raise TypeError(
+                    f"PairClass.{name} must have dtype torch.int64, "
+                    f"got {tensor.dtype}."
+                )
+        if not self.weight.is_floating_point():
+            raise TypeError(
+                "PairClass.weight must have a floating-point dtype."
+            )
+        if (
+            self.ib.ndim < 1
+            or self.jk.shape != self.ib.shape
+            or self.weight.shape != self.ib.shape
+        ):
+            raise ValueError(
+                "PairClass ib, jk, and weight must share a non-scalar shape."
+            )
+        expected_idx_shape = (*self.ib.shape, 2 * self.lb + 1, 2 * self.lk + 1)
+        if self.idx.shape != expected_idx_shape:
+            raise ValueError(
+                f"PairClass.idx expected shape {expected_idx_shape}, "
+                f"got {tuple(self.idx.shape)}."
+            )
+
 
 class PairPlan(Node):
     """
-    Transform-visible structural data for :func:`assemble_matrix` that depends
-    only on the structure (angular momenta, unique shells, shell-to-atom map),
-    not on positions or basis parameters.
+    Transform-visible structural data for :func:`assemble_matrix` and multipole
+    origin shifts that depends only on the structure (angular momenta, unique
+    shells, shell-to-atom and orbital-to-atom maps), not on positions or basis
+    parameters.
     """
 
     nao: int = context()
     unique_angular: tuple[int, ...] = context()
     atom: Tensor = child(keep_dtype=True)
+    orbitals_to_atom: Tensor = child(keep_dtype=True)
     classes: tuple[PairClass, ...] = child()
+
+    def _validate(self) -> None:
+        if self.nao < 0:
+            raise ValueError("PairPlan.nao must be non-negative.")
+        for name in ("atom", "orbitals_to_atom"):
+            tensor = getattr(self, name)
+            if tensor.dtype is not torch.int64:
+                raise TypeError(
+                    f"PairPlan.{name} must have dtype torch.int64, "
+                    f"got {tensor.dtype}."
+                )
+        if self.atom.ndim < 1:
+            raise ValueError("PairPlan.atom must be at least 1D.")
+        batch_shape = self.atom.shape[:-1]
+        if self.orbitals_to_atom.shape != (*batch_shape, self.nao):
+            raise ValueError(
+                "PairPlan.orbitals_to_atom must have shape "
+                f"{(*batch_shape, self.nao)}, got "
+                f"{tuple(self.orbitals_to_atom.shape)}."
+            )
+        n_ushells = len(self.unique_angular)
+        for cls in self.classes:
+            if not isinstance(cls, PairClass):
+                raise TypeError("PairPlan.classes must hold PairClass nodes.")
+            if cls.ub >= n_ushells or cls.uk >= n_ushells:
+                raise ValueError(
+                    "PairClass unique-shell index exceeds unique_angular."
+                )
+            if (
+                cls.lb != self.unique_angular[cls.ub]
+                or cls.lk != self.unique_angular[cls.uk]
+            ):
+                raise ValueError(
+                    "PairClass angular momenta do not match unique_angular."
+                )
+            if cls.ib.shape[:-1] != batch_shape:
+                raise ValueError(
+                    "PairClass leading batch dimensions must match PairPlan."
+                )
+
+
+def _orbitals_to_atom(
+    shells_to_atom: Tensor, orbitals_to_shell: Tensor
+) -> Tensor:
+    """Map orbitals to atoms while preserving negative padding sentinels."""
+    pad = torch.full_like(orbitals_to_shell, PAD)
+    if shells_to_atom.shape[-1] == 0 or orbitals_to_shell.shape[-1] == 0:
+        return pad
+    gathered = wrap_gather(shells_to_atom, -1, orbitals_to_shell)
+    return torch.where(orbitals_to_shell >= 0, gathered, pad)
 
 
 def prepare(
@@ -141,8 +226,16 @@ def prepare(
     atom = (
         ihelp.shells_to_atom
         if ihelp.shells_to_atom.device == dev
-        else ihelp.shells_to_atom.to(dev)
+        and ihelp.shells_to_atom.dtype is torch.long
+        else ihelp.shells_to_atom.to(device=dev, dtype=torch.long)
     )
+    orbitals_to_shell = (
+        ihelp.orbitals_to_shell
+        if ihelp.orbitals_to_shell.device == dev
+        and ihelp.orbitals_to_shell.dtype is torch.long
+        else ihelp.orbitals_to_shell.to(device=dev, dtype=torch.long)
+    )
+    orbitals_to_atom = _orbitals_to_atom(atom, orbitals_to_shell)
     unique_angular = tuple(_to_ints(ihelp.unique_angular))
 
     # ordered shell pairs with bra >= ket
@@ -188,6 +281,7 @@ def prepare(
         nao=nao,
         unique_angular=unique_angular,
         atom=atom,
+        orbitals_to_atom=orbitals_to_atom,
         classes=tuple(classes),
     )
 

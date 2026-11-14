@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import torch
+from tad_mctc.exceptions import DeviceError
 from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper, labels
@@ -68,9 +69,7 @@ class IntegralSetup(Node):
                 return {"logical_device": normalized}
             return {}
         device = (
-            torch.device("cpu")
-            if self.backend is None
-            else self.backend.index.device
+            torch.device("cpu") if self.backend is None else self.backend.device
         )
         return {"logical_device": device}
 
@@ -111,11 +110,6 @@ class IntegralSetup(Node):
         if self.driver_type == labels.INTDRIVER_LIBCINT:
             return self.backend  # type: ignore[return-value]
         return None
-
-    @property
-    def index(self) -> IndexHelper | None:
-        """Return the IndexHelper owned by the backend setup, if present."""
-        return None if self.backend is None else self.backend.index
 
     def to(
         self,
@@ -214,10 +208,16 @@ def setup_integral_evaluation(
 def build_integral_matrices(
     setup: IntegralSetup,
     h0_setup: H0Setup | H0SetupNode,
+    ihelp: IndexHelper,
     positions: Tensor,
     charge: Tensor | float | int,
 ) -> tuple[IntegralMatrices, Tensor]:
     """Build all requested matrices from explicit setup and current inputs."""
+    if not isinstance(ihelp, IndexHelper):
+        raise TypeError(
+            "build_integral_matrices requires a canonical IndexHelper, "
+            f"got {type(ihelp).__name__}."
+        )
     if setup.intlevel > labels.INTLEVEL_MAX:
         raise RuntimeError(
             f"An integral level of '{setup.intlevel}' is requested, "
@@ -225,37 +225,38 @@ def build_integral_matrices(
             "moment."
         )
 
+    target_device = positions.device
+    for name in ihelp._child_names:
+        child_device = getattr(ihelp, name).device
+        if child_device != target_device:
+            raise DeviceError(
+                f"Device mismatch: canonical IndexHelper is on "
+                f"'{child_device}', but positions are on '{target_device}'."
+            )
+
     if setup.driver_type == labels.INTDRIVER_PYTORCH:
         if setup.pytorch is None:
             raise RuntimeError("PyTorch integral setup is missing.")
         overlap, dipole, quadrupole = evaluate_pytorch_moments(
             setup.pytorch, positions, setup.intlevel
         )
-        ihelp = setup.pytorch.index
     elif setup.driver_type == labels.INTDRIVER_LIBCINT:
         if setup.libcint is None:
             raise RuntimeError("libcint integral setup is missing.")
         overlap, dipole, quadrupole = evaluate_libcint_moments(
             setup.libcint, positions, setup.intlevel
         )
-        ihelp = setup.libcint.index
     else:
         raise ValueError(f"Unknown integral driver '{setup.driver_type}'.")
 
-    target_device = positions.device
     overlap = overlap.to(device=target_device)
     if dipole is not None:
         dipole = dipole.to(device=target_device)
     if quadrupole is not None:
         quadrupole = quadrupole.to(device=target_device)
 
-    h0_ihelp = (
-        ihelp
-        if ihelp.device == target_device
-        else ihelp.to(device=target_device)
-    )
     hcore, refocc = build_hcore(
-        h0_setup, positions, overlap, charge=charge, ihelp=h0_ihelp
+        h0_setup, positions, overlap, charge=charge, ihelp=ihelp
     )
     hcore = hcore.to(device=target_device)
     refocc = refocc.to(device=target_device)

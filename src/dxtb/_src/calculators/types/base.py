@@ -33,9 +33,14 @@ from dataclasses import replace
 
 import torch
 from tad_mctc.exceptions import DeviceError, DtypeError
+from tad_mctc.tree import Node
 
 from dxtb import IndexHelper, OutputHandler, labels
-from dxtb._src.calculators.model import Model, System
+from dxtb._src.calculators.model import (
+    Model,
+    System,
+    _refresh_setup_index_token,
+)
 from dxtb._src.calculators.properties.vibration import (
     IRResult,
     RamanResult,
@@ -58,6 +63,30 @@ from dxtb.config import Config
 from .abc import GetPropertiesMixin, PropertyNotImplementedError
 
 
+def _convert_setup_node(setup: Any, dtype: torch.dtype) -> Any:
+    """Convert a setup Node to ``dtype``, leaving non-Node values unchanged."""
+    return setup.to(dtype=dtype) if isinstance(setup, Node) else setup
+
+
+def _convert_packed_classical_setups(
+    packed_setups: Any, dtype: torch.dtype
+) -> Any:
+    """Convert non-builtin classical setup cache entries to ``dtype``."""
+    if not packed_setups:
+        return packed_setups
+    from dxtb._src.components.classicals.list import ClassicalListCache
+
+    converted = ClassicalListCache()
+    for key, value in packed_setups.items():
+        if isinstance(value, Tensor):
+            converted[key] = value.to(dtype=dtype)
+        elif isinstance(value, TensorLike):
+            converted[key] = value.type(dtype)
+        else:
+            converted[key] = value
+    return converted
+
+
 def _convert_system_dtype(
     system: System,
     dtype: torch.dtype,
@@ -66,7 +95,11 @@ def _convert_system_dtype(
     interactions: InteractionList | None = None,
 ) -> System:
     """Convert System setup snapshots to ``dtype`` per ``Calculator.type``."""
+    token_intact = system._has_intact_setup_token()
     exact_core = system.exact_core
+    core_was_active = (
+        exact_core is not None and system._active_exact_core() is exact_core
+    )
     if exact_core is not None:
         converted_core = exact_core.to(dtype=dtype)
         integral_setup = (
@@ -88,11 +121,23 @@ def _convert_system_dtype(
             )
         )
         core_h0 = h0_setup if isinstance(h0_setup, H0SetupNode) else None
+        core_index = (
+            system.ihelp
+            if core_was_active
+            and all(
+                getattr(system.ihelp, name).device
+                == getattr(converted_core.index, name).device
+                for name in system.ihelp._child_names
+            )
+            else converted_core.index
+        )
         if (
             integral_setup is not converted_core.integral
             or core_h0 is not converted_core.h0_setup
+            or core_index is not converted_core.index
         ):
             exact_core = converted_core.replace(
+                index=core_index,
                 integral=integral_setup,
                 h0_setup=core_h0,
             )
@@ -107,6 +152,16 @@ def _convert_system_dtype(
         h0_setup = (
             None if system.h0_setup is None else system.h0_setup.to(dtype=dtype)
         )
+    setup_index_token = (
+        _refresh_setup_index_token(
+            system._setup_index_token,
+            integral_setup,
+            h0_setup,
+            system.es2_setup,
+        )
+        if token_intact and system._setup_index_token is not None
+        else None
+    )
     return replace(
         system,
         classicals=system.classicals if classicals is None else classicals,
@@ -117,17 +172,110 @@ def _convert_system_dtype(
         h0_setup=h0_setup,
         dd={**system.dd, "dtype": dtype},
         exact_core=exact_core,
+        _setup_index_token=setup_index_token,
     )
 
 
 def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
     """Convert a call-local evaluation System and its exact core setups to ``dtype``."""
-    if system.exact_core is None:
-        return _convert_system_dtype(
+    token_intact = system._has_intact_setup_token()
+    orig_core = system._active_exact_core()
+    packed_setups = _convert_packed_classical_setups(
+        system._packed_classical_setups, dtype
+    )
+
+    if orig_core is None:
+        c_pairs = tuple(
+            (old_c, old_c.type(dtype)) for old_c in system.classicals.components
+        )
+        i_pairs = tuple(
+            (old_i, old_i.type(dtype))
+            for old_i in system.interactions.components
+        )
+        new_classicals = ClassicalList(
+            *(new_c for _, new_c in c_pairs),
+            device=system.classicals.device,
+            dtype=dtype,
+        )
+        new_interactions = InteractionList(
+            *(new_i for _, new_i in i_pairs),
+            device=system.interactions.device,
+            dtype=dtype,
+        )
+        base = _convert_system_dtype(
             system,
             dtype,
-            classicals=system.classicals.type(dtype),
-            interactions=system.interactions.type(dtype),
+            classicals=new_classicals,
+            interactions=new_interactions,
+        )
+
+        def _remap_c(comp: Any) -> Any:
+            if comp is None:
+                return None
+            return next(
+                (new_c for old_c, new_c in c_pairs if old_c is comp), comp
+            )
+
+        def _remap_i(comp: Any) -> Any:
+            if comp is None:
+                return None
+            return next(
+                (new_i for old_i, new_i in i_pairs if old_i is comp), comp
+            )
+
+        repulsion_setup = _convert_setup_node(system.repulsion_setup, dtype)
+        srb_setup = _convert_setup_node(system.srb_setup, dtype)
+        d4_setup = _convert_setup_node(system.d4_setup, dtype)
+        ies_setup = _convert_setup_node(system.ies_setup, dtype)
+        halogen_setup = _convert_setup_node(system.halogen_setup, dtype)
+        d3_setups = tuple(
+            (_remap_c(owner), _convert_setup_node(setup, dtype))
+            for owner, setup in system.d3_setups
+        )
+        es2_setup = _convert_setup_node(system.es2_setup, dtype)
+        es3_setup = _convert_setup_node(system.es3_setup, dtype)
+        aes2_setup = _convert_setup_node(system.aes2_setup, dtype)
+        d4sc_setup = _convert_setup_node(system.d4sc_setup, dtype)
+        generalized_born_setup = _convert_setup_node(
+            system.generalized_born_setup, dtype
+        )
+        eval_token = (
+            _refresh_setup_index_token(
+                base._setup_index_token,
+                base.integral_setup,
+                base.h0_setup,
+                es2_setup,
+            )
+            if token_intact and base._setup_index_token is not None
+            else None
+        )
+        return replace(
+            base,
+            repulsion_setup=repulsion_setup,
+            repulsion_classical=_remap_c(system.repulsion_classical),
+            srb_setup=srb_setup,
+            srb_classical=_remap_c(system.srb_classical),
+            d4_setup=d4_setup,
+            d4_classical=_remap_c(system.d4_classical),
+            ies_setup=ies_setup,
+            ies_classical=_remap_c(system.ies_classical),
+            halogen_setup=halogen_setup,
+            halogen_classical=_remap_c(system.halogen_classical),
+            d3_setups=d3_setups,
+            es2_setup=es2_setup,
+            es2_interaction=_remap_i(system.es2_interaction),
+            es3_setup=es3_setup,
+            es3_interaction=_remap_i(system.es3_interaction),
+            aes2_setup=aes2_setup,
+            aes2_interaction=_remap_i(system.aes2_interaction),
+            d4sc_setup=d4sc_setup,
+            d4sc_interaction=_remap_i(system.d4sc_interaction),
+            generalized_born_setup=generalized_born_setup,
+            generalized_born_interaction=_remap_i(
+                system.generalized_born_interaction
+            ),
+            _packed_classical_setups=packed_setups,
+            _setup_index_token=eval_token,
         )
 
     base = _convert_system_dtype(system, dtype)
@@ -136,6 +284,12 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
     integral_setup = base.integral_setup
     h0_setup = base.h0_setup
 
+    orig_c_by_pos = {
+        term.position: term.setup for term in orig_core.classical_terms
+    }
+    orig_i_by_pos = {
+        term.position: term.setup for term in orig_core.interaction_terms
+    }
     c_setup_by_pos = {
         term.position: term.setup for term in exact_core.classical_terms
     }
@@ -151,21 +305,28 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
     new_d3_setups: list[tuple[Any, Any]] = []
     for pos, comp in enumerate(system.classicals.components):
         conv_setup = c_setup_by_pos.get(pos)
+        orig_setup = orig_c_by_pos.get(pos)
         if conv_setup is None:
             continue
-        if comp is system.repulsion_classical:
+        if (
+            comp is system.repulsion_classical
+            and orig_setup is system.repulsion_setup
+        ):
             repulsion_setup = conv_setup
-        elif comp is system.srb_classical:
+        elif comp is system.srb_classical and orig_setup is system.srb_setup:
             srb_setup = conv_setup
-        elif comp is system.d4_classical:
+        elif comp is system.d4_classical and orig_setup is system.d4_setup:
             d4_setup = conv_setup
-        elif comp is system.ies_classical:
+        elif comp is system.ies_classical and orig_setup is system.ies_setup:
             ies_setup = conv_setup
-        elif comp is system.halogen_classical:
+        elif (
+            comp is system.halogen_classical
+            and orig_setup is system.halogen_setup
+        ):
             halogen_setup = conv_setup
         else:
-            for owner, _ in system.d3_setups:
-                if owner is comp:
+            for owner, cur_d3 in system.d3_setups:
+                if owner is comp and orig_setup is cur_d3:
                     new_d3_setups.append((owner, conv_setup))
                     break
 
@@ -176,32 +337,34 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
     generalized_born_setup = system.generalized_born_setup
     for pos, inter in enumerate(system.interactions.components):
         conv_setup = i_setup_by_pos.get(pos)
+        orig_setup = orig_i_by_pos.get(pos)
         if conv_setup is None:
             continue
-        if inter is system.es2_interaction:
+        if inter is system.es2_interaction and orig_setup is system.es2_setup:
             es2_setup = conv_setup
-        elif inter is system.es3_interaction:
+        elif inter is system.es3_interaction and orig_setup is system.es3_setup:
             es3_setup = conv_setup
-        elif inter is system.aes2_interaction:
+        elif (
+            inter is system.aes2_interaction and orig_setup is system.aes2_setup
+        ):
             aes2_setup = conv_setup
-        elif inter is system.d4sc_interaction:
+        elif (
+            inter is system.d4sc_interaction and orig_setup is system.d4sc_setup
+        ):
             d4sc_setup = conv_setup
-        elif inter is system.generalized_born_interaction:
+        elif (
+            inter is system.generalized_born_interaction
+            and orig_setup is system.generalized_born_setup
+        ):
             generalized_born_setup = conv_setup
 
-    packed_setups = system._packed_classical_setups
-    if packed_setups:
-        from dxtb._src.components.classicals.list import ClassicalListCache
-
-        converted = ClassicalListCache()
-        for key, value in packed_setups.items():
-            if isinstance(value, Tensor):
-                converted[key] = value.to(dtype=dtype)
-            elif isinstance(value, TensorLike):
-                converted[key] = value.type(dtype)
-            else:
-                converted[key] = value
-        packed_setups = converted
+    eval_token = (
+        _refresh_setup_index_token(
+            base._setup_index_token, integral_setup, h0_setup, es2_setup
+        )
+        if token_intact and base._setup_index_token is not None
+        else None
+    )
 
     return replace(
         system,
@@ -221,6 +384,7 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
         dd={**system.dd, "dtype": dtype},
         exact_core=exact_core,
         _packed_classical_setups=packed_setups,
+        _setup_index_token=eval_token,
     )
 
 

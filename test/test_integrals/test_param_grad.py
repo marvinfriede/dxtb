@@ -151,11 +151,17 @@ def test_reused_setup_independent_position_gradients(driver: str) -> None:
 
     p1 = pos1.clone().requires_grad_(True)
     (g1,) = torch.autograd.grad(
-        _integral_objective(build_integral_matrices(isetup, h0, p1, 0.0)[0]), p1
+        _integral_objective(
+            build_integral_matrices(isetup, h0, ihelp, p1, 0.0)[0]
+        ),
+        p1,
     )
     p2 = pos2.clone().requires_grad_(True)
     (g2,) = torch.autograd.grad(
-        _integral_objective(build_integral_matrices(isetup, h0, p2, 0.0)[0]), p2
+        _integral_objective(
+            build_integral_matrices(isetup, h0, ihelp, p2, 0.0)[0]
+        ),
+        p2,
     )
     assert torch.isfinite(g1).all() and torch.isfinite(g2).all()
 
@@ -166,10 +172,10 @@ def test_reused_setup_independent_position_gradients(driver: str) -> None:
             dp = torch.zeros_like(pos2)
             dp[ia, ic] = eps
             vp = _integral_objective(
-                build_integral_matrices(isetup, h0, pos2 + dp, 0.0)[0]
+                build_integral_matrices(isetup, h0, ihelp, pos2 + dp, 0.0)[0]
             )
             vm = _integral_objective(
-                build_integral_matrices(isetup, h0, pos2 - dp, 0.0)[0]
+                build_integral_matrices(isetup, h0, ihelp, pos2 - dp, 0.0)[0]
             )
             fd2[ia, ic] = (vp - vm) / (2 * eps)
     torch.testing.assert_close(g2, fd2, atol=1e-7, rtol=1e-6)
@@ -215,7 +221,9 @@ def test_reused_setup_second_parameter_backward_contract(driver: str) -> None:
     h0 = setup_h0_core(numbers, par, ihelp, **dd)
 
     (g_first,) = torch.autograd.grad(
-        _integral_objective(build_integral_matrices(isetup, h0, pos1, 0.0)[0]),
+        _integral_objective(
+            build_integral_matrices(isetup, h0, ihelp, pos1, 0.0)[0]
+        ),
         h_slater,
     )
     assert torch.isfinite(g_first).all() and g_first.abs().sum() > 0
@@ -225,7 +233,7 @@ def test_reused_setup_second_parameter_backward_contract(driver: str) -> None:
     ):
         _ = torch.autograd.grad(
             _integral_objective(
-                build_integral_matrices(isetup, h0, pos2, 0.0)[0]
+                build_integral_matrices(isetup, h0, ihelp, pos2, 0.0)[0]
             ),
             h_slater,
         )

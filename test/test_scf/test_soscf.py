@@ -29,6 +29,7 @@ from dxtb import GFN1_XTB, GFN2_XTB, labels
 from dxtb._src.scf import unpack_charges
 from dxtb._src.scf.broyden import BroydenConverger
 from dxtb._src.scf.cdiis import CDIISConverger
+from dxtb._src.scf.converger import SCFConvergerContext
 from dxtb._src.scf.data import FermiSettings
 from dxtb._src.scf.energy import (
     electronic_energy_from_density,
@@ -44,7 +45,6 @@ from dxtb._src.scf.map import (
     fock_initial_guess,
     potential_initial_guess,
 )
-from dxtb._src.scf.converger import SCFConvergerContext
 from dxtb._src.scf.orbital import build_orbital_model
 from dxtb._src.scf.problem import (
     SCFPhysicalState,
@@ -825,7 +825,10 @@ def test_soscf_rejects_active_fermi_smearing() -> None:
         damp=physical.x.new_tensor(1.0),
         proposal_x=physical.map_result.mapped_x,
     )
-    with pytest.raises(NotImplementedError, match="Fermi smearing at nonzero electronic temperature"):
+    with pytest.raises(
+        NotImplementedError,
+        match="Fermi smearing at nonzero electronic temperature",
+    ):
         SOSCFConverger().propose(smeared_problem, physical, None, context)
 
 
@@ -1070,6 +1073,7 @@ def test_soscf_implicit_geometry_response_matches_cdiis() -> None:
         integrals, _ = build_integral_matrices(
             case.system.integral_setup,
             case.system.h0_setup,
+            case.system.ihelp,
             positions,
             case.charge,
         )
@@ -1504,6 +1508,7 @@ def test_soscf_no2_tight_implicit_geometry_and_second_order_match_cdiis() -> (
         integrals, _ = build_integral_matrices(
             case.system.integral_setup,
             case.system.h0_setup,
+            case.system.ihelp,
             positions,
             case.charge,
         )

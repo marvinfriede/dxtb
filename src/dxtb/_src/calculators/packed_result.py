@@ -55,7 +55,7 @@ from dxtb._src.constants import defaults
 from dxtb._src.scf.eager import _raise_failure_code
 from dxtb._src.scf.status import SCFStatus
 from dxtb._src.timing import timer
-from dxtb._src.typing import Tensor
+from dxtb._src.typing import DD, Tensor
 from dxtb._src.utils.tensors import disable_functorch
 from dxtb._src.typing.exceptions import (
     SCFConvergenceError,
@@ -1288,8 +1288,8 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                 interaction=tuple(lane_interaction_list),
                 auto_int_level=False,
             )
-            setup_dd = (
-                calc.model.par.dd
+            setup_dd: DD = (
+                {"device": calc.device, "dtype": calc.model.par.dtype}
                 if calc.dtype != calc.model.par.dtype
                 else calc.dd
             )

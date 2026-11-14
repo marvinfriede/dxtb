@@ -25,7 +25,6 @@ from __future__ import annotations
 
 from tad_mctc.tree import Node, child, context
 
-from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
 from dxtb._src.typing import Tensor
 
@@ -40,25 +39,39 @@ class PytorchIntegralSetup(Node):
     Immutable, transform-visible setup for pure PyTorch integrals.
 
     Stores setup-time CGTO ``alphas`` and ``coeffs`` expanded from the active
-    parametrization. Reusing one instance across geometries supports repeated
-    independent backward passes with respect to ``positions`` (``retain_graph=False``).
-    Independent repeated backward passes with respect to basis parameters
-    (such as ``element.*.slater``) require rebuilding a fresh setup per
-    evaluation so setup-time ``slater_to_gauss``/``orthogonalize`` saved
-    tensors are not consumed across calls.
+    parametrization alongside a precompiled :class:`PairPlan`. Reusing one
+    instance across geometries supports repeated independent backward passes
+    with respect to ``positions`` (``retain_graph=False``). Independent repeated
+    backward passes with respect to basis parameters (such as
+    ``element.*.slater``) require rebuilding a fresh setup per evaluation so
+    setup-time ``slater_to_gauss``/``orthogonalize`` saved tensors are not
+    consumed across calls.
     """
 
-    index: IndexHelper = child()
     alphas: tuple[Tensor, ...] = child()
     coeffs: tuple[Tensor, ...] = child()
     pair_plan: PairPlan = child()
     algorithm: str = context()
 
     def _validate(self) -> None:
-        if self.index.batch_mode != 0:
+        _ = get_kernel(self.algorithm)
+        n_ushells = len(self.pair_plan.unique_angular)
+        if len(self.alphas) != n_ushells or len(self.coeffs) != n_ushells:
             raise ValueError(
-                "PyTorch integral setup requires one single System."
+                "PyTorch integral setup alphas and coeffs must match "
+                "pair_plan.unique_angular."
             )
+        batch_shape = self.pair_plan.atom.shape[:-1]
+        for alpha, coeff in zip(self.alphas, self.coeffs):
+            if (
+                alpha.ndim < 1
+                or alpha.shape != coeff.shape
+                or alpha.shape[:-1] != batch_shape
+            ):
+                raise ValueError(
+                    "PyTorch integral setup CGTO tensors must share non-scalar "
+                    "shapes matching pair_plan batch dimensions."
+                )
 
 
 def setup_integrals(
@@ -84,7 +97,6 @@ def setup_integrals(
     )
     pair_plan = prepare(index, dev, dtype=dtype)
     return PytorchIntegralSetup(
-        index=index,
         alphas=expansion.alphas,
         coeffs=expansion.coeffs,
         pair_plan=pair_plan,

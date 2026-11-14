@@ -33,6 +33,7 @@ from dxtb._src.integral.types.quadrupole import (
     shift_quadrupole_origin,
 )
 from dxtb._src.typing import Tensor
+from dxtb._src.utils import wrap_gather
 
 from .impls.kernels import get_kernel
 from .impls.pairs import assemble_matrix
@@ -88,8 +89,8 @@ def evaluate_moments(
 
     if intlevel >= labels.INTLEVEL_DIPOLE:
         raw_dipole = build_dipole(setup, positions)
-        orbital_positions = setup.index.spread_atom_to_orbital(
-            positions, dim=-2, extra=True
+        orbital_positions = wrap_gather(
+            positions, -2, setup.pair_plan.orbitals_to_atom, extra=True
         )
         dipole = shift_dipole_origin(raw_dipole, overlap, orbital_positions)
         if intlevel >= labels.INTLEVEL_QUADRUPOLE:
