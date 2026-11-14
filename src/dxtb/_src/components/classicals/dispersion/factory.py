@@ -29,7 +29,8 @@ import torch
 
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import DD, Literal, Tensor, get_default_dtype
-from dxtb._src.typing.exceptions import ParameterWarning
+from dxtb._src.typing.exceptions import DeviceError, ParameterWarning
+from dxtb._src.utils.tensors import normalize_device
 
 from .base import Dispersion
 from .d3 import DispersionD3
@@ -77,23 +78,36 @@ def new_dispersion(
     ValueError
         D4 parametrization is requested but no charge given.
     """
+    target_device = (
+        numbers.device if device is None else normalize_device(device)
+    )
     resolved_dtype = (
         par.dtype
         if dtype is None and isinstance(par, ParamModule)
         else (dtype if dtype is not None else get_default_dtype())
     )
     dd: DD = {
-        "device": numbers.device if device is None else device,
+        "device": target_device,
         "dtype": resolved_dtype,
     }
+
+    if isinstance(par, ParamModule):
+        if "dispersion" not in par or par.is_none("dispersion"):
+            warnings.warn("No dispersion scheme found.", ParameterWarning)
+            return None
+    elif not hasattr(par, "dispersion") or par.dispersion is None:
+        warnings.warn("No dispersion scheme found.", ParameterWarning)
+        return None
+
+    if device is not None and target_device != numbers.device:
+        raise DeviceError(
+            f"Passed device ({device}) and device of `numbers` tensor "
+            f"({numbers.device}) do not match."
+        )
 
     # also accept a plain `Param` (wrapped into a `ParamModule`)
     if not isinstance(par, ParamModule):
         par = ParamModule(par, **dd)
-
-    if "dispersion" not in par or par.is_none("dispersion"):
-        warnings.warn("No dispersion scheme found.", ParameterWarning)
-        return None
 
     if not par.is_none("dispersion.d3") and par.is_none("dispersion.d4"):
         param = {
@@ -104,7 +118,7 @@ def new_dispersion(
             )
             for key in ("a1", "a2", "s6", "s8", "s9")
         }
-        return DispersionD3(numbers, param, device=device, dtype=resolved_dtype)
+        return DispersionD3(numbers, param, **dd)
 
     if not par.is_none("dispersion.d4") and par.is_none("dispersion.d3"):
         param = {
@@ -136,8 +150,7 @@ def new_dispersion(
                 param,
                 ref_charges=ref_charges,
                 charge=charge,
-                device=device,
-                dtype=resolved_dtype,
+                **dd,
             )
 
         # Classical part of self-consistent D4 is only ATM term
@@ -147,8 +160,7 @@ def new_dispersion(
             numbers,
             param,
             ref_charges="gfn2",
-            device=device,
-            dtype=resolved_dtype,
+            **dd,
         )
 
     if not par.is_none("dispersion.d3") and not par.is_none("dispersion.d4"):

@@ -530,3 +530,343 @@ def test_cgto_expansion_container_pytree_and_autograd() -> None:
     grad_h2, grad_o2 = torch.autograd.grad(loss2, (h_slater, o_slater))
     torch.testing.assert_close(grad_h2, grad_h, atol=0.0, rtol=0.0)
     torch.testing.assert_close(grad_o2, grad_o, atol=0.0, rtol=0.0)
+
+
+class _PreTransferSentinelTensor(torch.Tensor):
+    """Tensor wrapper that forbids structural ops before an explicit ``.to()``."""
+
+    events: list[str]
+    converted: list[torch.Tensor]
+
+    @staticmethod
+    def __new__(
+        cls,
+        data: torch.Tensor,
+        events: list[str],
+        converted: list[torch.Tensor],
+    ) -> _PreTransferSentinelTensor:
+        obj = torch.Tensor._make_subclass(cls, data, require_grad=False)
+        obj.events = events
+        obj.converted = converted
+        return obj
+
+    @classmethod
+    def __torch_function__(cls, func, types, args=(), kwargs=None):
+        kwargs = {} if kwargs is None else kwargs
+        if func is torch.Tensor.to:
+            self = args[0]
+            plain = self.as_subclass(torch.Tensor).to(*args[1:], **kwargs)
+            self.events.append(f"numbers.to:{plain.device.type}")
+            self.converted.append(plain)
+            return plain
+        raise AssertionError(
+            f"Structural op {func} executed on numbers before Basis device transfer."
+        )
+
+
+def test_basis_establishes_device_before_structural_lookups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Basis moves numbers to target device before torch.unique and element lookups."""
+    import sys
+
+    import dxtb._src.basis.bas as bas_mod
+    import dxtb._src.calculators.types.base as base_calc_mod
+    from dxtb import Calculator, ParamModule, labels
+    from dxtb._src.calculators.model import Model
+    from dxtb._src.components.classicals.dispersion import new_dispersion
+    from dxtb._src.exlibs.available import has_libcint
+    from dxtb._src.integral.driver.libcint import setup_libcint
+    from dxtb._src.integral.driver.pytorch import (
+        build_overlap as build_overlap_pytorch,
+    )
+    from dxtb._src.integral.driver.pytorch import setup_integrals
+    from dxtb._src.integral.evaluation import setup_integral_evaluation
+    from dxtb._src.typing.exceptions import DeviceError
+    from dxtb._src.xtb.h0 import setup_h0, setup_h0_core
+    from dxtb.config import Config
+
+    raw_numbers = torch.tensor([8, 1, 1])
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.8], [0.0, 1.8, 0.0]],
+        dtype=torch.float64,
+    )
+    ihelp = IndexHelper.from_numbers(raw_numbers, GFN1_XTB)
+
+    events: list[str] = []
+    converted: list[torch.Tensor] = []
+    unique_results: list[torch.Tensor] = []
+
+    orig_unique = torch.unique
+    orig_get_elem_param = ParamModule.get_elem_param
+    orig_get_elem_pqn = ParamModule.get_elem_pqn
+    orig_get_elem_valence = ParamModule.get_elem_valence
+    orig_get_elem_shells = ParamModule.get_elem_shells
+
+    def _called_from_basis() -> bool:
+        return sys._getframe(2).f_code.co_filename == bas_mod.__file__
+
+    def tracked_unique(tensor: torch.Tensor, *args, **kwargs):
+        out = orig_unique(tensor, *args, **kwargs)
+        if _called_from_basis():
+            assert type(tensor) is torch.Tensor
+            assert tensor.device == torch.device("cpu")
+            events.append(f"unique:{tensor.device.type}")
+            unique_results.append(out)
+        return out
+
+    def tracked_get_elem_param(self, unique: torch.Tensor, key: str, *a, **kw):
+        if _called_from_basis():
+            assert unique is unique_results[-1]
+            assert unique.device == torch.device("cpu")
+            events.append(f"get_elem_param:{key}:{unique.device.type}")
+        return orig_get_elem_param(self, unique, key, *a, **kw)
+
+    def tracked_get_elem_pqn(self, unique: torch.Tensor, *a, **kw):
+        if _called_from_basis():
+            assert unique is unique_results[-1]
+            assert unique.device == torch.device("cpu")
+            events.append(f"get_elem_pqn:{unique.device.type}")
+        return orig_get_elem_pqn(self, unique, *a, **kw)
+
+    def tracked_get_elem_valence(self, unique: torch.Tensor, *a, **kw):
+        if _called_from_basis():
+            assert unique is unique_results[-1]
+            assert unique.device == torch.device("cpu")
+            events.append(f"get_elem_valence:{unique.device.type}")
+        return orig_get_elem_valence(self, unique, *a, **kw)
+
+    def tracked_get_elem_shells(self, unique: torch.Tensor, *a, **kw):
+        if _called_from_basis():
+            assert unique is unique_results[-1]
+            assert unique.device == torch.device("cpu")
+            events.append(f"get_elem_shells:{unique.device.type}")
+        return orig_get_elem_shells(self, unique, *a, **kw)
+
+    monkeypatch.setattr(bas_mod.torch, "unique", tracked_unique)
+    monkeypatch.setattr(ParamModule, "get_elem_param", tracked_get_elem_param)
+    monkeypatch.setattr(ParamModule, "get_elem_pqn", tracked_get_elem_pqn)
+    monkeypatch.setattr(
+        ParamModule, "get_elem_valence", tracked_get_elem_valence
+    )
+    monkeypatch.setattr(ParamModule, "get_elem_shells", tracked_get_elem_shells)
+
+    # 1. Existing ParamModule + sentinel numbers + explicit CPU target device
+    pm = ParamModule(GFN1_XTB, dtype=torch.float64, device=torch.device("cpu"))
+    pm.set_differentiable("element.O.slater")
+    pm.set_differentiable("element.H.slater")
+    o_slater = pm.get("element.O.slater")
+    h_slater = pm.get("element.H.slater")
+    o_ptr_before = o_slater.data_ptr()
+    h_ptr_before = h_slater.data_ptr()
+
+    sentinel = _PreTransferSentinelTensor(raw_numbers, events, converted)
+    bas_pm = Basis(sentinel, pm, ihelp, device=torch.device("cpu"))
+    assert events == [
+        "numbers.to:cpu",
+        "unique:cpu",
+        "get_elem_param:ngauss:cpu",
+        "get_elem_pqn:cpu",
+        "get_elem_param:slater:cpu",
+        "get_elem_valence:cpu",
+        "get_elem_shells:cpu",
+    ]
+    assert len(converted) == 1
+    assert bas_pm.numbers is converted[0]
+    assert bas_pm.unique is unique_results[0]
+    assert bas_pm.ihelp is ihelp
+    assert bas_pm.dtype == torch.float64
+    assert o_slater.data_ptr() == o_ptr_before
+    assert h_slater.data_ptr() == h_ptr_before
+
+    # 2. Plain Param + string device normalization + explicit float32 dtype
+    events.clear()
+    converted.clear()
+    unique_results.clear()
+    sentinel_f32 = _PreTransferSentinelTensor(raw_numbers, events, converted)
+    bas_param = Basis(
+        sentinel_f32, GFN1_XTB, ihelp, device="cpu", dtype=torch.float32  # type: ignore[arg-type]
+    )
+    assert bas_param.device == torch.device("cpu")
+    assert bas_param.dtype == torch.float32
+    assert bas_param.slater.dtype == torch.float32
+    assert bas_param.numbers is converted[0]
+    assert bas_param.unique is unique_results[0]
+    assert bas_param.to(torch.device("cpu")) is bas_param
+    assert bas_param.to("cpu") is bas_param  # type: ignore[arg-type]
+    assert bas_param.type(torch.float64).dtype == torch.float64
+
+    # 3. Same-device plain tensor preserves numbers/ihelp identity without copy
+    bas_same = Basis(raw_numbers, pm, ihelp)
+    assert bas_same.numbers is raw_numbers
+    assert bas_same.ihelp is ihelp
+
+    # 4. Dispersion & Calculator cross-dtype/device boundary invariants
+    with torch.device("meta"):
+        disp = new_dispersion(raw_numbers, pm)
+    assert disp is not None and disp.device == torch.device("cpu")
+    with pytest.raises(DeviceError):
+        new_dispersion(raw_numbers, pm, device="wrong")  # type: ignore[arg-type]
+
+    calc_f32 = Calculator(
+        raw_numbers,
+        pm,
+        opts={"verbosity": 0, "int_driver": labels.INTDRIVER_PYTORCH},
+        device="cpu",  # type: ignore[arg-type]
+        dtype=torch.float32,
+    )
+    orig_pm_dd = ParamModule.dd.fget  # type: ignore[union-attr]
+    assert orig_pm_dd is not None
+    monkeypatch.setattr(
+        ParamModule,
+        "dd",
+        property(
+            lambda _self: (
+                {"device": torch.device("meta"), "dtype": _self.dtype}
+                if sys._getframe(1).f_code.co_filename == base_calc_mod.__file__
+                else orig_pm_dd(_self)
+            )
+        ),
+    )
+    eval_sys = calc_f32._prepare_eval_system()
+    assert eval_sys.h0_setup.selfenergy.dtype == torch.float32
+    assert eval_sys.h0_setup.selfenergy.device == torch.device("cpu")
+    monkeypatch.undo()
+
+    monkeypatch.setattr(bas_mod.torch, "unique", tracked_unique)
+    monkeypatch.setattr(ParamModule, "get_elem_param", tracked_get_elem_param)
+    monkeypatch.setattr(ParamModule, "get_elem_pqn", tracked_get_elem_pqn)
+    monkeypatch.setattr(
+        ParamModule, "get_elem_valence", tracked_get_elem_valence
+    )
+    monkeypatch.setattr(ParamModule, "get_elem_shells", tracked_get_elem_shells)
+
+    # 5. H0 setup, PyTorch setup, libcint setup, Model.setup spy scoping, and gradients
+    h0 = setup_h0(raw_numbers, pm, ihelp)
+    h0_core = setup_h0_core(raw_numbers, pm, ihelp)
+    assert h0.selfenergy.requires_grad is False
+    assert h0_core.hscale.requires_grad is False
+
+    pt_setup = setup_integrals(bas_pm)
+    s_pt = build_overlap_pytorch(pt_setup, positions)
+    grad_pt_o, grad_pt_h = torch.autograd.grad(
+        s_pt.pow(2).sum(), (o_slater, h_slater)
+    )
+    assert torch.isfinite(grad_pt_o).all() and grad_pt_o.abs().sum() > 0
+    assert torch.isfinite(grad_pt_h).all() and grad_pt_h.abs().sum() > 0
+
+    if has_libcint:
+        from dxtb._src.integral.driver.libcint import (
+            build_overlap as build_overlap_libcint,
+        )
+
+        events.clear()
+        converted.clear()
+        unique_results.clear()
+        sentinel_lc = _PreTransferSentinelTensor(raw_numbers, events, converted)
+        isetup_lc = setup_integral_evaluation(
+            sentinel_lc,
+            pm,
+            ihelp,
+            driver_type=labels.INTDRIVER_LIBCINT,
+            intlevel=labels.INTLEVEL_OVERLAP,
+            device=torch.device("cpu"),
+        )
+        assert isetup_lc is not None and isetup_lc.libcint is not None
+        assert events[0] == "numbers.to:cpu"
+        assert events[1] == "unique:cpu"
+
+        events.clear()
+        unique_results.clear()
+        model_lc = Model(
+            par=pm, config=Config.create(int_driver=labels.INTDRIVER_LIBCINT)
+        )
+        _ = model_lc.setup(raw_numbers)
+        assert [e for e in events if e.startswith("unique:")] == ["unique:cpu"]
+
+        lc_setup = setup_libcint(Basis(raw_numbers, pm, ihelp))
+        s_lc = build_overlap_libcint(lc_setup, positions)
+        torch.testing.assert_close(s_lc, s_pt, atol=1e-12, rtol=1e-12)
+        grad_lc_o, grad_lc_h = torch.autograd.grad(
+            s_lc.pow(2).sum(), (o_slater, h_slater)
+        )
+        torch.testing.assert_close(grad_lc_o, grad_pt_o, atol=1e-10, rtol=1e-10)
+        torch.testing.assert_close(grad_lc_h, grad_pt_h, atol=1e-10, rtol=1e-10)
+
+
+@pytest.mark.cuda
+def test_cuda_system_libcint_basis_device_ordering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CUDA System with libcint runs Basis unique/element lookups on CPU and preserves gradients."""
+    pytest.importorskip("tad_libcint")
+    import sys
+
+    import dxtb._src.basis.bas as bas_mod
+    from dxtb import ParamModule, labels
+    from dxtb._src.calculators.model import Model
+    from dxtb.config import Config
+
+    cuda_dev = str_to_device("cuda")
+    numbers = torch.tensor([8, 1, 1], device=cuda_dev)
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.8], [0.0, 1.8, 0.0]],
+        dtype=torch.float64,
+        device=cuda_dev,
+        requires_grad=True,
+    )
+
+    seen_unique_devices: list[torch.device] = []
+    orig_unique = torch.unique
+
+    def spy_unique(tensor: torch.Tensor, *args, **kwargs):
+        if sys._getframe(1).f_code.co_filename == bas_mod.__file__:
+            seen_unique_devices.append(tensor.device)
+        return orig_unique(tensor, *args, **kwargs)
+
+    monkeypatch.setattr(bas_mod.torch, "unique", spy_unique)
+
+    for par_dev in (torch.device("cpu"), cuda_dev):
+        pm_probe = ParamModule(GFN1_XTB, dtype=torch.float64, device=par_dev)
+        ihelp_cuda = IndexHelper.from_numbers(numbers, pm_probe)
+        seen_unique_devices.clear()
+        bas_cpu = Basis(
+            numbers, pm_probe, ihelp_cuda, device=torch.device("cpu")
+        )
+        assert seen_unique_devices == [torch.device("cpu")]
+        assert bas_cpu.numbers.device == torch.device("cpu")
+        assert bas_cpu.unique.device == torch.device("cpu")
+        assert next(pm_probe.parameters()).device == par_dev
+
+    pm_cuda = ParamModule(GFN1_XTB, dtype=torch.float64, device=cuda_dev)
+    pm_cuda.set_differentiable("element.O.slater")
+    pm_cuda.set_differentiable("element.H.slater")
+    model_lc = Model(
+        par=pm_cuda, config=Config.create(int_driver=labels.INTDRIVER_LIBCINT)
+    )
+    seen_unique_devices.clear()
+    sys_lc = model_lc.setup(numbers)
+    assert seen_unique_devices == [torch.device("cpu")]
+
+    pm_pt = ParamModule(GFN1_XTB, dtype=torch.float64, device=cuda_dev)
+    pm_pt.set_differentiable("element.O.slater")
+    pm_pt.set_differentiable("element.H.slater")
+    model_pt = Model(
+        par=pm_pt, config=Config.create(int_driver=labels.INTDRIVER_PYTORCH)
+    )
+    sys_pt = model_pt.setup(numbers)
+    positions_pt = positions.detach().clone().requires_grad_(True)
+    e_lc = sys_lc.energy(positions)
+    e_pt = sys_pt.energy(positions_pt)
+    torch.testing.assert_close(e_lc, e_pt, atol=1e-10, rtol=1e-10)
+    (g_pos_lc,) = torch.autograd.grad(e_lc, positions, retain_graph=True)
+    (g_pos_pt,) = torch.autograd.grad(e_pt, positions_pt, retain_graph=True)
+    torch.testing.assert_close(g_pos_lc, g_pos_pt, atol=1e-9, rtol=1e-9)
+    g_par_lc = torch.autograd.grad(
+        e_lc, (pm_cuda.get("element.O.slater"), pm_cuda.get("element.H.slater"))
+    )
+    g_par_pt = torch.autograd.grad(
+        e_pt, (pm_pt.get("element.O.slater"), pm_pt.get("element.H.slater"))
+    )
+    torch.testing.assert_close(g_par_lc[0], g_par_pt[0], atol=1e-9, rtol=1e-9)
+    torch.testing.assert_close(g_par_lc[1], g_par_pt[1], atol=1e-9, rtol=1e-9)

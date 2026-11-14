@@ -696,16 +696,31 @@ def new_d4sc(
         Instance of the :class:`.DispersionD4SC` class or ``None`` if
         no :class:`.DispersionD4SC` is used.
     """
-    if device is not None:
-        if normalize_device(device) != numbers.device:
-            raise DeviceError(
-                f"Passed device ({device}) and device of `numbers` tensor "
-                f"({numbers.device}) do not match."
-            )
+    if isinstance(par, ParamModule):
+        if (
+            "dispersion" not in par
+            or par.is_none("dispersion")
+            or par.is_none("dispersion.d4")
+            or par.is_false("dispersion.d4.sc")
+        ):
+            return None
+    elif (
+        not hasattr(par, "dispersion")
+        or par.dispersion is None
+        or par.dispersion.d4 is None
+        or par.dispersion.d4.sc is False
+    ):
+        return None
 
     target_device = (
         numbers.device if device is None else normalize_device(device)
     )
+    if device is not None and target_device != numbers.device:
+        raise DeviceError(
+            f"Passed device ({device}) and device of `numbers` tensor "
+            f"({numbers.device}) do not match."
+        )
+
     resolved_dtype = (
         par.dtype
         if dtype is None and isinstance(par, ParamModule)
@@ -716,15 +731,6 @@ def new_d4sc(
     # also accept a plain `Param` (wrapped into a `ParamModule`)
     if not isinstance(par, ParamModule):
         par = ParamModule(par, **dd)
-
-    if "dispersion" not in par or par.is_none("dispersion"):
-        return None
-
-    if par.is_none("dispersion.d4"):
-        return None
-
-    if par.is_false("dispersion.d4.sc"):
-        return None
 
     param = d4.Param(
         **{

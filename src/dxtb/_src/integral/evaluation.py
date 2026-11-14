@@ -176,7 +176,9 @@ def setup_integral_evaluation(
     ):
         raise ValueError(f"Unknown integral driver '{driver_type}'.")
 
-    target_device = numbers.device if device is None else device
+    target_device = (
+        numbers.device if device is None else normalize_device(device)
+    )
     target_dtype = par.dtype if dtype is None else dtype
     backend_device = (
         torch.device("cpu")

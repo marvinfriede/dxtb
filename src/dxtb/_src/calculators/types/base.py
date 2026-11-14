@@ -50,7 +50,7 @@ from dxtb._src.components.interactions import Interaction, InteractionList
 from dxtb._src.constants import defaults
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.timing import timer
-from dxtb._src.typing import Any, Self, Tensor, TensorLike, override
+from dxtb._src.typing import DD, Any, Self, Tensor, TensorLike, override
 from dxtb._src.utils.tensors import normalize_device
 from dxtb._src.xtb.h0 import H0SetupNode
 from dxtb.config import Config
@@ -459,8 +459,10 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             interaction=tuple(eval_interactions),
             auto_int_level=False,
         )
-        setup_dd = (
-            self.model.par.dd if self.dtype != self.model.par.dtype else self.dd
+        setup_dd: DD = (
+            {"device": self.device, "dtype": self.model.par.dtype}
+            if self.dtype != self.model.par.dtype
+            else self.dd
         )
         eval_sys = setup_model.setup(
             self.numbers,

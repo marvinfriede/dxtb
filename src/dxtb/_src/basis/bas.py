@@ -33,6 +33,7 @@ from tad_mctc.data import pse
 from dxtb._src.constants.defaults import DEFAULT_BASIS_INT
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import Literal, Self, Tensor, TensorLike, override
+from dxtb._src.utils.tensors import normalize_device
 
 from .indexhelper import IndexHelper
 from .ortho import orthogonalize
@@ -111,17 +112,22 @@ class Basis(TensorLike):
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> None:
+        resolved_device = (
+            numbers.device if device is None else normalize_device(device)
+        )
         resolved_dtype = (
             par.dtype
             if dtype is None and isinstance(par, ParamModule)
             else dtype
         )
-        super().__init__(
-            numbers.device if device is None else device, resolved_dtype
+        super().__init__(resolved_device, resolved_dtype)
+        self.numbers = numbers.to(device=self.device)
+        self.unique: Tensor = torch.unique(self.numbers)
+        self.ihelp = (
+            ihelp
+            if ihelp.device == self.device
+            else ihelp.to(device=self.device)
         )
-        self.numbers = numbers
-        self.unique: Tensor = torch.unique(numbers)
-        self.ihelp = ihelp
 
         if not isinstance(par, ParamModule):
             par = ParamModule(par, **self.dd)
@@ -145,17 +151,19 @@ class Basis(TensorLike):
 
         # Keep extracted basis tensors on the requested target device without
         # mutating the device of an externally owned ParamModule.
-        self.numbers = self.numbers.to(device=self.device)
-        self.unique = self.unique.to(device=self.device)
-        self.ihelp = (
-            self.ihelp
-            if self.ihelp.device == self.device
-            else self.ihelp.to(device=self.device)
-        )
         self.ngauss = self.ngauss.to(device=self.device)
         self.slater = self.slater.to(device=self.device, dtype=self.dtype)
         self.pqn = self.pqn.to(device=self.device)
         self.valence = self.valence.to(device=self.device)
+
+    @override
+    def to(
+        self,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> Self:
+        """Return a copy of Basis on the normalized device and dtype."""
+        return super().to(device=normalize_device(device), dtype=dtype)
 
     @override
     def _clone_tensorlike(
@@ -165,9 +173,11 @@ class Basis(TensorLike):
         dtype: torch.dtype | None = None,
     ) -> Self:
         """Clone Basis tensors while preserving structural integer/bool dtypes."""
-        target_device = self.device if device is None else device
+        target_device = (
+            self.device if device is None else normalize_device(device)
+        )
         target_dtype = self.dtype if dtype is None else dtype
-        new = super()._clone_tensorlike(device=device, dtype=dtype)
+        new = super()._clone_tensorlike(device=target_device, dtype=dtype)
 
         # TensorLike treats every plain tensor slot as floating-point. Restore
         # the integer and boolean structural tensors with only a device move.
