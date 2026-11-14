@@ -60,7 +60,9 @@ class Matrices:
     def __init__(self, numbers: Tensor, algorithm: str, dd: DD) -> None:
         self.ihelp = IndexHelper.from_numbers(numbers, par)
         bas = Basis(numbers, par, self.ihelp, **dd)
-        self.alphas, self.coeffs = bas.create_cgtos()
+        expansion = bas.expand()
+        self.alphas = expansion.alphas
+        self.coeffs = expansion.coeffs
         self.kernel = get_kernel(algorithm)
 
     def __call__(

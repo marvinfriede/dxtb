@@ -42,10 +42,12 @@ from ..conftest import DEVICE
 from .samples import samples
 
 
-def setup(numbers: Tensor, dd: DD) -> tuple[IndexHelper, list, list]:
+def setup(
+    numbers: Tensor, dd: DD
+) -> tuple[IndexHelper, tuple[Tensor, ...], tuple[Tensor, ...]]:
     ihelp = IndexHelper.from_numbers(numbers, par)
-    alphas, coeffs = Basis(numbers, par, ihelp, **dd).create_cgtos()
-    return ihelp, alphas, coeffs
+    expansion = Basis(numbers, par, ihelp, **dd).expand()
+    return ihelp, expansion.alphas, expansion.coeffs
 
 
 def batch_matrix(

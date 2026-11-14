@@ -26,7 +26,7 @@ import pytest
 import torch
 
 from dxtb import Calculator
-from dxtb._src.basis.bas import Basis
+from dxtb._src.basis.bas import Basis, CGTOExpansion
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.typing import DD, Literal, Tensor
 
@@ -45,13 +45,16 @@ def energy_of_scaled_exponents(
 ) -> Tensor:
     """Single point with every primitive exponent multiplied by ``scale``,
     standing in for a fitted basis parameter."""
-    original = Basis.create_cgtos
+    original = Basis.expand
 
-    def patched(self):
-        alphas, coeffs = original(self)
-        return tuple(a * scale for a in alphas), coeffs
+    def patched(self: Basis) -> CGTOExpansion:
+        exp = original(self)
+        return CGTOExpansion(
+            alphas=tuple(a * scale for a in exp.alphas),
+            coeffs=exp.coeffs,
+        )
 
-    Basis.create_cgtos = patched  # type: ignore[method-assign]
+    Basis.expand = patched  # type: ignore[method-assign]
     try:
         opts = {
             "verbosity": 0,
@@ -63,7 +66,7 @@ def energy_of_scaled_exponents(
         calc = Calculator(numbers, par, opts=opts, **dd)
         return calc.get_energy(positions)
     finally:
-        Basis.create_cgtos = original  # type: ignore[method-assign]
+        Basis.expand = original  # type: ignore[method-assign]
 
 
 @pytest.mark.parametrize("driver", ["pytorch", "libcint"])

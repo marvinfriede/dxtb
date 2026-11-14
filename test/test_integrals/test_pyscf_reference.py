@@ -17,13 +17,12 @@
 """
 Overlap against PySCF (independent of dxtb's own libcint wrapper).
 
-Normalization: ``Basis.create_cgtos()`` already includes the standard
-per-primitive Cartesian-Gaussian normalization in the contraction
-coefficients, but PySCF's basis loader applies it again. The coefficients are
-therefore divided by ``N(l, a) = (2a/pi)^0.75 * (4a)^(l/2) / sqrt((2l-1)!!)``
-before the PySCF basis is built; otherwise every primitive is double
-normalized, which breaks the Gram-Schmidt-orthogonalized double-zeta shells
-of H.
+Normalization: ``Basis.expand()`` already includes the standard per-primitive
+Cartesian-Gaussian normalization in the contraction coefficients, but PySCF's
+basis loader applies it again. The coefficients are therefore divided by
+``N(l, a) = (2a/pi)^0.75 * (4a)^(l/2) / sqrt((2l-1)!!)`` before the PySCF basis
+is built; otherwise every primitive is double normalized, which breaks the
+Gram-Schmidt-orthogonalized double-zeta shells of H.
 
 ``dxtb._src.exlibs.pyscf.mol.base`` sets ``pyscf.gto.mole.NORMALIZE_GTO =
 False`` as an import-time side effect. This file relies on PySCF's default
@@ -83,7 +82,8 @@ def _build_pyscf_mol(numbers: torch.Tensor, positions: torch.Tensor):
     ihelp = IndexHelper.from_numbers(numbers.cpu(), par)
     dd: DD = {"dtype": torch.double, "device": torch.device("cpu")}
     bas = Basis(numbers.cpu(), par, ihelp, **dd)
-    alphas, coeffs = bas.create_cgtos()
+    expansion = bas.expand()
+    alphas, coeffs = expansion.alphas, expansion.coeffs
 
     shells_to_ushell = ihelp.shells_to_ushell.tolist()
     shells_to_atom = ihelp.shells_to_atom.tolist()
@@ -231,10 +231,15 @@ def test_os_multipoles_match_pyscf(
     positions = sample["positions"].to(**dd)
 
     ihelp = IndexHelper.from_numbers(numbers, par)
-    alphas, coeffs = Basis(numbers, par, ihelp, **dd).create_cgtos()
+    expansion = Basis(numbers, par, ihelp, **dd).expand()
     comps = DIPOLE_COMPONENTS if kind == "dipole" else QUADRUPOLE_COMPONENTS
     mine = assemble_matrix(
-        get_kernel(algorithm), ihelp, alphas, coeffs, positions, comps
+        get_kernel(algorithm),
+        ihelp,
+        expansion.alphas,
+        expansion.coeffs,
+        positions,
+        comps,
     )
 
     mol = _build_pyscf_mol(numbers, positions)

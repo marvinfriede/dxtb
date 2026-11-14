@@ -26,7 +26,7 @@ import torch
 from tad_mctc.convert import str_to_device
 
 from dxtb import GFN1_XTB, IndexHelper
-from dxtb._src.basis.bas import Basis
+from dxtb._src.basis.bas import Basis, CGTOExpansion
 from dxtb._src.basis.slater import slater_to_gauss
 from dxtb._src.typing.exceptions import (
     CGTOAzimuthalQuantumNumberError,
@@ -90,7 +90,9 @@ def test_fail_higher_orbital_trafo():
 
     ihelp = IndexHelper.from_numbers(number, GFN1_XTB)
     bas = Basis(number, GFN1_XTB, ihelp)
-    alpha, coeff = bas.create_cgtos()
+    expansion = bas.expand()
+    alpha = expansion.alphas
+    coeff = expansion.coeffs
 
     j = torch.tensor(5)
     for i in range(5):
@@ -133,9 +135,9 @@ def test_change_type(dtype: torch.dtype) -> None:
         assert converted.pqn.dtype == bas.pqn.dtype
         assert converted.valence.dtype == torch.bool
         if dtype in (torch.float32, torch.float64):
-            alphas, coeffs = converted.create_cgtos()
-            assert all(a.dtype == dtype for a in alphas)
-            assert all(c.dtype == dtype for c in coeffs)
+            expansion = converted.expand()
+            assert all(a.dtype == dtype for a in expansion.alphas)
+            assert all(c.dtype == dtype for c in expansion.coeffs)
 
     meta_bas = bas.to(device=torch.device("meta"), dtype=dtype)
     assert meta_bas.device == torch.device("meta")
@@ -184,9 +186,9 @@ def test_change_device(device_str: str) -> None:
     assert bas.ngauss.dtype == bas_orig.ngauss.dtype
     assert bas.pqn.dtype == bas_orig.pqn.dtype
     assert bas.valence.dtype == torch.bool
-    alphas, coeffs = bas.create_cgtos()
-    assert all(a.device == device for a in alphas)
-    assert all(c.device == device for c in coeffs)
+    expansion = bas.expand()
+    assert all(a.device == device for a in expansion.alphas)
+    assert all(c.device == device for c in expansion.coeffs)
 
 
 def test_change_device_fail() -> None:
@@ -233,13 +235,17 @@ def test_non_valence_orthogonalization_is_metadata_independent() -> None:
         numbers, custom_pm, IndexHelper.from_numbers(numbers, custom_pm)
     )
 
-    alphas_ref, coeffs_ref = bas_ref.create_cgtos()
-    alphas_cus, coeffs_cus = bas_custom.create_cgtos()
-    alphas_pm, coeffs_pm = bas_custom_pm.create_cgtos()
-    for a_ref, a_cus, a_pm in zip(alphas_ref, alphas_cus, alphas_pm):
+    exp_ref = bas_ref.expand()
+    exp_cus = bas_custom.expand()
+    exp_pm = bas_custom_pm.expand()
+    for a_ref, a_cus, a_pm in zip(
+        exp_ref.alphas, exp_cus.alphas, exp_pm.alphas
+    ):
         torch.testing.assert_close(a_cus, a_ref, atol=0.0, rtol=0.0)
         torch.testing.assert_close(a_pm, a_ref, atol=0.0, rtol=0.0)
-    for c_ref, c_cus, c_pm in zip(coeffs_ref, coeffs_cus, coeffs_pm):
+    for c_ref, c_cus, c_pm in zip(
+        exp_ref.coeffs, exp_cus.coeffs, exp_pm.coeffs
+    ):
         torch.testing.assert_close(c_cus, c_ref, atol=0.0, rtol=0.0)
         torch.testing.assert_close(c_pm, c_ref, atol=0.0, rtol=0.0)
 
@@ -279,10 +285,10 @@ def test_basis_and_wrappers_honor_target_dtype_with_param_module() -> None:
     assert bas_default.slater.dtype == torch.float64
 
     bas_f32 = Basis(numbers, pm_f64, ihelp, dtype=torch.float32)
-    alphas_f32, coeffs_f32 = bas_f32.create_cgtos()
+    exp_f32 = bas_f32.expand()
     assert bas_f32.dtype == torch.float32
-    assert all(a.dtype == torch.float32 for a in alphas_f32)
-    assert all(c.dtype == torch.float32 for c in coeffs_f32)
+    assert all(a.dtype == torch.float32 for a in exp_f32.alphas)
+    assert all(c.dtype == torch.float32 for c in exp_f32.coeffs)
 
     drivers = [labels.INTDRIVER_PYTORCH]
     if has_libcint:
@@ -315,28 +321,28 @@ def test_basis_and_wrappers_honor_target_dtype_with_param_module() -> None:
 
 
 @pytest.mark.parametrize("batched", [False, True])
-def test_create_cgtos_handles_zero_padded_numbers(batched: bool) -> None:
+def test_expand_handles_zero_padded_numbers(batched: bool) -> None:
     """Zero-padded atomic numbers produce 1D placeholder CGTO slots."""
     unpadded = torch.tensor([8, 1])
     bas_ref = Basis(
         unpadded, GFN1_XTB, IndexHelper.from_numbers(unpadded, GFN1_XTB)
     )
-    alphas_ref, coeffs_ref = bas_ref.create_cgtos()
+    exp_ref = bas_ref.expand()
 
     padded = torch.tensor([[8, 1, 0]]) if batched else torch.tensor([8, 1, 0])
     ihelp = IndexHelper.from_numbers(padded, GFN1_XTB, batch_mode=int(batched))
     bas_pad = Basis(padded, GFN1_XTB, ihelp)
-    alphas_pad, coeffs_pad = bas_pad.create_cgtos()
+    exp_pad = bas_pad.expand()
 
-    assert len(alphas_pad) == len(alphas_ref) + 1
-    assert alphas_pad[0].shape == (1,)
-    assert coeffs_pad[0].shape == (1,)
-    assert torch.count_nonzero(alphas_pad[0]) == 0
-    assert torch.count_nonzero(coeffs_pad[0]) == 0
+    assert len(exp_pad.alphas) == len(exp_ref.alphas) + 1
+    assert exp_pad.alphas[0].shape == (1,)
+    assert exp_pad.coeffs[0].shape == (1,)
+    assert torch.count_nonzero(exp_pad.alphas[0]) == 0
+    assert torch.count_nonzero(exp_pad.coeffs[0]) == 0
 
-    for a_ref, a_act in zip(alphas_ref, alphas_pad[1:]):
+    for a_ref, a_act in zip(exp_ref.alphas, exp_pad.alphas[1:]):
         torch.testing.assert_close(a_act, a_ref, atol=0.0, rtol=0.0)
-    for c_ref, c_act in zip(coeffs_ref, coeffs_pad[1:]):
+    for c_ref, c_act in zip(exp_ref.coeffs, exp_pad.coeffs[1:]):
         torch.testing.assert_close(c_act, c_ref, atol=0.0, rtol=0.0)
 
 
@@ -363,7 +369,8 @@ def test_canonical_cgtos_all_supported_elements(method: str) -> None:
         num = torch.tensor([z], device=DEVICE)
         ihelp = IndexHelper.from_numbers(num, par)
         bas = Basis(num, par, ihelp, device=DEVICE, dtype=torch.float64)
-        alphas, coeffs = bas.create_cgtos()
+        expansion = bas.expand()
+        alphas, coeffs = expansion.alphas, expansion.coeffs
 
         n_shells = int(ihelp.ushells_per_unique[0].item())
         assert len(alphas) == n_shells == len(coeffs)
@@ -425,7 +432,8 @@ def test_custom_multi_nonvalence_s_shells_orthogonalize_to_primary() -> None:
     num = torch.tensor([1], device=DEVICE)
     ihelp = IndexHelper.from_numbers(num, par)
     bas = Basis(num, par, ihelp, device=DEVICE, dtype=torch.float64)
-    alphas, coeffs = bas.create_cgtos()
+    expansion = bas.expand()
+    alphas, coeffs = expansion.alphas, expansion.coeffs
 
     assert [int(x) for x in bas.valence.tolist()] == [1, 0, 0]
     for idx in range(3):
@@ -441,3 +449,84 @@ def test_custom_multi_nonvalence_s_shells_orthogonalize_to_primary() -> None:
     torch.testing.assert_close(s12, torch.zeros_like(s12), atol=1e-14, rtol=0.0)
     torch.testing.assert_close(s13, torch.zeros_like(s13), atol=1e-14, rtol=0.0)
     assert s23.abs() > 0.1
+
+
+def _scale_tensor_leaf(leaf: torch.Tensor) -> torch.Tensor:
+    """Scale a PyTree tensor leaf without breaking autograd."""
+    return leaf * 1.25
+
+
+def test_cgto_expansion_container_pytree_and_autograd() -> None:
+    """CGTOExpansion is immutable, PyTree-compatible, differentiable, and uncached."""
+    from torch.utils import _pytree as pytree
+
+    from dxtb import ParamModule
+    from dxtb._src.basis import CGTOExpansion as ReExportedCGTOExpansion
+
+    assert ReExportedCGTOExpansion is CGTOExpansion
+    assert not hasattr(Basis, "create_cgtos")
+
+    numbers = torch.tensor([8, 1, 1], device=DEVICE)
+    par = ParamModule(GFN1_XTB, dtype=torch.float64, device=DEVICE)
+    named = dict(par.named_parameters())
+    h_slater = named["parameter_tree.element.H.slater.param"]
+    o_slater = named["parameter_tree.element.O.slater.param"]
+    h_slater.requires_grad_(True)
+    o_slater.requires_grad_(True)
+
+    ihelp = IndexHelper.from_numbers(numbers, par)
+    bas = Basis(numbers, par, ihelp, device=DEVICE, dtype=torch.float64)
+    assert not hasattr(bas, "create_cgtos")
+    assert not hasattr(bas, "__dict__")
+
+    expansion = bas.expand()
+    assert isinstance(expansion, CGTOExpansion)
+    assert expansion._fields == ("alphas", "coeffs")
+    assert len(expansion.alphas) == len(expansion.coeffs) == 4
+
+    with pytest.raises(AttributeError):
+        expansion.alphas = ()  # type: ignore[misc]
+    with pytest.raises(AttributeError):
+        expansion.extra = 1  # type: ignore[attr-defined]
+
+    leaves, spec = pytree.tree_flatten(expansion)
+    assert len(leaves) == 8
+    for expected, actual in zip((*expansion.alphas, *expansion.coeffs), leaves):
+        assert actual is expected
+        assert actual.requires_grad
+        assert actual.grad_fn is not None
+
+    rebuilt = pytree.tree_unflatten(leaves, spec)
+    assert type(rebuilt) is CGTOExpansion
+    for a_orig, a_reb in zip(expansion.alphas, rebuilt.alphas):
+        torch.testing.assert_close(a_reb, a_orig, atol=0.0, rtol=0.0)
+    for c_orig, c_reb in zip(expansion.coeffs, rebuilt.coeffs):
+        torch.testing.assert_close(c_reb, c_orig, atol=0.0, rtol=0.0)
+
+    mapped = pytree.tree_map(_scale_tensor_leaf, expansion)
+    assert type(mapped) is CGTOExpansion
+    loss = sum(
+        (a.square().sum() for a in mapped.alphas),
+        torch.zeros((), dtype=torch.float64, device=bas.device),
+    ) + sum(
+        (c.square().sum() for c in mapped.coeffs),
+        torch.zeros((), dtype=torch.float64, device=bas.device),
+    )
+    grad_h, grad_o = torch.autograd.grad(loss, (h_slater, o_slater))
+    assert torch.isfinite(grad_h).all() and grad_h.abs().sum() > 0
+    assert torch.isfinite(grad_o).all() and grad_o.abs().sum() > 0
+
+    # No cached expansion or consumed graph lives on Basis across fresh calls
+    expansion2 = bas.expand()
+    assert expansion2 is not expansion
+    mapped2 = pytree.tree_map(_scale_tensor_leaf, expansion2)
+    loss2 = sum(
+        (a.square().sum() for a in mapped2.alphas),
+        torch.zeros((), dtype=torch.float64, device=bas.device),
+    ) + sum(
+        (c.square().sum() for c in mapped2.coeffs),
+        torch.zeros((), dtype=torch.float64, device=bas.device),
+    )
+    grad_h2, grad_o2 = torch.autograd.grad(loss2, (h_slater, o_slater))
+    torch.testing.assert_close(grad_h2, grad_h, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(grad_o2, grad_o, atol=0.0, rtol=0.0)

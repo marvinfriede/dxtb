@@ -241,7 +241,7 @@ def setup_libcint(
             "force_cpu=True requires CPU-resident libcint setup tensors."
         )
 
-    alphas, coeffs = basis.create_cgtos()
+    expansion = basis.expand()
     shell_layout = _build_shell_layout(
         basis.unique, ihelp.ushells_per_unique, ihelp.unique_angular
     )
@@ -260,8 +260,8 @@ def setup_libcint(
     return LibcintIntegralSetup(
         index=ihelp,
         numbers=numbers,
-        alphas=tuple(alphas),
-        coeffs=tuple(coeffs),
+        alphas=expansion.alphas,
+        coeffs=expansion.coeffs,
         active_atoms=active_atoms,
         shell_layout=shell_layout,
         force_cpu=force_cpu,

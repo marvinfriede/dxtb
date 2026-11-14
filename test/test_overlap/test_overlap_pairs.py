@@ -102,12 +102,12 @@ def test_overlap_higher_orbitals(dtype: torch.dtype) -> None:
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(number, par)
     bas = Basis(number, par, ihelp, **dd)
-    alpha, coeff = bas.create_cgtos()
+    expansion = bas.expand()
 
-    ai = alpha[0]
-    ci = coeff[0]
-    aj = alpha[1]
-    cj = coeff[1]
+    ai = expansion.alphas[0]
+    ci = expansion.coeffs[0]
+    aj = expansion.alphas[1]
+    cj = expansion.coeffs[1]
 
     # change momenta artifically for testing purposes
     for i in range(2):

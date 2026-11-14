@@ -235,8 +235,10 @@ def test_custom_param_sto_selection() -> None:
     assert b_gfn1.sto == "gfn1"
     assert b_gfn2.sto == "gfn2"
 
-    alphas_gfn1, coeffs_gfn1 = b_gfn1.create_cgtos()
-    alphas_gfn2, coeffs_gfn2 = b_gfn2.create_cgtos()
+    exp_gfn1 = b_gfn1.expand()
+    exp_gfn2 = b_gfn2.expand()
+    alphas_gfn1, coeffs_gfn1 = exp_gfn1.alphas, exp_gfn1.coeffs
+    alphas_gfn2, coeffs_gfn2 = exp_gfn2.alphas, exp_gfn2.coeffs
 
     # 3d shell (index 0) is unaffected
     torch.testing.assert_close(
@@ -283,20 +285,20 @@ def test_basis_construction_and_export() -> None:
     assert b_gfn1.sto == "gfn1"
     assert b_gfn2.sto == "gfn2"
 
-    alphas_ref, coeffs_ref = b_gfn1.create_cgtos()
+    exp_ref = b_gfn1.expand()
     pt_setup = setup_integrals(b_gfn1)
-    for a_ref, a_pt in zip(alphas_ref, pt_setup.alphas):
+    for a_ref, a_pt in zip(exp_ref.alphas, pt_setup.alphas):
         torch.testing.assert_close(a_ref, a_pt, atol=0.0, rtol=0.0)
-    for c_ref, c_pt in zip(coeffs_ref, pt_setup.coeffs):
+    for c_ref, c_pt in zip(exp_ref.coeffs, pt_setup.coeffs):
         torch.testing.assert_close(c_ref, c_pt, atol=0.0, rtol=0.0)
 
     if has_libcint:
         from dxtb._src.integral.driver.libcint import setup_libcint
 
         lc_setup = setup_libcint(b_gfn1.cpu(), force_cpu=True)
-        for a_ref, a_lc in zip(alphas_ref, lc_setup.alphas):
+        for a_ref, a_lc in zip(exp_ref.alphas, lc_setup.alphas):
             torch.testing.assert_close(a_ref.cpu(), a_lc, atol=0.0, rtol=0.0)
-        for c_ref, c_lc in zip(coeffs_ref, lc_setup.coeffs):
+        for c_ref, c_lc in zip(exp_ref.coeffs, lc_setup.coeffs):
             torch.testing.assert_close(c_ref.cpu(), c_lc, atol=0.0, rtol=0.0)
 
     # BSE Export

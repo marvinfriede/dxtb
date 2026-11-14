@@ -70,17 +70,19 @@ def setup_integrals(
     if basis.ihelp.batch_mode != 0:
         raise ValueError("PyTorch integral setup requires one single System.")
     get_kernel(algorithm)
-    alphas, coeffs = basis.create_cgtos()
+    expansion = basis.expand()
     dev = basis.device
     index = (
         basis.ihelp if basis.ihelp.device == dev else basis.ihelp.to(device=dev)
     )
-    dtype = alphas[0].dtype if alphas else basis.slater.dtype
+    dtype = (
+        expansion.alphas[0].dtype if expansion.alphas else basis.slater.dtype
+    )
     pair_plan = prepare(index, dev, dtype=dtype)
     return PytorchIntegralSetup(
         index=index,
-        alphas=tuple(alphas),
-        coeffs=tuple(coeffs),
+        alphas=expansion.alphas,
+        coeffs=expansion.coeffs,
         pair_plan=pair_plan,
         algorithm=algorithm.casefold(),
     )

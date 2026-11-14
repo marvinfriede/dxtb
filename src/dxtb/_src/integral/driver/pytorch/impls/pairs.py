@@ -225,13 +225,13 @@ def _normalized(
     Contraction coefficients scaled to exactly unit self-overlap of every
     shell, computed with the kernel that assembles the integrals.
 
-    ``Basis.create_cgtos`` already normalizes every contracted shell, so for
-    the built-in bases this changes the coefficients only at the level of
-    rounding errors. It keeps the integrals normalized when the exponents or
-    coefficients are modified after ``create_cgtos``, e.g., while fitting
-    basis parameters. The norm is uniform over the ``2l+1`` components of a
-    shell, so it is folded into the coefficients (bra and ket each pick up
-    one factor) instead of scaling the AO matrix afterwards.
+    ``Basis.expand`` already normalizes every contracted shell, so for the
+    built-in bases this changes the coefficients only at the level of rounding
+    errors. It keeps the integrals normalized when the exponents or
+    coefficients are modified after ``expand``, e.g., while fitting basis
+    parameters. The norm is uniform over the ``2l+1`` components of a shell, so
+    it is folded into the coefficients (bra and ket each pick up one factor)
+    instead of scaling the AO matrix afterwards.
     """
     out = []
     for l, a, c in zip(plan.unique_angular, alphas, coeffs):
@@ -293,8 +293,8 @@ def assemble_matrix(
     ihelp : IndexHelper | None
         Index helper of the (unbatched) molecule. May be omitted when a
         prepared ``plan`` is supplied.
-    alphas, coeffs : list[Tensor]
-        Per-unique-shell exponents and coefficients (``Basis.create_cgtos``).
+    alphas, coeffs : Sequence[Tensor]
+        Per-unique-shell exponents and coefficients (``Basis.expand``).
     positions : Tensor
         Cartesian coordinates, shape ``(nat, 3)``.
     components : tuple of (int, int, int) | None
@@ -616,8 +616,8 @@ def select_pairs(
     ihelp : IndexHelper | None
         Index helper of the (unbatched) molecule. May be omitted when a
         prepared ``plan`` is supplied.
-    alphas, coeffs : list[Tensor]
-        Per-unique-shell exponents and coefficients (``Basis.create_cgtos``).
+    alphas, coeffs : Sequence[Tensor]
+        Per-unique-shell exponents and coefficients (``Basis.expand``).
     positions : Tensor
         Cartesian coordinates, shape ``(nat, 3)`` or ``(nbatch, nat, 3)``.
     threshold : float

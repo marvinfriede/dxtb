@@ -61,8 +61,13 @@ def _setup(name: str, dd: DD, ascale: float):
     numbers = samples[name]["numbers"].to(DEVICE)
     positions = samples[name]["positions"].to(**dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
-    alphas, coeffs = Basis(numbers, par, ihelp, **dd).create_cgtos()
-    return ihelp, [a * ascale for a in alphas], coeffs, positions
+    expansion = Basis(numbers, par, ihelp, **dd).expand()
+    return (
+        ihelp,
+        [a * ascale for a in expansion.alphas],
+        expansion.coeffs,
+        positions,
+    )
 
 
 @pytest.mark.parametrize("name", NAMES)
@@ -149,8 +154,13 @@ def _two_molecules(dd: DD, gap: float, ascale: float):
     shift = torch.tensor([gap, 0.0, 0.0], **dd)
     positions = torch.cat([base, base[:4] * 0.6 + shift])
     ihelp = IndexHelper.from_numbers(numbers, par)
-    alphas, coeffs = Basis(numbers, par, ihelp, **dd).create_cgtos()
-    return ihelp, [a * ascale for a in alphas], coeffs, positions
+    expansion = Basis(numbers, par, ihelp, **dd).expand()
+    return (
+        ihelp,
+        [a * ascale for a in expansion.alphas],
+        expansion.coeffs,
+        positions,
+    )
 
 
 @pytest.mark.parametrize("op", COMPONENTS)
@@ -347,7 +357,8 @@ def test_compile() -> None:
         **dd,
     )
     ihelp = IndexHelper.from_numbers(numbers, par)
-    alphas, coeffs = Basis(numbers, par, ihelp, **dd).create_cgtos()
+    expansion = Basis(numbers, par, ihelp, **dd).expand()
+    alphas, coeffs = expansion.alphas, expansion.coeffs
     plan = prepare(ihelp, positions.device)
 
     pairs = select_pairs(

@@ -25,7 +25,7 @@ from the parametrization. The basis set can also be printed in various formats.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import torch
 from tad_mctc.data import pse
@@ -41,7 +41,17 @@ from .slater import slater_to_gauss
 if TYPE_CHECKING:
     from dxtb._src.exlibs import libcint
 
-__all__ = ["Basis"]
+__all__ = ["Basis", "CGTOExpansion"]
+
+
+class CGTOExpansion(NamedTuple):
+    """Gaussian primitive data in IndexHelper unique-shell order."""
+
+    alphas: tuple[Tensor, ...]
+    """Primitive Gaussian exponents for each unique shell."""
+
+    coeffs: tuple[Tensor, ...]
+    """Normalized contraction coefficients for each unique shell."""
 
 
 def _to_int_list(tensor: Tensor) -> list[int]:
@@ -183,7 +193,7 @@ class Basis(TensorLike):
         )
         return new
 
-    def create_cgtos(self) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
+    def expand(self) -> CGTOExpansion:
         """
         Expand Slater basis parameters into normalized contracted Gaussians.
 
@@ -198,9 +208,9 @@ class Basis(TensorLike):
 
         Returns
         -------
-        tuple[tuple[Tensor, ...], tuple[Tensor, ...]]
+        CGTOExpansion
             Per-unique-shell primitive Gaussian exponents and contraction
-            coefficients.
+            coefficients in ``IndexHelper`` unique-shell order.
         """
         unique_numbers = _to_int_list(self.unique)
         shell_counts = _to_int_list(self.ihelp.ushells_per_unique)
@@ -266,7 +276,7 @@ class Basis(TensorLike):
                 coeffs.append(coeff)
                 shell += 1
 
-        return tuple(alphas), tuple(coeffs)
+        return CGTOExpansion(alphas=tuple(alphas), coeffs=tuple(coeffs))
 
     def to_bse(
         self,
@@ -345,7 +355,7 @@ class Basis(TensorLike):
         if qcformat == "nwchem":
             header += 'BASIS "ao basis" SPHERICAL PRINT\n'
 
-        alphas, coeffs = self.create_cgtos()
+        expansion = self.expand()
         unique_numbers = _to_int_list(self.unique)
         shell_counts = _to_int_list(self.ihelp.ushells_per_unique)
         angular = _to_int_list(self.ihelp.unique_angular)
@@ -378,8 +388,8 @@ class Basis(TensorLike):
                 txt += f"#BASIS SET: {f}\n"
 
             for _ in range(shells):
-                alpha = alphas[s]
-                coeff = coeffs[s]
+                alpha = expansion.alphas[s]
+                coeff = expansion.coeffs[s]
                 l = angular2label[angular[s]]
                 if qcformat == "gaussian94":
                     txt += f"{l}    {len(alpha)}    1.00\n"
