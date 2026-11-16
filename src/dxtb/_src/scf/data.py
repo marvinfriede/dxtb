@@ -30,6 +30,9 @@ from dxtb._src.components.interactions import (
     InteractionList,
     InteractionListCache,
 )
+from dxtb._src.components.interactions.base import (
+    validate_unique_interaction_labels,
+)
 from dxtb._src.constants import defaults
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.typing import Tensor
@@ -571,13 +574,14 @@ def _symmetric_inverse_sqrt(overlap: Tensor) -> Tensor:
 def validate_scf_interactions(
     interactions: InteractionList,
 ) -> None:
-    """Validate that all SCF interaction entries inherit from :class:`Interaction`."""
+    """Validate that all SCF interaction entries inherit from :class:`Interaction` and have unique labels."""
     eligible, names = scf_interactions_eligible(interactions)
     if not eligible:
         raise TypeError(
             "SCF requires Interaction instances; got unsupported "
             f"component(s): {names}."
         )
+    validate_unique_interaction_labels(interactions.components)
 
 
 def scf_interactions_eligible(

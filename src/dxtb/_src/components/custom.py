@@ -28,7 +28,6 @@ from __future__ import annotations
 import copy
 import dataclasses
 import math
-import types
 from enum import Enum
 from typing import Any
 
@@ -40,9 +39,12 @@ from dxtb._src.typing import DD, Tensor, TensorLike
 from dxtb._src.utils.tensors import normalize_device
 
 from .base import (
+    _NON_TRAVERSABLE_TYPES,
+    _PRIMITIVE_STATIC_TYPES,
     Component,
     ComponentCache,
     _iter_mro_slots,
+    _validate_supported_dataclass,
     component_mutation_epoch,
 )
 
@@ -57,29 +59,8 @@ __all__ = [
     "prepare_custom_interaction_entry",
     "reconstruct_custom_interaction",
     "snapshot_component_state",
+    "validate_custom_component_graph",
 ]
-
-_PRIMITIVE_STATIC_TYPES = (
-    type(None),
-    bool,
-    int,
-    float,
-    complex,
-    str,
-    bytes,
-    slice,
-    torch.dtype,
-    torch.device,
-)
-
-_NON_TRAVERSABLE_TYPES = (
-    *_PRIMITIVE_STATIC_TYPES,
-    type,
-    types.FunctionType,
-    types.BuiltinFunctionType,
-    types.MethodType,
-    types.ModuleType,
-)
 
 
 def _resolve_dd_device(device: torch.device | str | None) -> torch.device:
@@ -219,13 +200,25 @@ def _collect_component_state(
     return tensor_records, static_records
 
 
-class ComponentMutationSnapshot:
-    """Snapshot of a component's mutation epoch, tensors, and static attributes."""
+_NO_CACHE = object()
 
-    __slots__ = ("component_id", "epoch", "tensor_records", "static_records")
+
+class ComponentMutationSnapshot:
+    """Snapshot of a component's (and optional setup cache's) state."""
+
+    __slots__ = (
+        "component_id",
+        "epoch",
+        "has_cache",
+        "bound_cache",
+        "tensor_records",
+        "static_records",
+    )
 
     component_id: int
     epoch: int
+    has_cache: bool
+    bound_cache: Any
     tensor_records: tuple[tuple[str, int, int | None], ...]
     static_records: tuple[tuple[str, Any], ...]
 
@@ -233,21 +226,28 @@ class ComponentMutationSnapshot:
         self,
         component_id: int,
         epoch: int,
+        has_cache: bool,
+        bound_cache: Any,
         tensor_records: tuple[tuple[str, int, int | None], ...],
         static_records: tuple[tuple[str, Any], ...],
     ) -> None:
         self.component_id = component_id
         self.epoch = epoch
+        self.has_cache = has_cache
+        self.bound_cache = bound_cache
         self.tensor_records = tensor_records
         self.static_records = static_records
 
     def matches(self, component: Component) -> bool:
-        """Return ``True`` iff ``component`` has not been mutated since capture."""
+        """Return ``True`` iff ``component`` (and bound cache) matches capture state."""
         if id(component) != self.component_id:
             return False
         if component_mutation_epoch(component) != self.epoch:
             return False
-        cur_tensors, cur_statics = _collect_component_state(component)
+        target: Any = (
+            (component, self.bound_cache) if self.has_cache else component
+        )
+        cur_tensors, cur_statics = _collect_component_state(target)
         if len(cur_tensors) != len(self.tensor_records):
             return False
         if tuple(cur_statics) != self.static_records:
@@ -261,69 +261,65 @@ class ComponentMutationSnapshot:
                 return False
         return True
 
-    def sync_post_eval_static_state(self, component: Component) -> None:
-        """Advance ``static_records`` when ``get_energy`` mutated only Python counters."""
-        if id(component) != self.component_id:
-            return
-        if component_mutation_epoch(component) != self.epoch:
-            return
-        cur_tensors, cur_statics = _collect_component_state(component)
-        if len(cur_tensors) != len(self.tensor_records):
-            return
-        for (path_a, id_a, ver_a), (path_b, id_b, ver_b) in zip(
-            self.tensor_records, cur_tensors
-        ):
-            if path_a != path_b or id_a != id_b:
-                return
-            if ver_a is not None and ver_b is not None and ver_a != ver_b:
-                return
-        self.static_records = tuple(cur_statics)
 
-
-def snapshot_component_state(component: Component) -> ComponentMutationSnapshot:
-    """Capture a mutation-detection token for ``component``."""
-    tensor_records, static_records = _collect_component_state(component)
+def snapshot_component_state(
+    component: Component, cache: Any = _NO_CACHE
+) -> ComponentMutationSnapshot:
+    """Capture a mutation-detection token for ``component`` and optional ``cache``."""
+    has_cache = cache is not _NO_CACHE
+    target: Any = (component, cache) if has_cache else component
+    tensor_records, static_records = _collect_component_state(target)
     return ComponentMutationSnapshot(
         component_id=id(component),
         epoch=component_mutation_epoch(component),
+        has_cache=has_cache,
+        bound_cache=cache if has_cache else None,
         tensor_records=tuple(tensor_records),
         static_records=tuple(static_records),
     )
 
 
-def _contains_tensor(obj: Any, seen: set[int] | None = None) -> bool:
-    """Return ``True`` if any ``Tensor`` is reachable from ``obj``."""
-    if isinstance(obj, Tensor):
-        return True
-    if isinstance(obj, (*_NON_TRAVERSABLE_TYPES, Enum)):
-        return False
+def validate_custom_component_graph(
+    obj: Any, seen: set[int] | None = None
+) -> None:
+    """Validate that ``obj`` contains no unsupported frozen dataclass tensor fields."""
+    if isinstance(obj, (Tensor, *_NON_TRAVERSABLE_TYPES, Enum)):
+        return
     if seen is None:
         seen = set()
     oid = id(obj)
     if oid in seen:
-        return False
+        return
     seen.add(oid)
+
     if isinstance(obj, dict):
-        return any(_contains_tensor(v, seen) for v in obj.values())
+        for k, v in obj.items():
+            validate_custom_component_graph(k, seen)
+            validate_custom_component_graph(v, seen)
+        return
+
     if isinstance(obj, (tuple, list)):
-        return any(_contains_tensor(v, seen) for v in obj)
+        for item in obj:
+            validate_custom_component_graph(item, seen)
+        return
+
     if isinstance(obj, Node) or (
         dataclasses.is_dataclass(obj) and not isinstance(obj, type)
     ):
-        return any(
-            _contains_tensor(getattr(obj, f.name), seen)
-            for f in dataclasses.fields(obj)
-        )
-    if isinstance(obj, (Component, ComponentCache)):
-        for slot in _iter_mro_slots(obj):
-            if hasattr(obj, slot) and _contains_tensor(
-                getattr(obj, slot), seen
-            ):
-                return True
-        extra = getattr(obj, "__dict__", None)
-        if isinstance(extra, dict):
-            return any(_contains_tensor(v, seen) for v in extra.values())
-    return False
+        _validate_supported_dataclass(obj)
+        for f in dataclasses.fields(obj):
+            validate_custom_component_graph(getattr(obj, f.name), seen)
+        return
+
+    slots = _iter_mro_slots(obj)
+    for slot in slots:
+        if hasattr(obj, slot):
+            validate_custom_component_graph(getattr(obj, slot), seen)
+    extra = getattr(obj, "__dict__", None)
+    if isinstance(extra, dict):
+        for k, v in extra.items():
+            if k not in slots:
+                validate_custom_component_graph(v, seen)
 
 
 def is_tensor_only_object(
@@ -367,13 +363,9 @@ def is_tensor_only_object(
         )
 
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-        params = getattr(obj, "__dataclass_params__", None)
-        is_frozen = bool(params is not None and params.frozen)
+        _validate_supported_dataclass(obj)
         for f in dataclasses.fields(obj):
-            f_val = getattr(obj, f.name)
-            if is_frozen and not f.init and _contains_tensor(f_val):
-                return False
-            if not is_tensor_only_object(f_val, seen=seen):
+            if not is_tensor_only_object(getattr(obj, f.name), seen=seen):
                 return False
         return True
 
@@ -796,6 +788,7 @@ def _extract_spec(
         if isinstance(obj, Node) or (
             dataclasses.is_dataclass(obj) and not isinstance(obj, type)
         ):
+            _validate_supported_dataclass(obj)
             is_node = isinstance(obj, Node)
             params = getattr(obj, "__dataclass_params__", None)
             is_frozen = is_node or bool(params is not None and params.frozen)
@@ -836,67 +829,10 @@ def _extract_spec(
             memo_specs[oid] = result
             return result
 
-        if not snapshot_mutable and not isinstance(
+        is_external = not snapshot_mutable and not isinstance(
             obj, (Component, ComponentCache)
-        ):
-            # Preserve opaque external models in custom Interaction entries when
-            # they hold no tensors; wrap them only if a tensor is nested inside.
-            slots = _iter_mro_slots(obj)
-            slot_entries_ext: list[tuple[str, Any]] = []
-            for slot in slots:
-                if not hasattr(obj, slot):
-                    continue
-                slot_entries_ext.append(
-                    (
-                        slot,
-                        _extract_spec(
-                            getattr(obj, slot),
-                            floating_list=floating_list,
-                            kept_list=kept_list,
-                            tensor_refs_by_id=tensor_refs_by_id,
-                            target_dtype=target_dtype,
-                            active_obj_ids=active_obj_ids,
-                            memo_specs=memo_specs,
-                            snapshot_mutable=False,
-                        ),
-                    )
-                )
-            dict_entries_ext: list[tuple[str, Any]] = []
-            extra_ext = getattr(obj, "__dict__", None)
-            if isinstance(extra_ext, dict):
-                for key, val in extra_ext.items():
-                    if key in slots:
-                        continue
-                    dict_entries_ext.append(
-                        (
-                            key,
-                            _extract_spec(
-                                val,
-                                floating_list=floating_list,
-                                kept_list=kept_list,
-                                tensor_refs_by_id=tensor_refs_by_id,
-                                target_dtype=target_dtype,
-                                active_obj_ids=active_obj_ids,
-                                memo_specs=memo_specs,
-                                snapshot_mutable=False,
-                            ),
-                        )
-                    )
-            has_dyn_ext = any(
-                _spec_has_dynamic(s) for _, s in slot_entries_ext
-            ) or any(_spec_has_dynamic(s) for _, s in dict_entries_ext)
-            if has_dyn_ext:
-                result = _ObjectSpec(
-                    obj,
-                    tuple(slot_entries_ext),
-                    tuple(dict_entries_ext),
-                    True,
-                )
-                memo_specs[oid] = result
-                return result
-            memo_specs[oid] = obj
-            return obj
-
+        )
+        child_snapshot = False if is_external else snapshot_mutable
         slots = _iter_mro_slots(obj)
         slot_entries: list[tuple[str, Any]] = []
         for slot in slots:
@@ -913,7 +849,7 @@ def _extract_spec(
                         target_dtype=target_dtype,
                         active_obj_ids=active_obj_ids,
                         memo_specs=memo_specs,
-                        snapshot_mutable=snapshot_mutable,
+                        snapshot_mutable=child_snapshot,
                     ),
                 )
             )
@@ -935,7 +871,7 @@ def _extract_spec(
                             target_dtype=target_dtype,
                             active_obj_ids=active_obj_ids,
                             memo_specs=memo_specs,
-                            snapshot_mutable=snapshot_mutable,
+                            snapshot_mutable=child_snapshot,
                         ),
                     )
                 )
@@ -943,7 +879,12 @@ def _extract_spec(
         has_dyn = any(_spec_has_dynamic(s) for _, s in slot_entries) or any(
             _spec_has_dynamic(s) for _, s in dict_entries
         )
-        orig_obj = copy.copy(obj) if snapshot_mutable else obj
+        if is_external and not has_dyn:
+            # Preserve opaque external models in custom Interaction entries when
+            # they hold no tensors; wrap them only if a tensor is nested inside.
+            memo_specs[oid] = obj
+            return obj
+        orig_obj = copy.copy(obj) if child_snapshot else obj
         result = _ObjectSpec(
             orig_obj, tuple(slot_entries), tuple(dict_entries), has_dyn
         )
@@ -1193,6 +1134,46 @@ def _bind_leaves_from_value(
                     )
 
 
+def _extract_pair_spec(
+    component: Component,
+    cache: Any,
+    *,
+    target_dtype: torch.dtype | None,
+    snapshot_mutable: bool,
+) -> tuple[Any, tuple[Tensor, ...], tuple[Tensor, ...]]:
+    """Extract ``(pair_spec, floating_tensors, kept_dtype_tensors)`` from ``(component, cache)``."""
+    floating_list: list[Tensor] = []
+    kept_list: list[Tensor] = []
+    pair_spec = _extract_spec(
+        (component, cache),
+        floating_list=floating_list,
+        kept_list=kept_list,
+        tensor_refs_by_id={},
+        target_dtype=target_dtype,
+        active_obj_ids=set(),
+        memo_specs={},
+        snapshot_mutable=snapshot_mutable,
+    )
+    return pair_spec, tuple(floating_list), tuple(kept_list)
+
+
+def _same_leaf_ids(
+    primary: tuple[Tensor, ...],
+    secondary: tuple[Tensor, ...],
+    primary_ids: tuple[int, ...],
+    secondary_ids: tuple[int, ...],
+) -> bool:
+    """Return ``True`` when leaf tuples still point to the exact setup-time tensors."""
+    return (
+        len(primary) == len(primary_ids)
+        and len(secondary) == len(secondary_ids)
+        and all(id(t) == orig_id for t, orig_id in zip(primary, primary_ids))
+        and all(
+            id(t) == orig_id for t, orig_id in zip(secondary, secondary_ids)
+        )
+    )
+
+
 class CustomClassicalTemplate:
     """Tensor-free structural template for ``CustomClassicalCoreSetup``."""
 
@@ -1280,29 +1261,18 @@ class CustomClassicalCoreSetup(Node):
             "device": target_device,
             "dtype": self.anchor.dtype,
         }
-        same_primary = len(self.floating_tensors) == len(
-            self.template.primary_ids
-        ) and all(
-            id(t) == orig_id
-            for t, orig_id in zip(
-                self.floating_tensors, self.template.primary_ids
-            )
-        )
-        same_secondary = len(self.kept_dtype_tensors) == len(
-            self.template.secondary_ids
-        ) and all(
-            id(t) == orig_id
-            for t, orig_id in zip(
-                self.kept_dtype_tensors, self.template.secondary_ids
-            )
+        same_leaves = _same_leaf_ids(
+            self.floating_tensors,
+            self.kept_dtype_tensors,
+            self.template.primary_ids,
+            self.template.secondary_ids,
         )
         same_dd = (
             target_device
             == _resolve_dd_device(self.template.initial_dd["device"])
             and target_dd["dtype"] == self.template.initial_dd["dtype"]
         )
-        in_functorch = torch._C._functorch.peek_interpreter_stack() is not None
-        if same_primary and same_secondary and same_dd and not in_functorch:
+        if same_leaves and same_dd:
             return self.template.component, self.template.cache
 
         rebuilt = _rebuild_spec(
@@ -1314,32 +1284,24 @@ class CustomClassicalCoreSetup(Node):
         )
         if isinstance(rebuilt, tuple) and len(rebuilt) == 2:
             comp_view, cache_view = rebuilt
-            if comp_view is self.template.component and (
-                in_functorch or not same_dd
+            if (
+                not same_dd
+                and comp_view is self.template.component
+                and isinstance(comp_view, TensorLike)
             ):
                 comp_view = copy.copy(comp_view)
-                if not same_dd and isinstance(comp_view, TensorLike):
-                    comp_view.override_device(target_device)
-                    if target_dd["dtype"] in comp_view.allowed_dtypes:
-                        comp_view.override_dtype(target_dd["dtype"])
+                comp_view.override_device(target_device)
+                if target_dd["dtype"] in comp_view.allowed_dtypes:
+                    comp_view.override_dtype(target_dd["dtype"])
             return comp_view, cache_view
         return self.template.component, self.template.cache
 
     def evaluate_energy(self, positions: Tensor, charge: Tensor) -> Tensor:
-        """Evaluate ``get_energy`` and sync non-tensor call counters updated inside it."""
+        """Evaluate ``get_energy`` on the reconstructed component and cache views."""
         comp_view, cache_view = self.reconstruct()
-        was_live_clean = (
-            comp_view is self.template.component
-            and torch._C._functorch.peek_interpreter_stack() is None
-            and self.template.mutation_snapshot.matches(comp_view)
-        )
         energy: Tensor = comp_view.get_energy(
             positions, cache_view, charge=charge
         )
-        if was_live_clean:
-            self.template.mutation_snapshot.sync_post_eval_static_state(
-                comp_view
-            )
         return energy
 
     def with_converted_component(
@@ -1385,38 +1347,32 @@ class CustomClassicalCoreSetup(Node):
             else self.template.cache
         )
 
-        floating_list: list[Tensor] = []
-        kept_list: list[Tensor] = []
-        pair_spec = _extract_spec(
-            (component, cache_view),
-            floating_list=floating_list,
-            kept_list=kept_list,
-            tensor_refs_by_id={},
+        pair_spec, floating_tup, kept_tup = _extract_pair_spec(
+            component,
+            cache_view,
             target_dtype=self.anchor.dtype,
-            active_obj_ids=set(),
-            memo_specs={},
             snapshot_mutable=True,
         )
         new_template = CustomClassicalTemplate(
             component=component,
             cache=cache_view,
             pair_spec=pair_spec,
-            primary_ids=tuple(id(t) for t in floating_list),
-            secondary_ids=tuple(id(t) for t in kept_list),
+            primary_ids=tuple(id(t) for t in floating_tup),
+            secondary_ids=tuple(id(t) for t in kept_tup),
             initial_dd={
                 "device": self.anchor.device,
                 "dtype": self.anchor.dtype,
             },
             mutation_snapshot=(
-                snapshot_component_state(component)
+                snapshot_component_state(component, cache_view)
                 if mutation_snapshot is None
                 else mutation_snapshot
             ),
         )
         return CustomClassicalCoreSetup(
             anchor=self.anchor,
-            floating_tensors=tuple(floating_list),
-            kept_dtype_tensors=tuple(kept_list),
+            floating_tensors=floating_tup,
+            kept_dtype_tensors=kept_tup,
             template=new_template,
         )
 
@@ -1429,19 +1385,14 @@ def can_build_custom_classical_core_setup(
     """Return ``True`` when ``(component, cache)`` is tensor-only on ``dd['device']``."""
     if not (is_tensor_only_object(component) and is_tensor_only_object(cache)):
         return False
-    floating_list: list[Tensor] = []
-    kept_list: list[Tensor] = []
-    _extract_spec(
-        (component, cache),
-        floating_list=floating_list,
-        kept_list=kept_list,
-        tensor_refs_by_id={},
+    _, floating_tup, kept_tup = _extract_pair_spec(
+        component,
+        cache,
         target_dtype=dd["dtype"],
-        active_obj_ids=set(),
-        memo_specs={},
+        snapshot_mutable=False,
     )
     target_device = _resolve_dd_device(dd["device"])
-    return all(t.device == target_device for t in (*floating_list, *kept_list))
+    return all(t.device == target_device for t in (*floating_tup, *kept_tup))
 
 
 def build_custom_classical_core_setup(
@@ -1453,35 +1404,29 @@ def build_custom_classical_core_setup(
 ) -> CustomClassicalCoreSetup:
     """Wrap a tensor-only custom ``Classical`` and its setup into a ``Node``."""
     target_device = _resolve_dd_device(dd["device"])
-    floating_list: list[Tensor] = []
-    kept_list: list[Tensor] = []
-    pair_spec = _extract_spec(
-        (component, cache),
-        floating_list=floating_list,
-        kept_list=kept_list,
-        tensor_refs_by_id={},
+    pair_spec, floating_tup, kept_tup = _extract_pair_spec(
+        component,
+        cache,
         target_dtype=dd["dtype"],
-        active_obj_ids=set(),
-        memo_specs={},
         snapshot_mutable=True,
     )
     template = CustomClassicalTemplate(
         component=component,
         cache=cache,
         pair_spec=pair_spec,
-        primary_ids=tuple(id(t) for t in floating_list),
-        secondary_ids=tuple(id(t) for t in kept_list),
+        primary_ids=tuple(id(t) for t in floating_tup),
+        secondary_ids=tuple(id(t) for t in kept_tup),
         initial_dd={"device": target_device, "dtype": dd["dtype"]},
         mutation_snapshot=(
-            snapshot_component_state(component)
+            snapshot_component_state(component, cache)
             if mutation_snapshot is None
             else mutation_snapshot
         ),
     )
     return CustomClassicalCoreSetup(
         anchor=torch.empty(0, device=target_device, dtype=dd["dtype"]),
-        floating_tensors=tuple(floating_list),
-        kept_dtype_tensors=tuple(kept_list),
+        floating_tensors=floating_tup,
+        kept_dtype_tensors=kept_tup,
         template=template,
     )
 
@@ -1527,34 +1472,28 @@ def prepare_custom_interaction_entry(
     cache: Any,
 ) -> SCFInteractionEntry:
     """Extract all tensors from ``(component, cache)`` into an ``SCFInteractionEntry``."""
-    floating_list: list[Tensor] = []
-    kept_list: list[Tensor] = []
-    pair_spec = _extract_spec(
-        (component, cache),
-        floating_list=floating_list,
-        kept_list=kept_list,
-        tensor_refs_by_id={},
+    pair_spec, floating_tup, kept_tup = _extract_pair_spec(
+        component,
+        cache,
         target_dtype=None,
-        active_obj_ids=set(),
-        memo_specs={},
         snapshot_mutable=False,
     )
     template = CustomInteractionTemplate(
         component=component,
         cache=cache,
         pair_spec=pair_spec,
-        primary_ids=tuple(id(t) for t in floating_list),
-        secondary_ids=tuple(id(t) for t in kept_list),
+        primary_ids=tuple(id(t) for t in floating_tup),
+        secondary_ids=tuple(id(t) for t in kept_tup),
     )
     data = tuple(
         [
             *(
                 (f"float_{idx}", tensor)
-                for idx, tensor in enumerate(floating_list)
+                for idx, tensor in enumerate(floating_tup)
             ),
             *(
                 (f"static_tensor_{idx}", tensor)
-                for idx, tensor in enumerate(kept_list)
+                for idx, tensor in enumerate(kept_tup)
             ),
         ]
     )
@@ -1575,14 +1514,9 @@ def reconstruct_custom_interaction(
     primary = tuple(value for _, value in entry.data[:n_primary])
     secondary = tuple(value for _, value in entry.data[n_primary:])
 
-    same_primary = len(primary) == len(template.primary_ids) and all(
-        id(t) == orig_id for t, orig_id in zip(primary, template.primary_ids)
-    )
-    same_secondary = len(secondary) == len(template.secondary_ids) and all(
-        id(t) == orig_id
-        for t, orig_id in zip(secondary, template.secondary_ids)
-    )
-    if same_primary and same_secondary:
+    if _same_leaf_ids(
+        primary, secondary, template.primary_ids, template.secondary_ids
+    ):
         return template.component, template.cache
 
     rebuilt = _rebuild_spec(template.pair_spec, primary, secondary, None, {})

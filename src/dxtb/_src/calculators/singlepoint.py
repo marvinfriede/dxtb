@@ -60,7 +60,13 @@ from dxtb._src.components.classicals.shortrangebond import (
     ShortRangeBondCoreSetup,
     short_range_bond_energy,
 )
-from dxtb._src.components.custom import CustomClassicalCoreSetup
+from dxtb._src.components.custom import (
+    CustomClassicalCoreSetup,
+    validate_custom_component_graph,
+)
+from dxtb._src.components.interactions.base import (
+    validate_unique_interaction_labels,
+)
 from dxtb._src.components.interactions.coulomb.multipole import (
     AES2CoreSetup,
     build_aes2_data,
@@ -180,23 +186,20 @@ def _evaluate_custom_classical_fallback(
     positions: Tensor,
     charge: Tensor,
 ) -> Tensor:
-    """Evaluate a custom classical fallback setup, syncing internal call counters."""
-    matched_snap = None
+    """Evaluate a custom classical fallback setup, rebuilding if component state changed."""
+    matched = False
     setup = None
     for owner, snap, captured_setup in system._custom_classical_snapshots:
         if owner is component:
             if snap.matches(component):
-                matched_snap = snap
+                matched = True
                 setup = captured_setup
             break
-    if matched_snap is None:
+    if not matched:
+        validate_custom_component_graph(component)
         setup = component.get_cache(system.numbers, system.ihelp)
+        validate_custom_component_graph(setup)
     energy: Tensor = component.get_energy(positions, setup, charge=charge)
-    if (
-        matched_snap is not None
-        and torch._C._functorch.peek_interpreter_stack() is None
-    ):
-        matched_snap.sync_post_eval_static_state(component)
     return energy
 
 
@@ -281,6 +284,7 @@ def _interaction_data(
 ) -> InteractionListCache:
     """Build call-local interaction data for one SCF evaluation."""
     interactions = system.interactions if interactions is None else interactions
+    validate_unique_interaction_labels(interactions.components)
     core = (
         system._active_exact_core()
         if _active_core is _UNSET_CORE
@@ -676,6 +680,7 @@ def _prepare_singlepoint(
             "Construct the System with an integral level of at least "
             f"{labels.INTLEVEL_QUADRUPOLE}."
         )
+    validate_unique_interaction_labels(system.interactions.components)
 
     # B5 provides the pure evaluation boundary. B6a removes persistent
     # component state behind this boundary.

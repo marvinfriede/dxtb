@@ -37,7 +37,7 @@ from dxtb._src.typing import (
     override,
 )
 
-from .base import Component
+from .base import Component, ConversionMemo, _convert_component_value
 
 __all__ = ["ComponentList", "ComponentListCache"]
 
@@ -239,10 +239,21 @@ class ComponentList(ComponentListABC, Generic[C], TensorLike):
     def __repr__(self) -> str:  # pragma: no cover
         return str(self)
 
-    @override
-    def type(self, dtype: torch.dtype) -> Self:
-        self.components = list(
-            dict.fromkeys(c.type(dtype) for c in self.components)
-        )
+    def _type_with_memo(self, dtype: torch.dtype, memo: ConversionMemo) -> Self:
+        """Convert all components in this list to ``dtype`` sharing ``memo``."""
+        converted: list[C] = []
+        for comp in self.components:
+            if dtype not in comp.allowed_dtypes:
+                converted_c = comp.type(dtype)
+            else:
+                converted_c = _convert_component_value(
+                    comp, device=None, dtype=dtype, memo=memo
+                )
+            converted.append(converted_c)
+        self.components = list(dict.fromkeys(converted))
         self.override_dtype(dtype)
         return self
+
+    @override
+    def type(self, dtype: torch.dtype) -> Self:
+        return self._type_with_memo(dtype, {})

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+from collections.abc import Sequence
 
 import torch
 
@@ -35,7 +36,12 @@ from dxtb._src.typing import Any, Tensor, TensorOrTensors, final
 from ...components.base import Component, ComponentCache
 from .container import Charges, Potential
 
-__all__ = ["Interaction", "InteractionCache", "call_monopole_hook"]
+__all__ = [
+    "Interaction",
+    "InteractionCache",
+    "call_monopole_hook",
+    "validate_unique_interaction_labels",
+]
 
 
 @functools.lru_cache(maxsize=None)
@@ -661,3 +667,18 @@ class Interaction(Component):
             Nuclear gradient for each atom.
         """
         return torch.zeros_like(positions)
+
+
+def validate_unique_interaction_labels(
+    interactions: Sequence[Interaction],
+) -> None:
+    """Reject distinct ``Interaction`` instances that share the same label."""
+    seen_by_label: dict[str, Interaction] = {}
+    for interaction in interactions:
+        previous = seen_by_label.get(interaction.label)
+        if previous is not None and previous is not interaction:
+            raise ValueError(
+                "Distinct interactions in a single System share the "
+                f"label '{interaction.label}'."
+            )
+        seen_by_label[interaction.label] = interaction

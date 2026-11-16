@@ -98,8 +98,12 @@ from dxtb._src.components.custom import (
     build_custom_classical_core_setup,
     can_build_custom_classical_core_setup,
     snapshot_component_state,
+    validate_custom_component_graph,
 )
 from dxtb._src.components.interactions import Interaction, InteractionList
+from dxtb._src.components.interactions.base import (
+    validate_unique_interaction_labels,
+)
 from dxtb._src.components.interactions.coulomb import (
     AES2,
     ES2,
@@ -2618,21 +2622,10 @@ class Model:
         _require_component_instances(
             interactions.components, Interaction, "Interaction"
         )
-        if batch_mode == 0:
-            interaction_labels_by_name: dict[str, Interaction] = {}
-            for interaction in interactions.components:
-                previous_inter = interaction_labels_by_name.get(
-                    interaction.label
-                )
-                if (
-                    previous_inter is not None
-                    and previous_inter is not interaction
-                ):
-                    raise ValueError(
-                        "Distinct interactions in a single System share the "
-                        f"label '{interaction.label}'."
-                    )
-                interaction_labels_by_name[interaction.label] = interaction
+        validate_unique_interaction_labels(interactions.components)
+        for interaction in interactions.components:
+            if type(interaction) not in BUILTIN_INTERACTION_TYPES:
+                validate_custom_component_graph(interaction)
 
         # Preserve automatic integral promotion for field-labelled subclasses
         # and custom multipole interactions.
@@ -2884,8 +2877,12 @@ class Model:
                     setup = core_halogen_setup(component_setup)
                     halogen_setup = setup
                 else:
+                    validate_custom_component_graph(component)
+                    validate_custom_component_graph(component_setup)
                     packed_classical_setups[component.label] = component_setup
-                    comp_snap = snapshot_component_state(component)
+                    comp_snap = snapshot_component_state(
+                        component, component_setup
+                    )
                     custom_classical_snapshots.append(
                         (
                             component,
@@ -2936,10 +2933,14 @@ class Model:
                 else:
                     packed_classical_setups[component.label] = batched_setup
                     if type(component) not in BUILTIN_CLASSICAL_TYPES:
+                        validate_custom_component_graph(component)
+                        validate_custom_component_graph(batched_setup)
                         custom_classical_snapshots.append(
                             (
                                 component,
-                                snapshot_component_state(component),
+                                snapshot_component_state(
+                                    component, batched_setup
+                                ),
                                 batched_setup,
                             )
                         )

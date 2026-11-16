@@ -31,7 +31,10 @@ from dxtb._src.components.interactions import (
     InteractionList,
     InteractionListCache,
 )
-from dxtb._src.components.interactions.base import call_monopole_hook
+from dxtb._src.components.interactions.base import (
+    call_monopole_hook,
+    validate_unique_interaction_labels,
+)
 from dxtb._src.components.interactions.coulomb.multipole import AES2
 from dxtb._src.components.interactions.coulomb.secondorder import ES2
 from dxtb._src.components.interactions.coulomb.thirdorder import ES3
@@ -70,6 +73,7 @@ def prepare_scf_interactions(
     its functional reference weights use the same setup snapshot as the
     geometry-dependent D4SC cache. Direct callers may omit it.
     """
+    validate_unique_interaction_labels(interactions.components)
     entries: list[SCFInteractionEntry] = []
     for component in interactions.components:
         cache = interaction_data[component.label]

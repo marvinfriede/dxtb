@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import contextlib
 import copy
-import dataclasses
 from abc import abstractmethod
 from collections.abc import Sequence
 from dataclasses import replace
@@ -51,6 +50,7 @@ from dxtb._src.calculators.properties.vibration import (
     VibResult,
 )
 from dxtb._src.calculators.result import ChargeResult, PotentialResult
+from dxtb._src.components.base import ConversionMemo, _convert_component_value
 from dxtb._src.components.classicals import (
     Classical,
     ClassicalList,
@@ -60,6 +60,9 @@ from dxtb._src.components.custom import (
     snapshot_component_state,
 )
 from dxtb._src.components.interactions import Interaction, InteractionList
+from dxtb._src.components.interactions.base import (
+    validate_unique_interaction_labels,
+)
 from dxtb._src.constants import defaults
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.timing import timer
@@ -76,79 +79,25 @@ def _convert_setup_node(setup: Any, dtype: torch.dtype) -> Any:
     return setup.to(dtype=dtype) if isinstance(setup, Node) else setup
 
 
-def _convert_packed_setup_value(value: Any, dtype: torch.dtype) -> Any:
-    """Convert floating tensors inside a captured classical setup to ``dtype``."""
-    if isinstance(value, Tensor):
-        return value.to(dtype=dtype) if value.is_floating_point() else value
-    if isinstance(value, TensorLike):
-        return value.type(dtype)
-    if isinstance(value, Node):
-        return value.to(dtype=dtype)
-    if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        params = getattr(value, "__dataclass_params__", None)
-        is_frozen = bool(params is not None and params.frozen)
-        changes: dict[str, Any] = {}
-        for f in dataclasses.fields(value):
-            if is_frozen and not f.init:
-                continue
-            old_v = getattr(value, f.name)
-            new_v = _convert_packed_setup_value(old_v, dtype)
-            if new_v is not old_v:
-                changes[f.name] = new_v
-        if not changes:
-            return value
-        if is_frozen:
-            return dataclasses.replace(value, **changes)
-        dc_copy = copy.copy(value)
-        for name, new_v in changes.items():
-            setattr(dc_copy, name, new_v)
-        return dc_copy
-    if isinstance(value, dict):
-        converted_pairs = [
-            (k, _convert_packed_setup_value(v, dtype)) for k, v in value.items()
-        ]
-        if all(v is value[k] for k, v in converted_pairs):
-            return value
-        if type(value) is dict:
-            return dict(converted_pairs)
-        dict_copy = copy.copy(value)
-        dict_copy.clear()
-        dict_copy.update(converted_pairs)
-        return dict_copy
-    if isinstance(value, tuple):
-        converted_tuple = tuple(
-            _convert_packed_setup_value(v, dtype) for v in value
-        )
-        if all(a is b for a, b in zip(converted_tuple, value)):
-            return value
-        if type(value) is tuple:
-            return converted_tuple
-        if hasattr(type(value), "_fields"):
-            return type(value)(*converted_tuple)
-        return type(value)(converted_tuple)
-    if isinstance(value, list):
-        converted_list = [_convert_packed_setup_value(v, dtype) for v in value]
-        if all(a is b for a, b in zip(converted_list, value)):
-            return value
-        if type(value) is list:
-            return converted_list
-        list_copy = copy.copy(value)
-        list_copy[:] = converted_list
-        return list_copy
-    return value
-
-
 def _convert_packed_classical_setups(
-    packed_setups: Any, dtype: torch.dtype
+    packed_setups: Any,
+    dtype: torch.dtype,
+    *,
+    device: torch.device | None = None,
+    memo: ConversionMemo | None = None,
 ) -> Any:
     """Convert all entries in ``_packed_classical_setups`` to ``dtype``."""
     if not packed_setups:
         return packed_setups
     from dxtb._src.components.classicals.list import ClassicalListCache
 
+    if memo is None:
+        memo = {}
     converted = ClassicalListCache()
     for key, value in packed_setups.items():
-        converted[key] = _convert_packed_setup_value(value, dtype)
+        converted[key] = _convert_component_value(
+            value, device=device, dtype=dtype, memo=memo
+        )
     return converted
 
 
@@ -160,9 +109,12 @@ def _convert_system_dtype(
     interactions: InteractionList | None = None,
     old_cls_ids: Sequence[int] | None = None,
     old_int_ids: Sequence[int] | None = None,
+    memo: ConversionMemo | None = None,
     _refresh_token: bool = True,
 ) -> System:
     """Convert System setup snapshots to ``dtype`` per ``Calculator.type``."""
+    if memo is None:
+        memo = {}
     token_intact = _refresh_token and system._has_intact_setup_token()
     resolved_classicals = (
         system.classicals if classicals is None else classicals
@@ -242,8 +194,12 @@ def _convert_system_dtype(
         if token_intact and system._setup_index_token is not None
         else None
     )
+    sys_device = normalize_device(system.dd["device"])
     packed_setups = _convert_packed_classical_setups(
-        system._packed_classical_setups, dtype
+        system._packed_classical_setups,
+        dtype,
+        device=sys_device,
+        memo=memo,
     )
     old_to_new_cls = {
         old_cid: id(new_c)
@@ -265,24 +221,25 @@ def _convert_system_dtype(
         id(owner): old_setup
         for owner, _, old_setup in system._custom_classical_snapshots
     }
-    snap_by_pos: dict[int, Any] = {}
     custom_snapshots_list: list[tuple[Classical, Any, Any]] = []
-    for pos, (old_cid, new_c) in enumerate(
-        zip(src_cls_ids, resolved_classicals.components)
-    ):
-        if type(new_c) not in BUILTIN_CLASSICAL_TYPES:
-            new_snap = snapshot_component_state(new_c)
-            snap_by_pos[pos] = new_snap
-            if old_cid in old_setup_by_cid:
-                custom_snapshots_list.append(
-                    (
-                        new_c,
-                        new_snap,
-                        _convert_packed_setup_value(
-                            old_setup_by_cid[old_cid], dtype
-                        ),
-                    )
+    for old_cid, new_c in zip(src_cls_ids, resolved_classicals.components):
+        if (
+            type(new_c) not in BUILTIN_CLASSICAL_TYPES
+            and old_cid in old_setup_by_cid
+        ):
+            conv_setup = _convert_component_value(
+                old_setup_by_cid[old_cid],
+                device=sys_device,
+                dtype=dtype,
+                memo=memo,
+            )
+            custom_snapshots_list.append(
+                (
+                    new_c,
+                    snapshot_component_state(new_c, conv_setup),
+                    conv_setup,
                 )
+            )
     if exact_core is not None and any(
         isinstance(term.setup, CustomClassicalCoreSetup)
         for term in exact_core.classical_terms
@@ -292,8 +249,7 @@ def _convert_system_dtype(
                 replace(
                     term,
                     setup=term.setup.with_converted_component(
-                        resolved_classicals.components[term.position],
-                        mutation_snapshot=snap_by_pos.get(term.position),
+                        resolved_classicals.components[term.position]
                     ),
                 )
                 if isinstance(term.setup, CustomClassicalCoreSetup)
@@ -320,14 +276,19 @@ def _convert_system_dtype(
 
 def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
     """Convert a call-local evaluation System and its exact core setups to ``dtype``."""
+    conversion_memo: ConversionMemo = {}
     token_intact = system._has_intact_setup_token()
     orig_core = system._active_exact_core()
 
     if orig_core is None:
         old_cls_ids = [id(c) for c in system.classicals.components]
         old_int_ids = [id(i) for i in system.interactions.components]
-        new_classicals = system.classicals.type(dtype)
-        new_interactions = system.interactions.type(dtype)
+        new_classicals = system.classicals._type_with_memo(
+            dtype, conversion_memo
+        )
+        new_interactions = system.interactions._type_with_memo(
+            dtype, conversion_memo
+        )
         c_pairs = tuple(
             zip(system.classicals.components, new_classicals.components)
         )
@@ -341,6 +302,7 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
             interactions=new_interactions,
             old_cls_ids=old_cls_ids,
             old_int_ids=old_int_ids,
+            memo=conversion_memo,
             _refresh_token=False,
         )
 
@@ -421,7 +383,13 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
     new_classicals = (
         ClassicalList(
             *(
-                c if type(c) in BUILTIN_CLASSICAL_TYPES else c.type(dtype)
+                (
+                    c
+                    if type(c) in BUILTIN_CLASSICAL_TYPES
+                    else _convert_component_value(
+                        c, device=None, dtype=dtype, memo=conversion_memo
+                    )
+                )
                 for c in system.classicals.components
             ),
             device=system.dd["device"],
@@ -437,7 +405,13 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
     new_interactions = (
         InteractionList(
             *(
-                i if type(i) in BUILTIN_INTERACTION_TYPES else i.type(dtype)
+                (
+                    i
+                    if type(i) in BUILTIN_INTERACTION_TYPES
+                    else _convert_component_value(
+                        i, device=None, dtype=dtype, memo=conversion_memo
+                    )
+                )
                 for i in system.interactions.components
             ),
             device=system.dd["device"],
@@ -454,6 +428,7 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
         interactions=new_interactions,
         old_cls_ids=old_cls_ids,
         old_int_ids=old_int_ids,
+        memo=conversion_memo,
         _refresh_token=False,
     )
     exact_core = base.exact_core
@@ -765,6 +740,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
 
         source_classicals = tuple(self.classicals.components)
         source_interactions = tuple(self.interactions.components)
+        validate_unique_interaction_labels(source_interactions)
         auto_cls_ids = self.system._auto_classical_ids
         auto_int_ids = self.system._auto_interaction_ids
         explicit_classicals = tuple(
@@ -806,10 +782,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         }
         current_labels = [c.label for c in source_classicals]
         has_label_collision = len(set(current_labels)) < len(current_labels)
-        current_int_labels = [i.label for i in source_interactions]
-        has_int_label_collision = len(set(current_int_labels)) < len(
-            current_int_labels
-        )
 
         setup_dd: DD = (
             {"device": self.device, "dtype": self.model.par.dtype}
@@ -833,19 +805,13 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                 eval_classicals.append(comp)
 
         eval_interactions = []
-        for idx, inter in enumerate(explicit_interactions):
-            if (
-                type(inter) in BUILTIN_INTERACTION_TYPES
-                or has_int_label_collision
-            ):
+        for inter in explicit_interactions:
+            if type(inter) in BUILTIN_INTERACTION_TYPES:
                 i_copy = (
                     inter.type(setup_dd["dtype"])
-                    if type(inter) in BUILTIN_INTERACTION_TYPES
-                    and inter.dtype != setup_dd["dtype"]
+                    if inter.dtype != setup_dd["dtype"]
                     else copy.copy(inter)
                 )
-                if has_int_label_collision:
-                    i_copy.label = f"__dxtb_lane_setup_{idx}_{inter.label}"
                 eval_interactions.append(i_copy)
             else:
                 eval_interactions.append(inter)
@@ -1055,17 +1021,28 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                 f"Only '{self.allowed_dtypes}' allowed (received '{dtype}')."
             )
 
+        conversion_memo: ConversionMemo = {}
         old_cls_ids = [id(c) for c in self.classicals.components]
         old_int_ids = [id(i) for i in self.interactions.components]
-        self.classicals = self.classicals.type(dtype)
-        self.interactions = self.interactions.type(dtype)
+        self.classicals = self.classicals._type_with_memo(
+            dtype, conversion_memo
+        )
+        self.interactions = self.interactions._type_with_memo(
+            dtype, conversion_memo
+        )
         cls_by_old_id = dict(zip(old_cls_ids, self.classicals.components))
         int_by_old_id = dict(zip(old_int_ids, self.interactions.components))
         new_model_classical = tuple(
             (
                 c
                 if type(c) in BUILTIN_CLASSICAL_TYPES
-                else cls_by_old_id.get(id(c), c.type(dtype))
+                else (
+                    cls_by_old_id[id(c)]
+                    if id(c) in cls_by_old_id
+                    else _convert_component_value(
+                        c, device=None, dtype=dtype, memo=conversion_memo
+                    )
+                )
             )
             for c in self.model.classical
         )
@@ -1073,7 +1050,13 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             (
                 i
                 if type(i) in BUILTIN_INTERACTION_TYPES
-                else int_by_old_id.get(id(i), i.type(dtype))
+                else (
+                    int_by_old_id[id(i)]
+                    if id(i) in int_by_old_id
+                    else _convert_component_value(
+                        i, device=None, dtype=dtype, memo=conversion_memo
+                    )
+                )
             )
             for i in self.model.interaction
         )
@@ -1102,6 +1085,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             interactions=self.interactions,
             old_cls_ids=old_cls_ids,
             old_int_ids=old_int_ids,
+            memo=conversion_memo,
         )
         # hard override of the dtype in TensorLike
         self.override_dtype(dtype)

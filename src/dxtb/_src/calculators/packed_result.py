@@ -60,6 +60,9 @@ from dxtb._src.components.custom import (
     CustomClassicalCoreSetup,
     snapshot_component_state,
 )
+from dxtb._src.components.interactions.base import (
+    validate_unique_interaction_labels,
+)
 from dxtb._src.constants import defaults
 from dxtb._src.scf.eager import _raise_failure_code
 from dxtb._src.scf.status import SCFStatus
@@ -1089,6 +1092,7 @@ def evaluate_packed_systems(
         )
     try:
         for group in groups:
+            ran_mapped: list[bool] = []
             group_results = evaluate_lane_group(
                 group,
                 lane_positions,
@@ -1096,12 +1100,13 @@ def evaluate_packed_systems(
                 lane_spins,
                 lane_fields,
                 lane_field_grads,
+                _ran_mapped=ran_mapped,
             )
 
             # Independent evaluation raises its own convergence diagnostics;
             # mapped Lanes report them through tensor status unless the
             # caller asks for the same error policy.
-            if eager_status_policy and group.use_vmap:
+            if eager_status_policy and ran_mapped and ran_mapped[0]:
                 _enforce_eager_status_policy(
                     group_results, group.system, group.source_ids
                 )
@@ -1155,17 +1160,18 @@ def _sync_lane_system_labels(
         for idx, (lane_inter, orig_inter) in enumerate(
             zip(new_interactions, source_interactions)
         ):
-            if lane_inter.label != orig_inter.label and (
-                type(lane_inter) is type(orig_inter)
-                or lane_inter.label.startswith("__dxtb_lane_setup_")
-            ):
+            if lane_inter.label != orig_inter.label and type(
+                lane_inter
+            ) is type(orig_inter):
                 if id(lane_inter) in caller_owned_ids:
                     lane_inter = copy.copy(lane_inter)
                     new_interactions[idx] = lane_inter
                 lane_inter.label = orig_inter.label
                 interaction_changed = True
         if interaction_changed:
+            validate_unique_interaction_labels(new_interactions)
             lane_sys.interactions.components = new_interactions
+    validate_unique_interaction_labels(lane_sys.interactions.components)
 
     if not (classical_changed or interaction_changed):
         return lane_sys
@@ -1200,20 +1206,21 @@ def _sync_lane_system_labels(
             for owner, _, captured_setup in custom_snapshots
         }
         rebound_snapshots: list[tuple[Any, Any, Any]] = []
-        for pos, (old_c, new_c) in enumerate(
-            zip(old_classical_comps, lane_sys.classicals.components)
+        for old_c, new_c in zip(
+            old_classical_comps, lane_sys.classicals.components
         ):
-            if type(new_c) not in BUILTIN_CLASSICAL_TYPES:
-                new_snap = snapshot_component_state(new_c)
-                snap_by_pos[pos] = new_snap
-                if id(old_c) in old_setup_by_cid:
-                    rebound_snapshots.append(
-                        (
-                            new_c,
-                            new_snap,
-                            old_setup_by_cid[id(old_c)],
-                        )
+            if (
+                type(new_c) not in BUILTIN_CLASSICAL_TYPES
+                and id(old_c) in old_setup_by_cid
+            ):
+                cap_setup = old_setup_by_cid[id(old_c)]
+                rebound_snapshots.append(
+                    (
+                        new_c,
+                        snapshot_component_state(new_c, cap_setup),
+                        cap_setup,
                     )
+                )
         custom_snapshots = tuple(rebound_snapshots)
 
     exact_core = lane_sys.exact_core
@@ -1224,8 +1231,7 @@ def _sync_lane_system_labels(
                 label=lane_sys.classicals.components[term.position].label,
                 setup=(
                     term.setup.with_converted_component(
-                        lane_sys.classicals.components[term.position],
-                        mutation_snapshot=snap_by_pos.get(term.position),
+                        lane_sys.classicals.components[term.position]
                     )
                     if isinstance(term.setup, CustomClassicalCoreSetup)
                     else term.setup
@@ -1272,6 +1278,7 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
     batch_size = int(calc.numbers.shape[0])
     source_classicals = tuple(calc.classicals.components)
     source_interactions = tuple(calc.interactions.components)
+    validate_unique_interaction_labels(source_interactions)
     auto_cls_ids = calc.system._auto_classical_ids
     auto_int_ids = calc.system._auto_interaction_ids
     explicit_classicals = tuple(
@@ -1308,10 +1315,6 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
 
     current_labels = [c.label for c in source_classicals]
     has_label_collision = len(set(current_labels)) < len(current_labels)
-    current_int_labels = [i.label for i in source_interactions]
-    has_int_label_collision = len(set(current_int_labels)) < len(
-        current_int_labels
-    )
 
     # Atomic numbers are structural metadata: resolve them on the host with
     # one transfer per tensor instead of one scalar transfer per atom. The
@@ -1387,7 +1390,7 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                     lane_classical_list.append(comp)
 
             lane_interaction_list = []
-            for i_idx, inter in enumerate(explicit_interactions):
+            for inter in explicit_interactions:
                 inter_has_2d_nums = (
                     getattr(inter, "numbers", None) is not None
                     and isinstance(inter.numbers, Tensor)
@@ -1395,7 +1398,6 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                 )
                 if (
                     inter_has_2d_nums
-                    or has_int_label_collision
                     or type(inter) in BUILTIN_INTERACTION_TYPES
                 ):
                     i_copy = (
@@ -1407,10 +1409,6 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                     if inter_has_2d_nums:
                         i_copy.numbers = inter.numbers[idx].index_select(
                             0, slots.to(inter.numbers.device)
-                        )
-                    if has_int_label_collision:
-                        i_copy.label = (
-                            f"__dxtb_lane_setup_{i_idx}_{inter.label}"
                         )
                     lane_interaction_list.append(i_copy)
                 else:

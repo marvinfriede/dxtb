@@ -34,6 +34,8 @@ per-lane Results are packed into the public batched Result.
 
 from __future__ import annotations
 
+import dis
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -54,7 +56,14 @@ from dxtb._src.calculators.singlepoint import (
     _singlepoint_impl,
     system_singlepoint,
 )
-from dxtb._src.components.custom import is_tensor_only_object
+from dxtb._src.components.custom import (
+    CustomClassicalCoreSetup,
+    is_tensor_only_object,
+    snapshot_component_state,
+)
+from dxtb._src.components.interactions.base import (
+    validate_unique_interaction_labels,
+)
 from dxtb._src.scf.data import scf_interactions_eligible
 from dxtb._src.scf.iterator import get_refocc, reference_electron_count
 from dxtb._src.wavefunction.filling import spin_electron_violations
@@ -69,6 +78,55 @@ __all__ = [
     "evaluate_systems_independently",
     "group_lanes",
 ]
+
+
+_TORCH_PACKAGE_PREFIX = (
+    os.path.dirname(os.path.abspath(torch.__file__)) + os.sep
+)
+
+_TORCH_VMAP_LIMITATION_SIGNATURES = (
+    "vmap: ",
+    "Batching rule not implemented",
+    "Per-sample-gradients",
+    "Cannot access data pointer of Tensor that doesn't have storage",
+    "Tensor.item() cannot be called",
+    "In order to use an autograd.Function with functorch transforms",
+)
+
+
+def _is_torch_vmap_limitation(exc: BaseException) -> bool:
+    """Return ``True`` iff ``exc`` originates from a genuine PyTorch ``vmap`` limitation."""
+    if not isinstance(exc, (RuntimeError, NotImplementedError)):
+        return False
+    tb = exc.__traceback__
+    while tb is not None and tb.tb_next is not None:
+        tb = tb.tb_next
+    if tb is None:
+        return False
+    code = tb.tb_frame.f_code
+    in_torch = os.path.abspath(code.co_filename).startswith(
+        _TORCH_PACKAGE_PREFIX
+    )
+    if not in_torch:
+        opname = next(
+            (
+                instr.opname
+                for instr in dis.get_instructions(code)
+                if instr.offset == tb.tb_lasti
+            ),
+            None,
+        )
+        if opname is None or opname in (
+            "RAISE_VARARGS",
+            "RERAISE",
+            "RETURN_GENERATOR",
+            "YIELD_VALUE",
+            "RESUME",
+            "POP_TOP",
+        ):
+            return False
+    msg = str(exc)
+    return any(sig in msg for sig in _TORCH_VMAP_LIMITATION_SIGNATURES)
 
 
 def can_vmap_system(system: System) -> bool:
@@ -95,6 +153,7 @@ def can_vmap_system(system: System) -> bool:
         raise ValueError(
             "System IndexHelper is incompatible with the captured System setup."
         )
+    validate_unique_interaction_labels(system.interactions.components)
 
     # Calculations without an iterative SCF have nothing to map over.
     config = system.config
@@ -347,6 +406,8 @@ def evaluate_lane_group(
     spins: Sequence[Tensor | None],
     fields: Sequence[Tensor | None],
     field_grads: Sequence[Tensor | None],
+    *,
+    _ran_mapped: list[bool] | None = None,
 ) -> tuple[Result, ...]:
     """Evaluate one group and return one Result per member lane.
 
@@ -358,6 +419,8 @@ def evaluate_lane_group(
     """
     ids = group.source_ids
     if not group.use_vmap:
+        if _ran_mapped is not None:
+            _ran_mapped.append(False)
         return _evaluate_prevalidated(
             tuple(group.system for _ in ids),
             tuple(positions[i] for i in ids),
@@ -391,43 +454,73 @@ def evaluate_lane_group(
         stacked_fields,
         stacked_field_grads,
     )
-    has_custom_component = any(
-        type(c) not in BUILTIN_CLASSICAL_TYPES
-        for c in group.system.classicals.components
-    ) or any(
-        type(i) not in BUILTIN_INTERACTION_TYPES
-        for i in group.system.interactions.components
+    core = group.system.exact_core
+    core_cache_by_pos = (
+        {
+            term.position: term.setup.template.cache
+            for term in core.classical_terms
+            if isinstance(term.setup, CustomClassicalCoreSetup)
+        }
+        if core is not None
+        else {}
     )
+    pre_vmap_snapshots = [
+        *(
+            (
+                comp,
+                (
+                    snapshot_component_state(comp, core_cache_by_pos[pos])
+                    if pos in core_cache_by_pos
+                    else snapshot_component_state(comp)
+                ),
+            )
+            for pos, comp in enumerate(group.system.classicals.components)
+            if type(comp) not in BUILTIN_CLASSICAL_TYPES
+        ),
+        *(
+            (inter, snapshot_component_state(inter))
+            for inter in group.system.interactions.components
+            if type(inter) not in BUILTIN_INTERACTION_TYPES
+        ),
+    ]
     mapped_kernel = torch.func.vmap(
         partial(system_singlepoint, group.system), in_dims=in_dims
     )
-    if has_custom_component:
-        try:
-            mapped = mapped_kernel(*args)
-        except (RuntimeError, NotImplementedError) as exc:
-            msg = str(exc)
-            if any(
-                token in msg
-                for token in (
-                    "vmap",
-                    "BatchedTensor",
-                    "functorch",
-                    "data-dependent",
-                    "doesn't have storage",
-                )
-            ):
-                return _evaluate_prevalidated(
-                    tuple(group.system for _ in ids),
-                    tuple(positions[i] for i in ids),
-                    tuple(charges[i] for i in ids),
-                    tuple(spins[i] for i in ids),
-                    tuple(fields[i] for i in ids),
-                    tuple(field_grads[i] for i in ids),
-                    ids,
-                )
-            raise
-    else:
+    try:
         mapped = mapped_kernel(*args)
+    except Exception as exc:
+        if pre_vmap_snapshots and _is_torch_vmap_limitation(exc):
+            mutated_labels = [
+                repr(comp.label)
+                for comp, snap in pre_vmap_snapshots
+                if not snap.matches(comp)
+            ]
+            if mutated_labels:
+                err = RuntimeError(
+                    "Cannot fall back from torch.func.vmap to independent "
+                    "lane evaluation because custom component(s) "
+                    f"({', '.join(mutated_labels)}) mutated state during the "
+                    "mapped attempt. Keep custom component hooks pure without "
+                    "side effects."
+                )
+                _attach_source_id(err, ids[0])
+                raise err from exc
+            if _ran_mapped is not None:
+                _ran_mapped.append(False)
+            return _evaluate_prevalidated(
+                tuple(group.system for _ in ids),
+                tuple(positions[i] for i in ids),
+                tuple(charges[i] for i in ids),
+                tuple(spins[i] for i in ids),
+                tuple(fields[i] for i in ids),
+                tuple(field_grads[i] for i in ids),
+                ids,
+            )
+        if getattr(exc, "source_id", None) is None:
+            _attach_source_id(exc, ids[0])
+        raise
+    if _ran_mapped is not None:
+        _ran_mapped.append(True)
     return tuple(_select_lane(mapped, lane) for lane in range(len(ids)))
 
 
