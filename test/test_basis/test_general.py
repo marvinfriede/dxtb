@@ -535,6 +535,7 @@ def test_cgto_expansion_container_pytree_and_autograd() -> None:
 class _PreTransferSentinelTensor(torch.Tensor):
     """Tensor wrapper that forbids structural ops before an explicit ``.to()``."""
 
+    _raw_data: torch.Tensor
     events: list[str]
     converted: list[torch.Tensor]
 
@@ -545,7 +546,11 @@ class _PreTransferSentinelTensor(torch.Tensor):
         events: list[str],
         converted: list[torch.Tensor],
     ) -> _PreTransferSentinelTensor:
-        obj = torch.Tensor._make_subclass(cls, data, require_grad=False)
+        raw = data.detach().clone()
+        obj = torch.Tensor._make_subclass(
+            cls, data.detach().clone(), require_grad=False
+        )
+        obj._raw_data = raw
         obj.events = events
         obj.converted = converted
         return obj
@@ -555,7 +560,7 @@ class _PreTransferSentinelTensor(torch.Tensor):
         kwargs = {} if kwargs is None else kwargs
         if func is torch.Tensor.to:
             self = args[0]
-            plain = self.as_subclass(torch.Tensor).to(*args[1:], **kwargs)
+            plain = self._raw_data.clone().to(*args[1:], **kwargs)
             self.events.append(f"numbers.to:{plain.device.type}")
             self.converted.append(plain)
             return plain

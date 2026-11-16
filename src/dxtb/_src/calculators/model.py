@@ -52,6 +52,11 @@ import torch
 from tad_mctc.tree import ModuleNode, Node, child, context
 from torch import nn
 
+try:
+    from torch.utils._python_dispatch import _get_current_dispatch_mode
+except ImportError:  # pragma: no cover
+    _get_current_dispatch_mode = None  # type: ignore[assignment]
+
 from dxtb import IndexHelper, OutputHandler, labels
 from dxtb._src.components.classicals import (
     IES,
@@ -137,7 +142,7 @@ from dxtb._src.integral.evaluation import (
 from dxtb._src.param import ParamModule
 from dxtb._src.timing import timer
 from dxtb._src.typing import DD, Tensor
-from dxtb._src.utils.tensors import normalize_device
+from dxtb._src.utils.tensors import disable_functorch, normalize_device
 from dxtb._src.xtb.h0 import H0Setup, H0SetupNode, setup_h0, setup_h0_core
 from dxtb.config import Config
 
@@ -413,13 +418,77 @@ def _interaction_terms_match(
     )
 
 
+_FUNCTORCH_C = getattr(torch._C, "_functorch", None)
+_IS_FUNCTORCH_WRAPPED = getattr(
+    _FUNCTORCH_C, "is_functorch_wrapped_tensor", None
+)
+
+
+def _unwrap_concrete_structural_tensor(tensor: Tensor) -> Tensor | None:
+    """Peel non-batched AD wrappers to a plain non-meta Tensor, or return None."""
+    if (
+        torch._C._get_tracing_state() is not None
+        or (
+            _get_current_dispatch_mode is not None
+            and _get_current_dispatch_mode() is not None
+        )
+        or torch.overrides.has_torch_function_unary(tensor)
+    ):
+        return None
+    ft = _FUNCTORCH_C
+    is_wrapped = _IS_FUNCTORCH_WRAPPED
+    raw = tensor
+    if ft is not None and is_wrapped is not None and is_wrapped(raw):
+        if not callable(getattr(torch._C, "_DisableFuncTorch", None)):
+            return None
+        for _ in range(16):
+            if ft.is_functionaltensor(raw) or ft.is_batchedtensor(raw):
+                return None
+            if ft.is_gradtrackingtensor(raw):
+                raw = ft.get_unwrapped(raw)
+                continue
+            break
+        if is_wrapped(raw):
+            return None
+    if type(raw) is not Tensor or raw.device.type == "meta":
+        return None
+    return raw
+
+
+def _unwrap_concrete_index_helper(ihelp: IndexHelper) -> IndexHelper | None:
+    """Return a concrete unwrapped IndexHelper, or None if meta or vmap-wrapped."""
+    raw_fields: dict[str, Tensor] = {}
+    changed = False
+    for name in ihelp._child_names:
+        child_tensor = getattr(ihelp, name)
+        raw = _unwrap_concrete_structural_tensor(child_tensor)
+        if raw is None:
+            return None
+        raw_fields[name] = raw
+        if raw is not child_tensor:
+            changed = True
+    if not changed:
+        return ihelp
+    return IndexHelper(**raw_fields, batch_mode=ihelp.batch_mode)
+
+
+def _clone_detached_concrete(tensor: Tensor) -> Tensor | None:
+    """Clone a detached plain structural tensor when concrete values exist."""
+    raw = _unwrap_concrete_structural_tensor(tensor)
+    if raw is None:
+        return None
+    with disable_functorch(), torch.no_grad():
+        return raw.detach().clone()
+
+
 @dataclass(frozen=True, kw_only=True, eq=False)
 class _SetupIndexToken:
     """Setup-time ownership and tensor-version snapshot for ``System.ihelp``."""
 
     numbers: Tensor
-    numbers_snapshot: Tensor
+    numbers_snapshot: Tensor | None
     ihelp: IndexHelper
+    integral_driver_type: int | None
     integral_backend: PytorchIntegralSetup | LibcintIntegralSetup | None
     integral_logical_device: torch.device | None
     libcint_shell_layout: ShellLayout | None
@@ -428,8 +497,8 @@ class _SetupIndexToken:
     tensor_states: tuple[
         tuple[Tensor, int | None, torch.Size, torch.dtype, torch.device], ...
     ]
-    unique_angular_snapshot: Tensor
-    ushells_per_unique_snapshot: Tensor
+    unique_angular_snapshot: Tensor | None
+    ushells_per_unique_snapshot: Tensor | None
 
 
 def _backend_structural_tensors(
@@ -456,7 +525,15 @@ def _h0_structural_tensors(
     """Collect H0 structural tensors whose mutation invalidates setup."""
     if h0_setup is None:
         return []
-    return [h0_setup.numbers, h0_setup.unique, h0_setup.valence]
+    tensors = [h0_setup.numbers, h0_setup.unique, h0_setup.valence]
+    if isinstance(h0_setup, H0Setup) and isinstance(
+        h0_setup.ihelp, IndexHelper
+    ):
+        tensors.extend(
+            getattr(h0_setup.ihelp, name)
+            for name in h0_setup.ihelp._child_names
+        )
+    return tensors
 
 
 def _snapshot_tensor_states(
@@ -465,21 +542,28 @@ def _snapshot_tensor_states(
     tuple[Tensor, int | None, torch.Size, torch.dtype, torch.device], ...
 ]:
     """Record deduplicated ``(tensor, _version, shape, dtype, device)`` states."""
+    seen_ids: set[int] = set()
     states: list[
         tuple[Tensor, int | None, torch.Size, torch.dtype, torch.device]
     ] = []
+    is_wrapped = _IS_FUNCTORCH_WRAPPED
     for leaf in tensors:
-        if any(leaf is existing[0] for existing in states):
+        leaf_id = id(leaf)
+        if leaf_id in seen_ids:
             continue
-        states.append(
-            (
-                leaf,
-                None if leaf.is_inference() else leaf._version,
-                leaf.shape,
-                leaf.dtype,
-                leaf.device,
+        seen_ids.add(leaf_id)
+        dev = leaf.device
+        ver = (
+            leaf._version
+            if (
+                type(leaf) is Tensor
+                and dev.type != "meta"
+                and not leaf.is_inference()
+                and (is_wrapped is None or not is_wrapped(leaf))
             )
+            else None
         )
+        states.append((leaf, ver, leaf.shape, leaf.dtype, dev))
     return tuple(states)
 
 
@@ -491,6 +575,7 @@ def _build_setup_index_token(
     es2_setup: ES2CoreSetup | None,
 ) -> _SetupIndexToken:
     """Capture setup-time identity and version metadata for fast validation."""
+    driver_type = None if integral_setup is None else integral_setup.driver_type
     backend = None if integral_setup is None else integral_setup.backend
     logical_device = (
         None if integral_setup is None else integral_setup.logical_device
@@ -513,16 +598,19 @@ def _build_setup_index_token(
 
     return _SetupIndexToken(
         numbers=numbers,
-        numbers_snapshot=numbers.detach().clone(),
+        numbers_snapshot=_clone_detached_concrete(numbers),
         ihelp=ihelp,
+        integral_driver_type=driver_type,
         integral_backend=backend,
         integral_logical_device=logical_device,
         libcint_shell_layout=shell_layout,
         h0_setup=h0_setup,
         es2_shells_to_atom=es2_shells,
         tensor_states=_snapshot_tensor_states(tracked),
-        unique_angular_snapshot=ihelp.unique_angular.detach().clone(),
-        ushells_per_unique_snapshot=ihelp.ushells_per_unique.detach().clone(),
+        unique_angular_snapshot=_clone_detached_concrete(ihelp.unique_angular),
+        ushells_per_unique_snapshot=_clone_detached_concrete(
+            ihelp.ushells_per_unique
+        ),
     )
 
 
@@ -533,6 +621,7 @@ def _refresh_setup_index_token(
     es2_setup: ES2CoreSetup | None,
 ) -> _SetupIndexToken:
     """Refresh backend/H0/ES2 tracking after dtype conversion of an intact System."""
+    driver_type = None if integral_setup is None else integral_setup.driver_type
     backend = None if integral_setup is None else integral_setup.backend
     logical_device = (
         None if integral_setup is None else integral_setup.logical_device
@@ -556,6 +645,7 @@ def _refresh_setup_index_token(
         numbers=token.numbers,
         numbers_snapshot=token.numbers_snapshot,
         ihelp=token.ihelp,
+        integral_driver_type=driver_type,
         integral_backend=backend,
         integral_logical_device=logical_device,
         libcint_shell_layout=shell_layout,
@@ -571,21 +661,53 @@ def _refresh_setup_index_token(
 def _eager_index_helpers_equal(a: IndexHelper, b: IndexHelper) -> bool:
     """Compare concrete IndexHelper tensor values outside Dynamo graph capture."""
     if (
-        a.unique_angular.device.type == "meta"
-        or torch._C._functorch.is_functorch_wrapped_tensor(a.unique_angular)
-        or torch._C._functorch.is_functorch_wrapped_tensor(b.unique_angular)
+        not isinstance(a, IndexHelper)
+        or not isinstance(b, IndexHelper)
+        or a.batch_mode != b.batch_mode
     ):
-        return True
-    return torch.equal(
-        torch.cat([getattr(a, name).reshape(-1) for name in a._child_names]),
-        torch.cat([getattr(b, name).reshape(-1) for name in b._child_names]),
-    )
+        return False
+    with disable_functorch(), torch.no_grad():
+        raw_a = _unwrap_concrete_index_helper(a)
+        if raw_a is None:
+            return False
+        if a is b:
+            return True
+        raw_b = _unwrap_concrete_index_helper(b)
+        if raw_b is None or raw_a.batch_mode != raw_b.batch_mode:
+            return False
+        if raw_a is raw_b:
+            return True
+        a_dev = raw_a.unique_angular.device
+        for name in raw_a._child_names:
+            ta = getattr(raw_a, name)
+            tb = getattr(raw_b, name)
+            if (
+                ta.device != a_dev
+                or tb.device != a_dev
+                or ta.shape != tb.shape
+                or ta.dtype != tb.dtype
+            ):
+                return False
+        return bool(
+            torch.equal(
+                torch.cat(
+                    [
+                        getattr(raw_a, name).reshape(-1)
+                        for name in raw_a._child_names
+                    ]
+                ),
+                torch.cat(
+                    [
+                        getattr(raw_b, name).reshape(-1)
+                        for name in raw_b._child_names
+                    ]
+                ),
+            )
+        )
 
 
 def _index_helpers_equal(a: IndexHelper, b: IndexHelper) -> bool:
-    """Return whether two IndexHelpers share identical metadata and tensor values."""
-    if a is b:
-        return True
+    """Return whether two IndexHelpers share identical metadata and concrete values."""
     if (
         not isinstance(a, IndexHelper)
         or not isinstance(b, IndexHelper)
@@ -593,6 +715,8 @@ def _index_helpers_equal(a: IndexHelper, b: IndexHelper) -> bool:
     ):
         return False
     a_dev = a.unique_angular.device
+    if a_dev.type == "meta":
+        return False
     for name in a._child_names:
         ta = getattr(a, name)
         tb = getattr(b, name)
@@ -606,42 +730,206 @@ def _index_helpers_equal(a: IndexHelper, b: IndexHelper) -> bool:
     return _eager_index_helpers_equal(a, b)
 
 
-def _pytorch_backend_matches_ihelp(
-    backend: PytorchIntegralSetup, ihelp: IndexHelper
+def _backend_schema_valid(
+    backend: PytorchIntegralSetup | LibcintIntegralSetup,
+    ihelp_device: torch.device,
 ) -> bool:
-    """Verify compiled PairPlan metadata and tensor values against canonical ihelp."""
+    """Validate local backend Node schemas, including unvalidated tree_unflatten."""
+    try:
+        backend._validate()
+        expected_cgto_dev = (
+            torch.device("cpu")
+            if isinstance(backend, LibcintIntegralSetup)
+            else ihelp_device
+        )
+        for alpha, coeff in zip(backend.alphas, backend.coeffs):
+            if (
+                alpha.device != expected_cgto_dev
+                or coeff.device != expected_cgto_dev
+                or not alpha.is_floating_point()
+                or not coeff.is_floating_point()
+                or alpha.dtype != coeff.dtype
+            ):
+                return False
+        if isinstance(backend, PytorchIntegralSetup):
+            plan = backend.pair_plan
+            plan._validate()
+            if (
+                plan.atom.device != ihelp_device
+                or plan.orbitals_to_atom.device != ihelp_device
+            ):
+                return False
+            for cls in plan.classes:
+                cls._validate()
+                if (
+                    cls.ib.device != ihelp_device
+                    or cls.jk.device != ihelp_device
+                    or cls.idx.device != ihelp_device
+                    or cls.weight.device != ihelp_device
+                    or not cls.weight.is_floating_point()
+                ):
+                    return False
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _h0_float_leaves_valid(
+    h0_setup: H0Setup | H0SetupNode,
+    n_ushells: int,
+    n_unique: int,
+    target_device: torch.device,
+) -> bool:
+    """Validate device, floating-point dtype, and shapes of H0 parameter leaves."""
+    if (
+        h0_setup.selfenergy.shape != (n_ushells,)
+        or h0_setup.shpoly.shape != (n_ushells,)
+        or h0_setup.refocc.shape != (n_ushells,)
+        or h0_setup.kcn.shape != (n_ushells,)
+        or h0_setup.hscale.shape != (n_ushells, n_ushells)
+        or h0_setup.rad.shape != (n_unique,)
+        or h0_setup.en.shape != (n_unique,)
+        or h0_setup.kpair.shape != (n_unique, n_unique)
+    ):
+        return False
+    for leaf in (
+        h0_setup.selfenergy,
+        h0_setup.shpoly,
+        h0_setup.refocc,
+        h0_setup.kcn,
+        h0_setup.hscale,
+        h0_setup.rad,
+        h0_setup.en,
+        h0_setup.enscale,
+        h0_setup.kpair,
+    ):
+        if leaf.device != target_device or not leaf.is_floating_point():
+            return False
+    for opt_name in (
+        "kq",
+        "kqat",
+        "h0rad",
+        "kdiff",
+        "enshell",
+        "enscale4",
+        "cn_radii",
+        "cn_max",
+        "cn_kcn",
+    ):
+        opt_leaf = getattr(h0_setup, opt_name, None)
+        if opt_leaf is not None and (
+            opt_leaf.device != target_device or not opt_leaf.is_floating_point()
+        ):
+            return False
+    if (
+        (h0_setup.kq is not None and h0_setup.kq.shape != (n_ushells,))
+        or (h0_setup.kqat is not None and h0_setup.kqat.shape != (n_unique,))
+        or (h0_setup.h0rad is not None and h0_setup.h0rad.shape != (n_unique,))
+    ):
+        return False
+    eeq = h0_setup.eeq_model
+    if eeq is not None:
+        for eeq_leaf in (eeq.chi, eeq.kcn, eeq.eta, eeq.rad):
+            if (
+                eeq_leaf.device != target_device
+                or not eeq_leaf.is_floating_point()
+            ):
+                return False
+    return True
+
+
+def _h0_concrete_values_match(
+    h0_setup: H0Setup | H0SetupNode,
+    raw_numbers: Tensor,
+    unique: Tensor,
+    raw_ihelp: IndexHelper,
+) -> bool:
+    """Verify H0 structural tensor values against unwrapped numbers and ihelp."""
+    raw_h0_numbers = _unwrap_concrete_structural_tensor(h0_setup.numbers)
+    raw_h0_unique = _unwrap_concrete_structural_tensor(h0_setup.unique)
+    raw_h0_valence = _unwrap_concrete_structural_tensor(h0_setup.valence)
+    if (
+        raw_h0_numbers is None
+        or raw_h0_unique is None
+        or raw_h0_valence is None
+        or not torch.equal(
+            raw_numbers,
+            raw_h0_numbers.to(dtype=raw_numbers.dtype),
+        )
+        or not torch.equal(unique, raw_h0_unique.to(dtype=unique.dtype))
+    ):
+        return False
+    if h0_setup.method == "gfn2":
+        expected_valence = torch.ones_like(
+            raw_ihelp.unique_angular, dtype=torch.bool
+        )
+    else:
+        same_elem_and_l = (
+            raw_ihelp.ushells_to_unique[:, None]
+            == raw_ihelp.ushells_to_unique[None, :]
+        ) & (
+            raw_ihelp.unique_angular[:, None]
+            == raw_ihelp.unique_angular[None, :]
+        )
+        expected_valence = ~same_elem_and_l.tril(diagonal=-1).any(dim=-1)
+    if not torch.equal(raw_h0_valence, expected_valence):
+        return False
+    if isinstance(h0_setup, H0Setup):
+        raw_h0_ihelp = _unwrap_concrete_index_helper(h0_setup.ihelp)
+        if raw_h0_ihelp is None or (
+            raw_h0_ihelp is not raw_ihelp
+            and not _index_helpers_equal(raw_h0_ihelp, raw_ihelp)
+        ):
+            return False
+    return True
+
+
+def _pytorch_backend_matches_ihelp(
+    backend: PytorchIntegralSetup, raw_ihelp: IndexHelper
+) -> bool:
+    """Verify compiled PairPlan metadata and concrete values against canonical ihelp."""
     plan = backend.pair_plan
+    raw_atom = _unwrap_concrete_structural_tensor(plan.atom)
+    raw_orb_to_atom = _unwrap_concrete_structural_tensor(plan.orbitals_to_atom)
+    if raw_atom is None or raw_orb_to_atom is None:
+        return False
+
     weight_dtype = (
         plan.classes[0].weight.dtype if plan.classes else torch.float64
     )
-    expected = prepare_pair_plan(ihelp, ihelp.device, dtype=weight_dtype)
+    expected = prepare_pair_plan(
+        raw_ihelp, raw_ihelp.device, dtype=weight_dtype
+    )
     if (
         plan.nao != expected.nao
         or plan.unique_angular != expected.unique_angular
         or len(plan.classes) != len(expected.classes)
-        or plan.atom.dtype is not torch.int64
-        or plan.orbitals_to_atom.dtype is not torch.int64
-        or not torch.equal(plan.atom, expected.atom)
-        or not torch.equal(plan.orbitals_to_atom, expected.orbitals_to_atom)
+        or not torch.equal(raw_atom, expected.atom)
+        or not torch.equal(raw_orb_to_atom, expected.orbitals_to_atom)
     ):
         return False
 
     for actual_cls, expected_cls in zip(plan.classes, expected.classes):
+        raw_ib = _unwrap_concrete_structural_tensor(actual_cls.ib)
+        raw_jk = _unwrap_concrete_structural_tensor(actual_cls.jk)
+        raw_idx = _unwrap_concrete_structural_tensor(actual_cls.idx)
+        raw_weight = _unwrap_concrete_structural_tensor(actual_cls.weight)
         if (
-            (actual_cls.ub, actual_cls.uk, actual_cls.lb, actual_cls.lk)
+            raw_ib is None
+            or raw_jk is None
+            or raw_idx is None
+            or raw_weight is None
+            or (actual_cls.ub, actual_cls.uk, actual_cls.lb, actual_cls.lk)
             != (
                 expected_cls.ub,
                 expected_cls.uk,
                 expected_cls.lb,
                 expected_cls.lk,
             )
-            or actual_cls.ib.dtype is not torch.int64
-            or actual_cls.jk.dtype is not torch.int64
-            or actual_cls.idx.dtype is not torch.int64
-            or not torch.equal(actual_cls.ib, expected_cls.ib)
-            or not torch.equal(actual_cls.jk, expected_cls.jk)
-            or not torch.equal(actual_cls.idx, expected_cls.idx)
-            or not torch.equal(actual_cls.weight, expected_cls.weight)
+            or not torch.equal(raw_ib, expected_cls.ib)
+            or not torch.equal(raw_jk, expected_cls.jk)
+            or not torch.equal(raw_idx, expected_cls.idx)
+            or not torch.equal(raw_weight, expected_cls.weight)
         ):
             return False
     return True
@@ -649,34 +937,40 @@ def _pytorch_backend_matches_ihelp(
 
 def _libcint_backend_matches_ihelp(
     backend: LibcintIntegralSetup,
-    numbers: Tensor,
-    unique: Tensor,
-    ihelp: IndexHelper,
+    raw_numbers: Tensor,
+    raw_unique: Tensor,
+    raw_ihelp: IndexHelper,
 ) -> bool:
     """Verify CPU libcint setup numbers, active_atoms, and nested ShellLayout."""
-    expected_numbers = numbers.detach().to(
-        device=backend.numbers.device, dtype=backend.numbers.dtype
+    raw_backend_nums = _unwrap_concrete_structural_tensor(backend.numbers)
+    if raw_backend_nums is None:
+        return False
+    expected_numbers = raw_numbers.to(
+        device=raw_backend_nums.device, dtype=raw_backend_nums.dtype
     )
-    if not torch.equal(backend.numbers, expected_numbers):
+    if not torch.equal(raw_backend_nums, expected_numbers):
         return False
 
-    has_padding = bool((backend.numbers <= 0).any())
+    has_padding = bool((raw_backend_nums <= 0).any())
     if has_padding:
         if backend.active_atoms is None:
             return False
+        raw_active = _unwrap_concrete_structural_tensor(backend.active_atoms)
+        if raw_active is None:
+            return False
         expected_active = (
-            torch.nonzero(backend.numbers > 0, as_tuple=False)
+            torch.nonzero(raw_backend_nums > 0, as_tuple=False)
             .squeeze(-1)
-            .to(dtype=backend.active_atoms.dtype)
+            .to(dtype=raw_active.dtype)
         )
-        if not torch.equal(backend.active_atoms, expected_active):
+        if not torch.equal(raw_active, expected_active):
             return False
     elif backend.active_atoms is not None:
         return False
 
     try:
         expected_layout = _build_shell_layout(
-            unique, ihelp.ushells_per_unique, ihelp.unique_angular
+            raw_unique, raw_ihelp.ushells_per_unique, raw_ihelp.unique_angular
         )
     except ValueError:
         return False
@@ -1210,6 +1504,11 @@ class System:
         token = self._setup_index_token
         if token is None:
             return False
+        driver_type = (
+            None
+            if self.integral_setup is None
+            else self.integral_setup.driver_type
+        )
         backend = (
             None if self.integral_setup is None else self.integral_setup.backend
         )
@@ -1228,8 +1527,10 @@ class System:
             if self.es2_setup is not None
             else None
         )
+        is_wrapped = _IS_FUNCTORCH_WRAPPED
         return (
             self.numbers is token.numbers
+            and driver_type == token.integral_driver_type
             and backend is token.integral_backend
             and logical_device == token.integral_logical_device
             and shell_layout == token.libcint_shell_layout
@@ -1237,11 +1538,13 @@ class System:
             and es2_shells is token.es2_shells_to_atom
             and all(
                 ver is not None
+                and type(t) is Tensor
+                and t.device == dev
                 and not t.is_inference()
+                and (is_wrapped is None or not is_wrapped(t))
                 and t._version == ver
                 and t.shape == shape
-                and t.dtype == dtype
-                and t.device == dev
+                and t.dtype is dtype
                 for t, ver, shape, dtype, dev in token.tensor_states
             )
         )
@@ -1255,73 +1558,179 @@ class System:
             and self._setup_token_without_ihelp_intact()
         )
 
-    def _ihelp_compatible(self) -> bool:
-        """Return whether ``ihelp`` matches this System's structural setup."""
+    def _fast_token_compatible(self) -> bool:
+        """Validate intact setup-token state in O(N_leaves) without device sync."""
+        if not self._has_intact_setup_token() or self.batch_mode not in (
+            0,
+            1,
+            2,
+        ):
+            return False
+        ihelp = self.ihelp
+        n_ushells = ihelp.unique_angular.shape[0]
+        n_unique = ihelp.ushells_per_unique.shape[0]
+        if self.numbers.numel() == 0 or n_ushells == 0 or n_unique == 0:
+            return False
+        if self.h0_setup is not None:
+            if not _h0_float_leaves_valid(
+                self.h0_setup, n_ushells, n_unique, self.numbers.device
+            ):
+                return False
+            if (
+                isinstance(self.h0_setup, H0Setup)
+                and self.h0_setup.ihelp is not ihelp
+                and not _index_helpers_equal(self.h0_setup.ihelp, ihelp)
+            ):
+                return False
+        if self.batch_mode != 0:
+            return (
+                self.integral_setup is None
+                and self.es2_setup is None
+                and self.es3_setup is None
+            )
+        nat = self.numbers.shape[0]
+        n_shells = ihelp.shells_to_atom.shape[0]
+        if self.integral_setup is not None:
+            backend = self.integral_setup.backend
+            if (
+                backend is None
+                or len(backend.alphas) != n_ushells
+                or len(backend.coeffs) != n_ushells
+            ):
+                return False
+            expected_cgto_dev = (
+                torch.device("cpu")
+                if isinstance(backend, LibcintIntegralSetup)
+                else ihelp.device
+            )
+            for alpha, coeff in zip(backend.alphas, backend.coeffs):
+                if (
+                    alpha.device != expected_cgto_dev
+                    or coeff.device != expected_cgto_dev
+                    or not alpha.is_floating_point()
+                    or not coeff.is_floating_point()
+                    or alpha.dtype != coeff.dtype
+                    or alpha.ndim < 1
+                    or alpha.shape != coeff.shape
+                ):
+                    return False
+            if isinstance(backend, PytorchIntegralSetup) and any(
+                cls.weight.device != ihelp.device
+                or not cls.weight.is_floating_point()
+                for cls in backend.pair_plan.classes
+            ):
+                return False
+        if self.es2_setup is not None:
+            if (
+                self.es2_setup.shell_resolved
+                and self.es2_setup.shells_to_atom is None
+            ):
+                return False
+            if self.es2_setup.shells_to_atom is not None and (
+                self.es2_setup.shells_to_atom.device != self.numbers.device
+                or self.es2_setup.shells_to_atom.shape != (n_shells,)
+                or self.es2_setup.shells_to_atom.is_floating_point()
+                or self.es2_setup.shells_to_atom.dtype is torch.bool
+            ):
+                return False
+        if self.es3_setup is not None and (
+            self.es3_setup.hubbard_derivs.device != self.numbers.device
+            or not self.es3_setup.hubbard_derivs.is_floating_point()
+            or self.es3_setup.hubbard_derivs.shape
+            != ((n_shells,) if self.es3_setup.shell_resolved else (nat,))
+        ):
+            return False
+        return True
+
+    def _ihelp_schema_compatible(self) -> bool:
+        """Return whether ``ihelp`` and setup shapes/dtypes/devices match schema."""
+        if (
+            self.numbers.numel() == 0
+            or self.numbers.is_floating_point()
+            or self.numbers.dtype is torch.bool
+        ):
+            return False
         ihelp = self.ihelp
         if (
             not isinstance(ihelp, IndexHelper)
             or ihelp.batch_mode != self.batch_mode
         ):
             return False
-        for name in ihelp._child_names:
-            child_tensor = getattr(ihelp, name)
+        try:
+            ihelp._validate()
+        except (TypeError, ValueError):
+            return False
+        if (
+            ihelp.unique_angular.numel() == 0
+            or ihelp.ushells_per_unique.numel() == 0
+            or ihelp.unique_angular.dtype is not torch.int64
+            or ihelp.unique_angular.device != self.numbers.device
+        ):
+            return False
+
+        n_ushells = ihelp.unique_angular.shape[0]
+        n_unique = ihelp.ushells_per_unique.shape[0]
+        if self.h0_setup is not None:
             if (
-                child_tensor.device != self.numbers.device
-                or child_tensor.dtype is not torch.int64
+                self.h0_setup.numbers.device != self.numbers.device
+                or self.h0_setup.numbers.shape != self.numbers.shape
+                or self.h0_setup.numbers.is_floating_point()
+                or self.h0_setup.numbers.dtype is torch.bool
+                or self.h0_setup.unique.device != self.numbers.device
+                or self.h0_setup.unique.shape != (n_unique,)
+                or self.h0_setup.unique.is_floating_point()
+                or self.h0_setup.unique.dtype is torch.bool
+                or self.h0_setup.valence.device != self.numbers.device
+                or self.h0_setup.valence.shape != (n_ushells,)
+                or self.h0_setup.valence.dtype is not torch.bool
+                or not _h0_float_leaves_valid(
+                    self.h0_setup, n_ushells, n_unique, self.numbers.device
+                )
             ):
                 return False
-        if self.batch_mode != 0:
-            return ihelp.atom_to_unique.shape == self.numbers.shape
+            if isinstance(self.h0_setup, H0Setup):
+                h0_ihelp = self.h0_setup.ihelp
+                if (
+                    not isinstance(h0_ihelp, IndexHelper)
+                    or h0_ihelp.batch_mode != self.batch_mode
+                ):
+                    return False
+                if h0_ihelp is not ihelp:
+                    try:
+                        h0_ihelp._validate()
+                    except (TypeError, ValueError):
+                        return False
+                    if (
+                        h0_ihelp.unique_angular.dtype is not torch.int64
+                        or h0_ihelp.unique_angular.device != self.numbers.device
+                        or any(
+                            getattr(h0_ihelp, name).shape
+                            != getattr(ihelp, name).shape
+                            for name in ihelp._child_names
+                        )
+                    ):
+                        return False
 
-        if self.numbers.ndim != 1:
+        if self.batch_mode != 0:
+            return (
+                self.numbers.ndim == 2
+                and ihelp.atom_to_unique.shape == self.numbers.shape
+                and self.integral_setup is None
+                and self.es2_setup is None
+                and self.es3_setup is None
+            )
+
+        if self.numbers.ndim != 1 or ihelp.unique_angular.ndim != 1:
             return False
         nat = self.numbers.shape[0]
-        if (
-            ihelp.atom_to_unique.shape != (nat,)
-            or ihelp.shells_per_atom.shape != (nat,)
-            or ihelp.shell_index.shape != (nat,)
-            or ihelp.unique_angular.ndim != 1
-            or ihelp.ushells_to_unique.shape != ihelp.unique_angular.shape
-            or ihelp.ushells_per_unique.ndim != 1
-            or ihelp.shells_to_atom.ndim != 1
-        ):
+        if ihelp.atom_to_unique.shape != (nat,):
             return False
 
         n_shells = ihelp.shells_to_atom.shape[0]
-        if (
-            ihelp.angular.shape != (n_shells,)
-            or ihelp.shells_to_ushell.shape != (n_shells,)
-            or ihelp.orbitals_per_shell.shape != (n_shells,)
-            or ihelp.orbital_index.shape != (n_shells,)
-            or ihelp.orbitals_to_shell.ndim != 1
-        ):
-            return False
         n_orbitals = ihelp.orbitals_to_shell.shape[0]
-        n_ushells = ihelp.unique_angular.shape[0]
 
-        if self.h0_setup is not None and (
-            self.h0_setup.numbers.device != self.numbers.device
-            or self.h0_setup.numbers.shape != (nat,)
-            or self.h0_setup.numbers.is_floating_point()
-            or self.h0_setup.numbers.dtype is torch.bool
-            or self.h0_setup.unique.device != self.numbers.device
-            or self.h0_setup.unique.shape != ihelp.ushells_per_unique.shape
-            or self.h0_setup.unique.is_floating_point()
-            or self.h0_setup.unique.dtype is torch.bool
-            or self.h0_setup.valence.device != self.numbers.device
-            or self.h0_setup.valence.shape != ihelp.unique_angular.shape
-            or self.h0_setup.valence.dtype is not torch.bool
-            or self.h0_setup.selfenergy.shape != ihelp.unique_angular.shape
-            or self.h0_setup.shpoly.shape != ihelp.unique_angular.shape
-            or self.h0_setup.rad.shape != ihelp.ushells_per_unique.shape
-            or self.h0_setup.refocc.shape != ihelp.unique_angular.shape
-        ):
-            return False
-
-        backend = (
-            None if self.integral_setup is None else self.integral_setup.backend
-        )
         if self.integral_setup is not None:
+            backend = self.integral_setup.backend
             if (
                 self.integral_setup.logical_device != self.numbers.device
                 or backend is None
@@ -1332,103 +1741,152 @@ class System:
                     return False
                 plan = backend.pair_plan
                 if (
-                    plan.nao != n_orbitals
+                    not _backend_schema_valid(backend, ihelp.device)
+                    or plan.nao != n_orbitals
                     or len(plan.unique_angular) != n_ushells
-                    or len(backend.alphas) != n_ushells
-                    or len(backend.coeffs) != n_ushells
-                    or plan.atom.device != ihelp.device
-                    or plan.atom.dtype is not torch.int64
                     or plan.atom.shape != (n_shells,)
-                    or plan.orbitals_to_atom.device != ihelp.device
-                    or plan.orbitals_to_atom.dtype is not torch.int64
-                    or plan.orbitals_to_atom.shape != (n_orbitals,)
                 ):
                     return False
-                for cls in plan.classes:
-                    if (
-                        cls.ub < 0
-                        or cls.ub >= n_ushells
-                        or cls.uk < 0
-                        or cls.uk >= n_ushells
-                        or cls.lb != plan.unique_angular[cls.ub]
-                        or cls.lk != plan.unique_angular[cls.uk]
-                        or cls.lb < 0
-                        or cls.lk < 0
-                        or cls.ib.device != ihelp.device
-                        or cls.ib.dtype is not torch.int64
-                        or cls.ib.ndim != 1
-                        or cls.jk.device != ihelp.device
-                        or cls.jk.dtype is not torch.int64
-                        or cls.jk.shape != cls.ib.shape
-                        or cls.weight.device != ihelp.device
-                        or not cls.weight.is_floating_point()
-                        or cls.weight.shape != cls.ib.shape
-                        or cls.idx.device != ihelp.device
-                        or cls.idx.dtype is not torch.int64
-                        or cls.idx.shape
-                        != (cls.ib.shape[0], 2 * cls.lb + 1, 2 * cls.lk + 1)
-                    ):
-                        return False
             elif self.integral_setup.driver_type == labels.INTDRIVER_LIBCINT:
                 if not isinstance(backend, LibcintIntegralSetup):
                     return False
                 if (
-                    backend.numbers.device.type != "cpu"
+                    not _backend_schema_valid(backend, ihelp.device)
                     or backend.numbers.shape != (nat,)
-                    or backend.numbers.is_floating_point()
-                    or backend.numbers.dtype is torch.bool
                     or len(backend.alphas) != n_ushells
-                    or len(backend.coeffs) != n_ushells
+                    or len(backend.shell_layout) > n_unique
                 ):
                     return False
-                if backend.active_atoms is not None and (
-                    backend.active_atoms.device.type != "cpu"
-                    or backend.active_atoms.ndim != 1
-                    or backend.active_atoms.shape[0] > nat
-                    or backend.active_atoms.is_floating_point()
-                    or backend.active_atoms.dtype is torch.bool
-                ):
-                    return False
-                if (
-                    len(backend.shell_layout)
-                    > ihelp.ushells_per_unique.shape[0]
-                ):
-                    return False
-                seen_elements: set[int] = set()
-                for number, elem_shells in backend.shell_layout:
-                    if (
-                        number <= 0
-                        or number in seen_elements
-                        or not elem_shells
-                    ):
-                        return False
-                    seen_elements.add(number)
-                    for angmom, shell_idx in elem_shells:
-                        if (
-                            angmom < 0
-                            or shell_idx < 0
-                            or shell_idx >= n_ushells
-                        ):
-                            return False
             else:
                 return False
 
-        if (
-            self.es2_setup is not None
-            and self.es2_setup.shells_to_atom is not None
-            and self.es2_setup.shells_to_atom.shape != (n_shells,)
-        ):
-            return False
+        if self.es2_setup is not None:
+            if (
+                self.es2_setup.shell_resolved
+                and self.es2_setup.shells_to_atom is None
+            ):
+                return False
+            if self.es2_setup.shells_to_atom is not None and (
+                self.es2_setup.shells_to_atom.device != self.numbers.device
+                or self.es2_setup.shells_to_atom.shape != (n_shells,)
+                or self.es2_setup.shells_to_atom.is_floating_point()
+                or self.es2_setup.shells_to_atom.dtype is torch.bool
+            ):
+                return False
         if self.es3_setup is not None and (
-            self.es3_setup.hubbard_derivs.shape[-1]
-            != (n_shells if self.es3_setup.shell_resolved else nat)
+            self.es3_setup.hubbard_derivs.device != self.numbers.device
+            or not self.es3_setup.hubbard_derivs.is_floating_point()
+            or self.es3_setup.hubbard_derivs.shape
+            != ((n_shells,) if self.es3_setup.shell_resolved else (nat,))
         ):
             return False
+        return True
 
-        if self._has_intact_setup_token():
+    def _ihelp_compatible(self) -> bool:
+        """Return whether ``ihelp`` concretely matches this System's structural setup."""
+        if self.numbers.device.type == "meta":
+            return False
+        if self._fast_token_compatible():
             return True
+        if not self._ihelp_schema_compatible():
+            return False
+        if self.batch_mode != 0:
+            return self._eager_ihelp_compatible_batched(self.ihelp)
+        backend = (
+            None if self.integral_setup is None else self.integral_setup.backend
+        )
+        return self._eager_ihelp_compatible(
+            self.ihelp,
+            backend,
+            self.numbers.shape[0],
+            self.ihelp.shells_to_atom.shape[0],
+        )
 
-        return self._eager_ihelp_compatible(ihelp, backend, nat, n_shells)
+    @torch._dynamo.disable
+    def _eager_ihelp_compatible_batched(self, ihelp: IndexHelper) -> bool:
+        """Verify concrete setup tensor values for padded/conformer Systems."""
+        token = self._setup_index_token
+        if token is not None and self._setup_token_without_ihelp_intact():
+            return _index_helpers_equal(ihelp, token.ihelp)
+
+        with disable_functorch(), torch.no_grad():
+            raw_numbers = _unwrap_concrete_structural_tensor(self.numbers)
+            raw_ihelp = _unwrap_concrete_index_helper(ihelp)
+            if (
+                raw_numbers is None
+                or raw_ihelp is None
+                or bool((raw_numbers < 0).any())
+            ):
+                return False
+
+            if token is not None and (
+                token.numbers_snapshot is None
+                or token.unique_angular_snapshot is None
+                or token.ushells_per_unique_snapshot is None
+                or not torch.equal(
+                    raw_numbers,
+                    token.numbers_snapshot.to(
+                        device=raw_numbers.device, dtype=raw_numbers.dtype
+                    ),
+                )
+                or not torch.equal(
+                    raw_ihelp.unique_angular,
+                    token.unique_angular_snapshot.to(
+                        device=raw_ihelp.device,
+                        dtype=raw_ihelp.unique_angular.dtype,
+                    ),
+                )
+                or not torch.equal(
+                    raw_ihelp.ushells_per_unique,
+                    token.ushells_per_unique_snapshot.to(
+                        device=raw_ihelp.device,
+                        dtype=raw_ihelp.ushells_per_unique.dtype,
+                    ),
+                )
+            ):
+                return False
+
+            unique, expected_atom_to_unique = torch.unique(
+                raw_numbers, return_inverse=True
+            )
+            if (
+                raw_ihelp.ushells_per_unique.shape != unique.shape
+                or not torch.equal(
+                    raw_ihelp.atom_to_unique, expected_atom_to_unique
+                )
+                or bool((raw_ihelp.ushells_per_unique < 0).any())
+            ):
+                return False
+
+            if self.h0_setup is not None and not _h0_concrete_values_match(
+                self.h0_setup, raw_numbers, unique, raw_ihelp
+            ):
+                return False
+
+            angular: dict[int, list[int]] = {}
+            for idx, z_val in enumerate(unique.tolist()):
+                z = int(z_val)
+                shells_z = [
+                    int(v)
+                    for v in raw_ihelp.unique_angular[
+                        raw_ihelp.ushells_to_unique == idx
+                    ].tolist()
+                ]
+                if z <= 0:
+                    if shells_z != [-1]:
+                        return False
+                else:
+                    if not shells_z or any(ang < 0 for ang in shells_z):
+                        return False
+                    angular[z] = shells_z
+
+            expected_ihelp = IndexHelper.from_numbers_angular(
+                raw_numbers,
+                angular=angular,
+                batch_mode=self.batch_mode,
+                move_to_numbers_device=True,
+            )
+            return _index_helpers_equal(raw_ihelp, expected_ihelp)
 
     @torch._dynamo.disable
     def _eager_ihelp_compatible(
@@ -1439,185 +1897,205 @@ class System:
         n_shells: int,
     ) -> bool:
         """Verify concrete setup tensor values outside Dynamo graph capture."""
-        if (
-            self.numbers.device.type == "meta"
-            or torch._C._functorch.is_functorch_wrapped_tensor(self.numbers)
-            or torch._C._functorch.is_functorch_wrapped_tensor(
-                ihelp.unique_angular
-            )
-        ):
-            return True
         token = self._setup_index_token
         if token is not None and self._setup_token_without_ihelp_intact():
             return _index_helpers_equal(ihelp, token.ihelp)
 
-        if token is not None and (
-            not torch.equal(
-                self.numbers,
-                token.numbers_snapshot.to(
-                    device=self.numbers.device, dtype=self.numbers.dtype
-                ),
-            )
-            or not torch.equal(
-                ihelp.unique_angular,
-                token.unique_angular_snapshot.to(
-                    device=ihelp.device, dtype=ihelp.unique_angular.dtype
-                ),
-            )
-            or not torch.equal(
-                ihelp.ushells_per_unique,
-                token.ushells_per_unique_snapshot.to(
-                    device=ihelp.device,
-                    dtype=ihelp.ushells_per_unique.dtype,
-                ),
-            )
-        ):
-            return False
-
-        if (
-            self.es2_setup is not None
-            and self.es2_setup.shells_to_atom is not None
-            and self.es2_setup.shells_to_atom.device == ihelp.device
-            and not torch.equal(
-                ihelp.shells_to_atom,
-                self.es2_setup.shells_to_atom.to(
-                    dtype=ihelp.shells_to_atom.dtype
-                ),
-            )
-        ):
-            return False
-
-        unique, expected_atom_to_unique = torch.unique(
-            self.numbers, return_inverse=True
-        )
-        if (
-            ihelp.ushells_per_unique.shape != unique.shape
-            or not torch.equal(ihelp.atom_to_unique, expected_atom_to_unique)
-            or bool((ihelp.ushells_per_unique < 0).any())
-        ):
-            return False
-
-        device = ihelp.device
-        dtype = ihelp.unique_angular.dtype
-        expected_ushells_to_unique = torch.repeat_interleave(
-            torch.arange(unique.shape[0], device=device, dtype=dtype),
-            ihelp.ushells_per_unique,
-        )
-        if not torch.equal(ihelp.ushells_to_unique, expected_ushells_to_unique):
-            return False
-
-        if bool((unique <= 0).any()):
-            inactive_ushells = unique[ihelp.ushells_to_unique] <= 0
-            if bool((ihelp.unique_angular[inactive_ushells] >= 0).any()):
+        with disable_functorch(), torch.no_grad():
+            raw_numbers = _unwrap_concrete_structural_tensor(self.numbers)
+            raw_ihelp = _unwrap_concrete_index_helper(ihelp)
+            if (
+                raw_numbers is None
+                or raw_ihelp is None
+                or bool((raw_numbers < 0).any())
+            ):
                 return False
 
-        if self.h0_setup is not None:
+            if token is not None and (
+                token.numbers_snapshot is None
+                or token.unique_angular_snapshot is None
+                or token.ushells_per_unique_snapshot is None
+                or not torch.equal(
+                    raw_numbers,
+                    token.numbers_snapshot.to(
+                        device=raw_numbers.device, dtype=raw_numbers.dtype
+                    ),
+                )
+                or not torch.equal(
+                    raw_ihelp.unique_angular,
+                    token.unique_angular_snapshot.to(
+                        device=raw_ihelp.device,
+                        dtype=raw_ihelp.unique_angular.dtype,
+                    ),
+                )
+                or not torch.equal(
+                    raw_ihelp.ushells_per_unique,
+                    token.ushells_per_unique_snapshot.to(
+                        device=raw_ihelp.device,
+                        dtype=raw_ihelp.ushells_per_unique.dtype,
+                    ),
+                )
+            ):
+                return False
+
+            if (
+                self.es2_setup is not None
+                and self.es2_setup.shells_to_atom is not None
+            ):
+                raw_es2_shells = _unwrap_concrete_structural_tensor(
+                    self.es2_setup.shells_to_atom
+                )
+                if (
+                    raw_es2_shells is None
+                    or raw_es2_shells.is_floating_point()
+                    or raw_es2_shells.dtype is torch.bool
+                    or not torch.equal(
+                        raw_ihelp.shells_to_atom,
+                        raw_es2_shells.to(dtype=raw_ihelp.shells_to_atom.dtype),
+                    )
+                ):
+                    return False
+
+            unique, expected_atom_to_unique = torch.unique(
+                raw_numbers, return_inverse=True
+            )
+            if (
+                raw_ihelp.ushells_per_unique.shape != unique.shape
+                or not torch.equal(
+                    raw_ihelp.atom_to_unique, expected_atom_to_unique
+                )
+                or bool((raw_ihelp.ushells_per_unique < 0).any())
+            ):
+                return False
+
+            device = raw_ihelp.device
+            dtype = raw_ihelp.unique_angular.dtype
+            expected_ushells_to_unique = torch.repeat_interleave(
+                torch.arange(unique.shape[0], device=device, dtype=dtype),
+                raw_ihelp.ushells_per_unique,
+            )
             if not torch.equal(
-                self.numbers,
-                self.h0_setup.numbers.to(dtype=self.numbers.dtype),
-            ) or not torch.equal(
-                unique, self.h0_setup.unique.to(dtype=unique.dtype)
-            ):
-                return False
-            if self.h0_setup.method == "gfn2":
-                expected_valence = torch.ones_like(
-                    ihelp.unique_angular, dtype=torch.bool
-                )
-            else:
-                same_elem_and_l = (
-                    ihelp.ushells_to_unique[:, None]
-                    == ihelp.ushells_to_unique[None, :]
-                ) & (
-                    ihelp.unique_angular[:, None]
-                    == ihelp.unique_angular[None, :]
-                )
-                expected_valence = ~same_elem_and_l.tril(diagonal=-1).any(
-                    dim=-1
-                )
-            if not torch.equal(self.h0_setup.valence, expected_valence):
-                return False
-
-        expected_shells_per_atom = ihelp.ushells_per_unique[
-            ihelp.atom_to_unique
-        ]
-        if not torch.equal(ihelp.shells_per_atom, expected_shells_per_atom):
-            return False
-
-        expected_shell_index = (
-            torch.cumsum(ihelp.shells_per_atom, -1) - ihelp.shells_per_atom
-        )
-        expected_shell_index = torch.where(
-            ihelp.shells_per_atom == 0, -999, expected_shell_index
-        )
-        if not torch.equal(ihelp.shell_index, expected_shell_index):
-            return False
-
-        expected_shells_to_atom = torch.repeat_interleave(
-            torch.arange(nat, device=device, dtype=dtype),
-            ihelp.shells_per_atom,
-        )
-        if not torch.equal(ihelp.shells_to_atom, expected_shells_to_atom):
-            return False
-
-        ushell_offset = (
-            torch.cumsum(ihelp.ushells_per_unique, -1)
-            - ihelp.ushells_per_unique
-        )
-        expected_shells_to_ushell = (
-            ushell_offset[ihelp.atom_to_unique[ihelp.shells_to_atom]]
-            + torch.arange(n_shells, device=device, dtype=dtype)
-            - ihelp.shell_index[ihelp.shells_to_atom]
-        )
-        if not torch.equal(ihelp.shells_to_ushell, expected_shells_to_ushell):
-            return False
-
-        if bool(
-            (ihelp.shells_to_ushell >= ihelp.unique_angular.shape[0]).any()
-        ):
-            return False
-        expected_angular = torch.where(
-            ihelp.shells_to_ushell >= 0,
-            ihelp.unique_angular[ihelp.shells_to_ushell.clamp(min=0)],
-            -999,
-        )
-        if not torch.equal(ihelp.angular, expected_angular):
-            return False
-
-        expected_orbitals_per_shell = torch.where(
-            ihelp.angular >= 0, 2 * ihelp.angular + 1, 0
-        )
-        if not torch.equal(
-            ihelp.orbitals_per_shell, expected_orbitals_per_shell
-        ):
-            return False
-
-        expected_orbital_index = (
-            torch.cumsum(ihelp.orbitals_per_shell, -1)
-            - ihelp.orbitals_per_shell
-        )
-        expected_orbital_index = torch.where(
-            ihelp.orbitals_per_shell == 0, -999, expected_orbital_index
-        )
-        if not torch.equal(ihelp.orbital_index, expected_orbital_index):
-            return False
-
-        expected_orbitals_to_shell = torch.repeat_interleave(
-            torch.arange(n_shells, device=device, dtype=dtype),
-            ihelp.orbitals_per_shell,
-        )
-        if not torch.equal(ihelp.orbitals_to_shell, expected_orbitals_to_shell):
-            return False
-
-        if isinstance(backend, PytorchIntegralSetup):
-            if not _pytorch_backend_matches_ihelp(backend, ihelp):
-                return False
-        elif isinstance(backend, LibcintIntegralSetup):
-            if not _libcint_backend_matches_ihelp(
-                backend, self.numbers, unique, ihelp
+                raw_ihelp.ushells_to_unique, expected_ushells_to_unique
             ):
                 return False
 
-        return True
+            if bool((unique > 0).any()):
+                active_ushells = unique[raw_ihelp.ushells_to_unique] > 0
+                if bool(
+                    (raw_ihelp.ushells_per_unique[unique > 0] <= 0).any()
+                ) or bool((raw_ihelp.unique_angular[active_ushells] < 0).any()):
+                    return False
+            if bool((unique <= 0).any()):
+                inactive_ushells = unique[raw_ihelp.ushells_to_unique] <= 0
+                if bool(
+                    (raw_ihelp.ushells_per_unique[unique <= 0] != 1).any()
+                ) or bool(
+                    (raw_ihelp.unique_angular[inactive_ushells] != -1).any()
+                ):
+                    return False
+
+            if self.h0_setup is not None and not _h0_concrete_values_match(
+                self.h0_setup, raw_numbers, unique, raw_ihelp
+            ):
+                return False
+
+            expected_shells_per_atom = raw_ihelp.ushells_per_unique[
+                raw_ihelp.atom_to_unique
+            ]
+            if not torch.equal(
+                raw_ihelp.shells_per_atom, expected_shells_per_atom
+            ):
+                return False
+
+            expected_shell_index = (
+                torch.cumsum(raw_ihelp.shells_per_atom, -1)
+                - raw_ihelp.shells_per_atom
+            )
+            expected_shell_index = torch.where(
+                raw_ihelp.shells_per_atom == 0, -999, expected_shell_index
+            )
+            if not torch.equal(raw_ihelp.shell_index, expected_shell_index):
+                return False
+
+            expected_shells_to_atom = torch.repeat_interleave(
+                torch.arange(nat, device=device, dtype=dtype),
+                raw_ihelp.shells_per_atom,
+            )
+            if not torch.equal(
+                raw_ihelp.shells_to_atom, expected_shells_to_atom
+            ):
+                return False
+
+            ushell_offset = (
+                torch.cumsum(raw_ihelp.ushells_per_unique, -1)
+                - raw_ihelp.ushells_per_unique
+            )
+            expected_shells_to_ushell = (
+                ushell_offset[
+                    raw_ihelp.atom_to_unique[raw_ihelp.shells_to_atom]
+                ]
+                + torch.arange(n_shells, device=device, dtype=dtype)
+                - raw_ihelp.shell_index[raw_ihelp.shells_to_atom]
+            )
+            if not torch.equal(
+                raw_ihelp.shells_to_ushell, expected_shells_to_ushell
+            ):
+                return False
+
+            if bool(
+                (
+                    raw_ihelp.shells_to_ushell
+                    >= raw_ihelp.unique_angular.shape[0]
+                ).any()
+            ):
+                return False
+            expected_angular = torch.where(
+                raw_ihelp.shells_to_ushell >= 0,
+                raw_ihelp.unique_angular[
+                    raw_ihelp.shells_to_ushell.clamp(min=0)
+                ],
+                -999,
+            )
+            if not torch.equal(raw_ihelp.angular, expected_angular):
+                return False
+
+            expected_orbitals_per_shell = torch.where(
+                raw_ihelp.angular >= 0, 2 * raw_ihelp.angular + 1, 0
+            )
+            if not torch.equal(
+                raw_ihelp.orbitals_per_shell, expected_orbitals_per_shell
+            ):
+                return False
+
+            expected_orbital_index = (
+                torch.cumsum(raw_ihelp.orbitals_per_shell, -1)
+                - raw_ihelp.orbitals_per_shell
+            )
+            expected_orbital_index = torch.where(
+                raw_ihelp.orbitals_per_shell == 0, -999, expected_orbital_index
+            )
+            if not torch.equal(raw_ihelp.orbital_index, expected_orbital_index):
+                return False
+
+            expected_orbitals_to_shell = torch.repeat_interleave(
+                torch.arange(n_shells, device=device, dtype=dtype),
+                raw_ihelp.orbitals_per_shell,
+            )
+            if not torch.equal(
+                raw_ihelp.orbitals_to_shell, expected_orbitals_to_shell
+            ):
+                return False
+
+            if isinstance(backend, PytorchIntegralSetup):
+                if not _pytorch_backend_matches_ihelp(backend, raw_ihelp):
+                    return False
+            elif isinstance(backend, LibcintIntegralSetup):
+                if not _libcint_backend_matches_ihelp(
+                    backend, raw_numbers, unique, raw_ihelp
+                ):
+                    return False
+
+            return True
 
     def _active_exact_core(self) -> ExactSystemCore | None:
         """Return the captured core while its façade setup references agree."""
@@ -2372,12 +2850,8 @@ class Model:
                 interaction_terms=tuple(interaction_terms),
             )
 
-        setup_index_token = (
-            _build_setup_index_token(
-                numbers, ihelp, integral_setup, h0_setup, es2_setup
-            )
-            if batch_mode == 0
-            else None
+        setup_index_token = _build_setup_index_token(
+            numbers, ihelp, integral_setup, h0_setup, es2_setup
         )
 
         return System(

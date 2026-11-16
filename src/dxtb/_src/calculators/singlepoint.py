@@ -235,12 +235,23 @@ class _SystemInteractionData(InteractionListCache):
         self.scf_kinds = {} if scf_kinds is None else scf_kinds
 
 
+_UNSET_CORE = object()
+
+
 def _interaction_data(
-    system: System, positions: Tensor, interactions=None
+    system: System,
+    positions: Tensor,
+    interactions=None,
+    *,
+    _active_core: Any = _UNSET_CORE,
 ) -> InteractionListCache:
     """Build call-local interaction data for one SCF evaluation."""
     interactions = system.interactions if interactions is None else interactions
-    core = system._active_exact_core()
+    core = (
+        system._active_exact_core()
+        if _active_core is _UNSET_CORE
+        else _active_core
+    )
     descriptors = (
         {term.position: term for term in core.interaction_terms}
         if core is not None
@@ -800,11 +811,7 @@ def _prepare_singlepoint(
     core_index = (
         candidate_index
         if candidate_index is not None
-        and all(
-            getattr(candidate_index, name).device
-            == getattr(system.ihelp, name).device
-            for name in candidate_index._child_names
-        )
+        and candidate_index.has_uniform_device(system.numbers.device)
         else None
     )
     matrices, refocc = build_integral_matrices(
@@ -839,7 +846,9 @@ def _prepare_singlepoint(
     call_interactions = InteractionList(
         *call_components, device=positions.device, dtype=positions.dtype
     )
-    interaction_data = _interaction_data(system, positions, call_interactions)
+    interaction_data = _interaction_data(
+        system, positions, call_interactions, _active_core=core
+    )
 
     return _PreparedSinglepoint(
         positions=positions,

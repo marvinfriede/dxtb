@@ -226,13 +226,16 @@ def build_integral_matrices(
         )
 
     target_device = positions.device
-    for name in ihelp._child_names:
-        child_device = getattr(ihelp, name).device
-        if child_device != target_device:
-            raise DeviceError(
-                f"Device mismatch: canonical IndexHelper is on "
-                f"'{child_device}', but positions are on '{target_device}'."
-            )
+    if not ihelp.has_uniform_device(target_device):
+        child_device = next(
+            getattr(ihelp, name).device
+            for name in ihelp._child_names
+            if getattr(ihelp, name).device != target_device
+        )
+        raise DeviceError(
+            f"Device mismatch: canonical IndexHelper is on "
+            f"'{child_device}', but positions are on '{target_device}'."
+        )
 
     if setup.driver_type == labels.INTDRIVER_PYTORCH:
         if setup.pytorch is None:

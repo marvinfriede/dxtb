@@ -93,9 +93,10 @@ def _convert_system_dtype(
     *,
     classicals: ClassicalList | None = None,
     interactions: InteractionList | None = None,
+    _refresh_token: bool = True,
 ) -> System:
     """Convert System setup snapshots to ``dtype`` per ``Calculator.type``."""
-    token_intact = system._has_intact_setup_token()
+    token_intact = _refresh_token and system._has_intact_setup_token()
     exact_core = system.exact_core
     core_was_active = (
         exact_core is not None and system._active_exact_core() is exact_core
@@ -124,11 +125,7 @@ def _convert_system_dtype(
         core_index = (
             system.ihelp
             if core_was_active
-            and all(
-                getattr(system.ihelp, name).device
-                == getattr(converted_core.index, name).device
-                for name in system.ihelp._child_names
-            )
+            and converted_core.index.has_uniform_device(system.numbers.device)
             else converted_core.index
         )
         if (
@@ -207,6 +204,7 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
             dtype,
             classicals=new_classicals,
             interactions=new_interactions,
+            _refresh_token=False,
         )
 
         def _remap_c(comp: Any) -> Any:
@@ -241,12 +239,12 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
         )
         eval_token = (
             _refresh_setup_index_token(
-                base._setup_index_token,
+                system._setup_index_token,
                 base.integral_setup,
                 base.h0_setup,
                 es2_setup,
             )
-            if token_intact and base._setup_index_token is not None
+            if token_intact and system._setup_index_token is not None
             else None
         )
         return replace(
@@ -278,7 +276,7 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
             _setup_index_token=eval_token,
         )
 
-    base = _convert_system_dtype(system, dtype)
+    base = _convert_system_dtype(system, dtype, _refresh_token=False)
     exact_core = base.exact_core
     assert exact_core is not None
     integral_setup = base.integral_setup
@@ -360,9 +358,9 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
 
     eval_token = (
         _refresh_setup_index_token(
-            base._setup_index_token, integral_setup, h0_setup, es2_setup
+            system._setup_index_token, integral_setup, h0_setup, es2_setup
         )
-        if token_intact and base._setup_index_token is not None
+        if token_intact and system._setup_index_token is not None
         else None
     )
 

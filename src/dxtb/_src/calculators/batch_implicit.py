@@ -824,11 +824,7 @@ def _validate_system_and_positions(
     core_index = (
         candidate_index
         if candidate_index is not None
-        and all(
-            getattr(candidate_index, name).device
-            == getattr(system.ihelp, name).device
-            for name in candidate_index._child_names
-        )
+        and candidate_index.has_uniform_device(system.numbers.device)
         else None
     )
     return core, numbers, config, integral_setup, h0_setup, route, core_index
@@ -836,6 +832,7 @@ def _validate_system_and_positions(
 
 def _build_lane_inputs(
     system: System,
+    core: Any,
     numbers: Tensor,
     config: Any,
     integral_setup: Any,
@@ -882,7 +879,7 @@ def _build_lane_inputs(
         dtype=lane_positions.dtype,
     )
     interaction_data = _interaction_data(
-        system, lane_positions, call_interactions
+        system, lane_positions, call_interactions, _active_core=core
     )
     n0, occupation, nel = get_refocc(
         refocc, lane_charge, lane_spin, system.ihelp, validate_spin=False
@@ -1962,6 +1959,7 @@ def prepare_converged_root_batch(
                 raw_inputs,
             ) = _build_lane_inputs(
                 system,
+                _core,
                 numbers,
                 config,
                 integral_setup,
@@ -2552,6 +2550,7 @@ def _refresh_prepared_batch_inputs(
             inputs,
         ) = _build_lane_inputs(
             system,
+            _core,
             numbers,
             config,
             integral_setup,

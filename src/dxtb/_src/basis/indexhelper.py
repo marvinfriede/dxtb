@@ -288,6 +288,13 @@ class IndexHelper(Node):
                         f"size {batch_size}, got shape {tuple(tensor.shape)}."
                     )
 
+    def has_uniform_device(self, device: torch.device) -> bool:
+        """Return whether all 12 index tensors reside on ``device``."""
+        return all(
+            getattr(self, name).device == device
+            for name in _INDEX_TENSOR_FIELDS
+        )
+
     @classmethod
     def from_numbers(
         cls,

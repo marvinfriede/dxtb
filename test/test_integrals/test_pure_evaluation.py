@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -617,7 +619,14 @@ matrices, _ = build_integral_matrices(
 assert torch.isfinite(matrices.overlap).all()
 assert "tad_libcint" not in sys.modules
 """
-    subprocess.run([sys.executable, "-c", script], check=True)
+    subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        env={
+            **os.environ,
+            "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src"),
+        },
+    )
 
 
 @pytest.mark.parametrize("batch_mode", [1, 2])
