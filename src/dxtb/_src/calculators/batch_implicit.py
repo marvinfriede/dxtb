@@ -820,14 +820,7 @@ def _validate_system_and_positions(
     if route.warning is not None:
         OutputHandler.warn(route.warning)
 
-    candidate_index = core.index if core is not None else None
-    core_index = (
-        candidate_index
-        if candidate_index is not None
-        and candidate_index.has_uniform_device(system.numbers.device)
-        else None
-    )
-    return core, numbers, config, integral_setup, h0_setup, route, core_index
+    return core, numbers, config, integral_setup, h0_setup, route
 
 
 def _build_lane_inputs(
@@ -837,7 +830,6 @@ def _build_lane_inputs(
     config: Any,
     integral_setup: Any,
     h0_setup: Any,
-    core_index: Any,
     effective_scf_config: Any,
     lane_positions: Tensor,
     lane_charge: Tensor,
@@ -849,7 +841,7 @@ def _build_lane_inputs(
     matrices, refocc = build_integral_matrices(
         integral_setup,
         h0_setup,
-        core_index if core_index is not None else system.ihelp,
+        system.ihelp,
         lane_positions,
         lane_charge,
     )
@@ -894,8 +886,6 @@ def _build_lane_inputs(
         interaction_data,
         system.ihelp,
         effective_scf_config,
-        core_index=core_index,
-        core_index_owner=(system if core_index is not None else None),
     )
     return (
         matrices,
@@ -1877,7 +1867,6 @@ def prepare_converged_root_batch(
         integral_setup,
         h0_setup,
         route,
-        core_index,
     ) = _validate_system_and_positions(system, positions, field, field_grad)
     batch_size = positions.shape[0]
     effective_scf_config = config.scf
@@ -1964,7 +1953,6 @@ def prepare_converged_root_batch(
                 config,
                 integral_setup,
                 h0_setup,
-                core_index,
                 effective_scf_config,
                 primal_pos if eager_no_grad_build else lane_pos,
                 primal_chrg if eager_no_grad_build else lane_chrg,
@@ -2447,7 +2435,6 @@ def _refresh_prepared_batch_inputs(
         integral_setup,
         h0_setup,
         route,
-        core_index,
     ) = _validate_system_and_positions(
         system,
         positions,
@@ -2555,7 +2542,6 @@ def _refresh_prepared_batch_inputs(
             config,
             integral_setup,
             h0_setup,
-            core_index,
             effective_scf_config,
             lane_pos,
             lane_chrg,

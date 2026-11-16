@@ -50,6 +50,7 @@ from .data import (
     SCFCharges,
     SCFInputs,
     SCFPotential,
+    _validate_scf_preamble,
     pack_charges,
     scf_interactions_eligible,
     setup_scf_inputs,
@@ -399,6 +400,9 @@ def run_eager_scf(
     Tensor-status inspection and warning/error behavior stay outside the
     fixed-trip numerical solver.
     """
+    _validate_scf_preamble(
+        numbers, ihelp, positions=positions, refocc=refocc, chrg=chrg, spin=spin
+    )
     n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp)
     if not config.requires_iterations:
         route = SCFPlan(
@@ -458,9 +462,6 @@ def _prepared_scf_inputs(
     config: ConfigSCF,
     integrals: IntegralMatrices,
     route: SCFPlan,
-    *,
-    core_index: IndexHelper | None = None,
-    core_index_owner: object | None = None,
 ) -> SCFInputs:
     """Check an SCF plan and build its immutable SCF inputs."""
     if route.kind != "scf":
@@ -482,8 +483,6 @@ def _prepared_scf_inputs(
         cache,
         ihelp,
         config,
-        core_index=core_index,
-        core_index_owner=core_index_owner,
     )
 
 
@@ -500,8 +499,6 @@ def run_prepared_scf(
     integrals: IntegralMatrices,
     route: SCFPlan,
     *,
-    core_index: IndexHelper | None = None,
-    core_index_owner: object | None = None,
     eager: bool = True,
 ) -> SCFSolveResult:
     """Run only the SCF physics after common SCF preparation is complete."""
@@ -516,8 +513,6 @@ def run_prepared_scf(
         config,
         integrals,
         route,
-        core_index=core_index,
-        core_index_owner=core_index_owner,
     )
     return _solve_variable(guess, inputs, config, eager=eager)
 
@@ -533,9 +528,6 @@ def prepare_system_fixed_trip(
     config: ConfigSCF,
     integrals: IntegralMatrices,
     refocc: Tensor,
-    *,
-    core_index: IndexHelper | None = None,
-    core_index_owner: object | None = None,
 ) -> tuple[Tensor, SCFProblem]:
     """Build the initial state and problem of a System for the Fixed-trip controller.
 
@@ -551,6 +543,9 @@ def prepare_system_fixed_trip(
             "The fixed-trip System API supports single-System " "SCF only."
         )
 
+    _validate_scf_preamble(
+        numbers, ihelp, positions=positions, refocc=refocc, chrg=chrg, spin=spin
+    )
     n0, occupation, nel = get_refocc(
         refocc, chrg, spin, ihelp, validate_spin=False
     )
@@ -568,8 +563,6 @@ def prepare_system_fixed_trip(
         config,
         integrals,
         route,
-        core_index=core_index,
-        core_index_owner=core_index_owner,
     )
     return _variable_problem(guess, inputs, config)
 
@@ -585,9 +578,6 @@ def run_system_fixed_trip(
     config: ConfigSCF,
     integrals: IntegralMatrices,
     refocc: Tensor,
-    *,
-    core_index: IndexHelper | None = None,
-    core_index_owner: object | None = None,
 ) -> SCFCoreResult | dict[str, object]:
     """Run the Fixed-trip controller for a supported single-System SCF."""
     if config.differentiation.value == "implicit":
@@ -595,6 +585,14 @@ def run_system_fixed_trip(
             "The Fixed-trip controller requires differentiation='unrolled'."
         )
     if not config.requires_iterations:
+        _validate_scf_preamble(
+            numbers,
+            ihelp,
+            positions=positions,
+            refocc=refocc,
+            chrg=chrg,
+            spin=spin,
+        )
         n0, occupation, nel = get_refocc(refocc, chrg, spin, ihelp)
         return solve_nonselfconsistent(
             numbers,
@@ -618,8 +616,6 @@ def run_system_fixed_trip(
         config,
         integrals,
         refocc,
-        core_index=core_index,
-        core_index_owner=core_index_owner,
     )
     settings, strategy = _prepare_solver(config, x.dtype)
     result = solve_scf_problem(
@@ -645,8 +641,6 @@ def run_prepared_implicit_scf(
     config: ConfigSCF,
     integrals: IntegralMatrices,
     *,
-    core_index: IndexHelper | None = None,
-    core_index_owner: object | None = None,
     response_settings: CPSCFSettings | None = None,
     strategy_override: SCFStrategy | None = None,
 ) -> SCFSolveResult:
@@ -669,8 +663,6 @@ def run_prepared_implicit_scf(
         cache,
         ihelp,
         config,
-        core_index=core_index,
-        core_index_owner=core_index_owner,
     )
     settings, configured_strategy = _prepare_solver(config, guess.dtype)
     strategy = (

@@ -593,8 +593,9 @@ def test_active_core_index_device_mismatch_uses_public_solver(
     with pytest.raises(ValueError, match="IndexHelper is incompatible"):
         singlepoint(mismatched, positions)
 
-    # 2. Defensive singlepoint guard: if an active core exposes an index on another
-    # device, build_integral_matrices receives system.ihelp and SCF routes to scf.solve.
+    # 2. Singlepoint always passes canonical system.ihelp to integral building and
+    # routes directly through scf.solve without dual-index handoff.
+    assert not hasattr(singlepoint_module.scf, "solve_with_core_index")
     corrupted_core = copy.copy(system.exact_core)
     object.__setattr__(corrupted_core, "index", system.ihelp.to(device="meta"))
     monkeypatch.setattr(
@@ -612,20 +613,16 @@ def test_active_core_index_device_mismatch_uses_public_solver(
         singlepoint_module, "build_integral_matrices", record_build
     )
 
-    class LegacySolverReached(RuntimeError):
+    class AuthoritativeSolverReached(RuntimeError):
         pass
 
-    def trusted_solver_reached(*args, **kwargs):
-        raise AssertionError("device-mismatched map used trusted handoff")
+    def solver_reached(*args, **kwargs):
+        assert kwargs == {}
+        assert args[6] is system.ihelp
+        raise AuthoritativeSolverReached
 
-    def legacy_solver_reached(*args, **kwargs):
-        raise LegacySolverReached
-
-    monkeypatch.setattr(
-        singlepoint_module.scf, "solve_with_core_index", trusted_solver_reached
-    )
-    monkeypatch.setattr(singlepoint_module.scf, "solve", legacy_solver_reached)
-    with pytest.raises(LegacySolverReached):
+    monkeypatch.setattr(singlepoint_module.scf, "solve", solver_reached)
+    with pytest.raises(AuthoritativeSolverReached):
         singlepoint(system, positions)
     assert observed_ihelp == [system.ihelp]
 
@@ -885,7 +882,7 @@ def test_direct_scf_input_preparation_keeps_isolated_map_fallback(
         },
         batch_mode=0,
     )
-    with pytest.raises(ValueError, match="does not belong to this System"):
+    with pytest.raises(TypeError, match="core_index"):
         setup_scf_inputs(
             case.system.numbers,
             case.integrals,
@@ -896,8 +893,22 @@ def test_direct_scf_input_preparation_keeps_isolated_map_fallback(
             case.interaction_data,
             case.system.ihelp,
             case.system.config.scf,
-            core_index=unrelated_index,
-            core_index_owner=case.system,
+            core_index=unrelated_index,  # type: ignore[call-arg]
+        )
+    other_ihelp = IndexHelper.from_numbers(
+        torch.tensor([1, 1]), ParamModule(GFN1_XTB, dtype=torch.float64)
+    )
+    with pytest.raises(ValueError, match="atom shape"):
+        setup_scf_inputs(
+            case.system.numbers,
+            case.integrals,
+            case.n0,
+            case.occupation,
+            case.nel,
+            case.interactions,
+            case.interaction_data,
+            other_ihelp,
+            case.system.config.scf,
         )
 
 
@@ -1220,8 +1231,9 @@ def test_system_ihelp_replacement_and_structural_consistency(
     torch.testing.assert_close(grad_equiv, grad_orig)
 
     assert len(prepared_inputs) == 2
+    assert prepared_inputs[0].index is system.ihelp
     assert prepared_inputs[0].index is system.exact_core.index
-    assert prepared_inputs[1].index is system.exact_core.index
+    assert prepared_inputs[1].index is equiv_system.ihelp
     torch.testing.assert_close(
         prepared_inputs[1].orbital_mask, prepared_inputs[0].orbital_mask
     )

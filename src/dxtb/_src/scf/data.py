@@ -35,6 +35,7 @@ from dxtb._src.components.interactions.list import (
 from dxtb._src.constants import defaults
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.typing import Tensor
+from dxtb._src.typing.exceptions import DeviceError, DtypeError
 from dxtb._src.wavefunction.filling import FermiStatus, _FermiCoreState
 from dxtb.config import ConfigSCF
 
@@ -249,6 +250,127 @@ def _single_system_layout(
     return ChargeLayout(mono_shape, dipole_shape, quadrupole_shape)
 
 
+def _check_scf_tensor(
+    name: str,
+    tensor: Any,
+    dev: torch.device,
+    dtype: torch.dtype | None,
+    expected_shape: tuple[int, ...] | None = None,
+) -> None:
+    """Validate Tensor type, device, dtype (or integer kind), and shape."""
+    if not isinstance(tensor, Tensor):
+        raise TypeError(f"SCFInputs '{name}' must be a Tensor.")
+    if tensor.device != dev:
+        raise DeviceError(
+            f"Device mismatch: numbers is on '{dev}', but '{name}' is on "
+            f"'{tensor.device}'."
+        )
+    if dtype is None:
+        if (
+            tensor.is_floating_point()
+            or tensor.is_complex()
+            or tensor.dtype is torch.bool
+        ):
+            raise TypeError(f"SCFInputs '{name}' must have an integer dtype.")
+    elif tensor.dtype != dtype:
+        raise DtypeError(
+            f"Dtype mismatch: expected '{dtype}', but '{name}' has "
+            f"dtype '{tensor.dtype}'."
+        )
+    if expected_shape is not None and tuple(tensor.shape) != expected_shape:
+        raise ValueError(
+            f"SCFInputs '{name}' shape {tuple(tensor.shape)} does not match "
+            f"{expected_shape}."
+        )
+
+
+def _validate_scf_preamble(
+    numbers: Tensor,
+    ihelp: IndexHelper,
+    *,
+    integrals: IntegralMatrices | None = None,
+    positions: Tensor | None = None,
+    refocc: Tensor | None = None,
+    chrg: Tensor | None = None,
+    spin: Tensor | None = None,
+) -> tuple[torch.device, torch.dtype, tuple[int, ...], int, int, int]:
+    """Validate SCF numbers, IndexHelper, and explicit input tensors."""
+    if (
+        not isinstance(numbers, Tensor)
+        or numbers.ndim < 1
+        or numbers.numel() == 0
+    ):
+        raise ValueError("SCFInputs require a non-empty atomic-number tensor.")
+    dev = numbers.device
+    _check_scf_tensor("numbers", numbers, dev, None)
+    if not isinstance(ihelp, IndexHelper):
+        raise TypeError("SCFInputs requires an IndexHelper.")
+    if any(
+        not isinstance(getattr(ihelp, name), Tensor)
+        for name in ihelp._child_names
+    ):
+        raise TypeError("IndexHelper fields must be torch.Tensor instances.")
+    if not ihelp.has_uniform_device(dev):
+        raise DeviceError(
+            f"Device mismatch: numbers is on '{dev}', but IndexHelper is not."
+        )
+    ihelp._validate()
+    if ihelp.unique_angular.dtype is not torch.int64:
+        raise TypeError("SCFInputs IndexHelper must have dtype torch.int64.")
+
+    if numbers.ndim != (1 if ihelp.batch_mode == 0 else 2):
+        raise ValueError(
+            "SCF numbers rank does not match IndexHelper.batch_mode."
+        )
+    if ihelp.atom_to_unique.shape != numbers.shape:
+        raise ValueError(
+            "SCFInputs IndexHelper atom shape "
+            f"{tuple(ihelp.atom_to_unique.shape)} does not match numbers "
+            f"shape {tuple(numbers.shape)}."
+        )
+    b, nat = tuple(numbers.shape[:-1]), numbers.shape[-1]
+    nsh, nao = ihelp.shells_to_atom.shape[-1], ihelp.orbitals_to_shell.shape[-1]
+    if nsh == 0 or nao == 0:
+        raise ValueError("SCF requires at least one shell and orbital.")
+
+    if integrals is not None and (
+        integrals.hcore is None or integrals.overlap is None
+    ):
+        raise ValueError("SCFInputs require hcore and overlap integrals.")
+    anchor = (
+        integrals.hcore
+        if integrals is not None
+        else (positions if positions is not None else refocc)
+    )
+    if not isinstance(anchor, Tensor) or not anchor.is_floating_point():
+        raise TypeError("SCFInputs floating inputs must have a floating dtype.")
+    fdtype = anchor.dtype
+
+    if refocc is not None:
+        _check_scf_tensor("refocc", refocc, dev, fdtype)
+        nushell = ihelp.unique_angular.shape[-1]
+        if tuple(refocc.shape) not in ((nushell,), (*b, nushell)):
+            raise ValueError("SCFInputs 'refocc' shape is incompatible.")
+    tensors = [
+        ("positions", positions, (*b, nat, 3)),
+        ("chrg", chrg, None),
+        ("spin", spin, None),
+    ]
+    if integrals is not None:
+        tensors.extend(
+            (
+                ("hcore", integrals.hcore, (*b, nao, nao)),
+                ("overlap", integrals.overlap, (*b, nao, nao)),
+                ("dipole", integrals.dipole, (*b, 3, nao, nao)),
+                ("quadrupole", integrals.quadrupole, (*b, 6, nao, nao)),
+            )
+        )
+    for name, t, shp in tensors:
+        if t is not None:
+            _check_scf_tensor(name, t, dev, fdtype, shp)
+    return dev, fdtype, b, nat, nsh, nao
+
+
 def setup_scf_inputs(
     numbers: Tensor,
     integrals: IntegralMatrices,
@@ -259,68 +381,22 @@ def setup_scf_inputs(
     interaction_data: InteractionListCache,
     ihelp: IndexHelper,
     config: ConfigSCF,
-    *,
-    core_index: IndexHelper | None = None,
-    core_index_owner: object | None = None,
 ) -> SCFInputs:
-    """Build immutable core values from one single-System component setup.
-
-    ``core_index`` and ``core_index_owner`` are reserved for a trusted index
-    captured by the active System integral setup. The owner must be the
-    compatible System façade whose active exact core owns the supplied map.
-    Its map values are established at setup; this function validates owner,
-    IndexHelper provenance, shape, dtype, and device without synchronizing
-    tensor values during SCF preparation. Direct callers should
-    omit both and reuse the frozen ``ihelp`` directly.
-    """
+    """Build immutable core values from explicit SCF inputs."""
     if config.fermi.etemp < 0.0:
         raise ValueError("Electronic temperature must be non-negative.")
     if config.fermi.maxiter < 0:
         raise ValueError("Fermi maxiter must be non-negative.")
     validate_scf_interactions(interactions)
-    if numbers.ndim < 1:
-        raise ValueError("SCFInputs require an atomic-number axis.")
-    if integrals.hcore is None or integrals.overlap is None:
-        raise ValueError("SCFInputs require hcore and overlap integrals.")
-    if not isinstance(ihelp, IndexHelper):
-        raise TypeError("SCFInputs requires an IndexHelper.")
-    if core_index is not None:
-        if (
-            not isinstance(core_index, IndexHelper)
-            or core_index.batch_mode != 0
-        ):
-            raise TypeError(
-                "Captured SCF index must be a single-system IndexHelper."
-            )
-        active_core = getattr(
-            core_index_owner, "_active_exact_core", lambda: None
-        )()
-        if (
-            active_core is None
-            or active_core.index is not core_index
-            or active_core.numbers is not numbers
-            or getattr(core_index_owner, "ihelp", None) is not ihelp
-        ):
-            raise ValueError(
-                "Captured SCF index does not belong to this System setup."
-            )
-        if (
-            core_index.shells_to_atom.shape != ihelp.shells_to_atom.shape
-            or core_index.orbitals_to_shell.shape
-            != ihelp.orbitals_to_shell.shape
-            or core_index.shells_to_atom.dtype != ihelp.shells_to_atom.dtype
-            or core_index.orbitals_to_shell.dtype
-            != ihelp.orbitals_to_shell.dtype
-            or core_index.shells_to_atom.device != ihelp.shells_to_atom.device
-            or core_index.orbitals_to_shell.device
-            != ihelp.orbitals_to_shell.device
-        ):
-            raise ValueError(
-                "Captured SCF index maps must match the IndexHelper shape, "
-                "dtype, and device."
-            )
-    elif core_index_owner is not None:
-        raise ValueError("A captured SCF index owner requires its index map.")
+    dev, fdtype, b, nat, nsh, nao = _validate_scf_preamble(
+        numbers, ihelp, integrals=integrals
+    )
+    for name, t, shp in (
+        ("n0", n0, (*b, nao)),
+        ("occupation", occupation, (*b, 2, nao)),
+        ("nel", nel, (*b, 2)),
+    ):
+        _check_scf_tensor(name, t, dev, fdtype, shp)
 
     orbital_mask = ihelp.spread_shell_to_orbital(ihelp.orbitals_per_shell)
     orbital_mask = orbital_mask.to(dtype=torch.bool)
@@ -328,6 +404,7 @@ def setup_scf_inputs(
     overlap = integrals.overlap + torch.diag_embed(padding_diagonal)
 
     inverse_cholesky = _symmetric_inverse_sqrt(overlap)
+    from .core import tensor_leaves
     from .interactions import prepare_scf_interactions
 
     core_interactions = prepare_scf_interactions(
@@ -337,6 +414,60 @@ def setup_scf_inputs(
         d4sc_setup=getattr(interaction_data, "d4sc_setup", None),
         kind_by_label=getattr(interaction_data, "scf_kinds", None),
     )
+    for entry in core_interactions.entries:
+        if entry.kind == "d4sc":
+            setup = entry.option("setup")
+            rc6 = getattr(setup, "model_rc6", None)
+            _check_scf_tensor("d4sc.setup.model_rc6", rc6, dev, fdtype)
+            if rc6.ndim != len(b) + 4 or rc6.shape[-2] != rc6.shape[-1]:
+                raise ValueError("SCFInputs 'd4sc.setup.model_rc6' invalid.")
+            nref = int(rc6.shape[-1])
+            d4_shapes = {
+                "numbers": (*b, nat),
+                "rcov": (*b, nat),
+                "r4r2": (*b, nat),
+                "pair_weight": (*b, nat, nat),
+                "model_rc6": (*b, nat, nat, nref, nref),
+            }
+            for path, leaf in tensor_leaves(setup):
+                dt = (
+                    None
+                    if path == "numbers"
+                    else (fdtype if leaf.is_floating_point() else leaf.dtype)
+                )
+                _check_scf_tensor(
+                    f"d4sc.setup.{path}", leaf, dev, dt, d4_shapes.get(path)
+                )
+            req = {"cn": (*b, nat), "dispmat": (*b, nat, nat, nref, nref)}
+        else:
+            dim = (
+                nsh
+                if entry.kind in ("es2", "es3")
+                and entry.option("shell_resolved")
+                else nat
+            )
+            req = {
+                "es2": {"mat": (*b, dim, dim)},
+                "es3": {"hd": (*b, dim)},
+                "aes2": {
+                    "dkernel": (*b, nat, 1),
+                    "qkernel": (*b, nat, 1),
+                    "amat_sd": (*b, nat, nat, 3),
+                    "amat_dd": (*b, nat, nat, 3, 3),
+                    "amat_sq": (*b, nat, nat, 6),
+                },
+                "generalized_born": {"mat": (*b, nat, nat)},
+                "electric_field": {"vat": (*b, nat), "vdp": (*b, nat, 3)},
+                "electric_field_grad": {
+                    "vat": (*b, nat),
+                    "vdp": (*b, nat, 3),
+                    "vqp": (*b, nat, 6),
+                },
+            }.get(entry.kind, {})
+        for t_name, t_val in entry.data:
+            _check_scf_tensor(
+                f"{entry.kind}.{t_name}", t_val, dev, fdtype, req.get(t_name)
+            )
     kt_value = config.fermi.etemp * KELVIN2AU
     if kt_value == 0.0:
         fermi_settings = None
@@ -363,7 +494,7 @@ def setup_scf_inputs(
 
     return SCFInputs(
         numbers=numbers,
-        index=core_index if core_index is not None else ihelp,
+        index=ihelp,
         integrals=integrals,
         n0=n0,
         nel=nel,

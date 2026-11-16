@@ -333,6 +333,8 @@ def test_indexhelper_is_canonical_node_without_duplicate_index_classes() -> None
         "class H0IndexNode",
         "def core_index_data(",
         "def padded_core_index_data(",
+        "solve_with_core_index",
+        "core_index_owner",
     )
     offenders = [
         f"{path.relative_to(SRC.parent)}:{token}"

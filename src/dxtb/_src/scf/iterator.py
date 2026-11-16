@@ -38,7 +38,6 @@ from dxtb._src.components.interactions import (
     InteractionList,
     InteractionListCache,
 )
-from dxtb._src.constants import labels
 from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.typing import Tensor
 from dxtb._src.wavefunction import filling
@@ -97,8 +96,6 @@ def solve(
     config: ConfigSCF,
     integrals: IntegralMatrices,
     refocc: Tensor,
-    *,
-    core_index: IndexHelper | None = None,
 ) -> SCFResult | SCFCoreResult:
     """
     Obtain self-consistent solution for a given Hamiltonian.
@@ -111,83 +108,28 @@ def solve(
         Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
     chrg : Tensor
         Total charge.
+    spin : Tensor | None
+        Number of unpaired electrons.
     interactions : InteractionList
-        Collection of `Interation` objects.
+        Collection of ``Interaction`` objects.
+    cache : InteractionListCache
+        Call-local interaction data.
     ihelp : IndexHelper
-        Index helper object.
+        Canonical molecular index helper.
     config : ConfigSCF
         Configuration for the SCF calculation.
     integrals : IntegralMatrices
         Integral matrices (core Hamiltonian, overlap and multipoles).
+    refocc : Tensor
+        Reference shell occupations.
 
     Returns
     -------
     SCFResult | SCFCoreResult
-    Non-SCF GFN0 result mapping or tensor-status iterative SCF result.
+        Non-SCF GFN0 result mapping or tensor-status iterative SCF result.
     """
-    return _solve_impl(
-        numbers,
-        positions,
-        chrg,
-        spin,
-        interactions,
-        cache,
-        ihelp,
-        config,
-        integrals,
-        refocc,
-        core_index,
-        None,
-    )
-
-
-def solve_with_core_index(
-    numbers: Tensor,
-    positions: Tensor,
-    chrg: Tensor,
-    spin: Tensor | None,
-    interactions: InteractionList,
-    cache: InteractionListCache,
-    ihelp: IndexHelper,
-    config: ConfigSCF,
-    integrals: IntegralMatrices,
-    refocc: Tensor,
-    *,
-    core_index: IndexHelper,
-    core_index_owner: object,
-) -> SCFResult | SCFCoreResult:
-    """Run SCF with an internally trusted captured structural map."""
-    return _solve_impl(
-        numbers,
-        positions,
-        chrg,
-        spin,
-        interactions,
-        cache,
-        ihelp,
-        config,
-        integrals,
-        refocc,
-        core_index,
-        core_index_owner,
-    )
-
-
-def _solve_impl(
-    numbers: Tensor,
-    positions: Tensor,
-    chrg: Tensor,
-    spin: Tensor | None,
-    interactions: InteractionList,
-    cache: InteractionListCache,
-    ihelp: IndexHelper,
-    config: ConfigSCF,
-    integrals: IntegralMatrices,
-    refocc: Tensor,
-    core_index: IndexHelper | None,
-    core_index_owner: object | None,
-) -> SCFResult | SCFCoreResult:
-    """Dispatch iterative SCF and the retained GFN0 special case."""
+    if not isinstance(ihelp, IndexHelper):
+        raise TypeError("SCF solver requires an IndexHelper.")
     if config.fermi.etemp < 0.0:
         raise ValueError("Electronic Temperature must be non-negative.")
     if config.fermi.maxiter < 0:
@@ -195,123 +137,79 @@ def _solve_impl(
     if config.maxiter < 0:
         raise ValueError("The SCF solver requires maxiter >= 0.")
 
-    n0, occupation, nab = get_refocc(refocc, chrg, spin, ihelp)
+    if (
+        config.requires_iterations is False
+        or config.differentiation.value == "unrolled"
+    ):
+        from .eager import run_eager_scf
 
-    if config.requires_iterations is False:
-        # pylint: disable=import-outside-toplevel
-        from .nonselfconsistent import solve_nonselfconsistent
-
-        return solve_nonselfconsistent(
+        eager_res = run_eager_scf(
             numbers,
+            positions,
+            chrg,
+            spin,
             interactions,
             cache,
             ihelp,
             config,
             integrals,
-            n0,
-            occupation,
+            refocc,
         )
+        if eager_res.scf is not None:
+            return eager_res.scf
+        assert eager_res.non_scf is not None
+        return eager_res.non_scf
 
-    charges = get_guess(numbers, positions, chrg, ihelp, config.guess)
-
-    if config.differentiation.value == "implicit":
-        is_public_batch = ihelp.batch_mode != 0 or numbers.ndim != 1
-        route_name = (
-            "batched implicit SCF"
-            if is_public_batch
-            else "single-System implicit SCF"
-        )
-        if not _implicit_differentiation_supported(
-            config,
-            interactions,
-            ihelp,
-            numbers,
-            integrals,
-        ):
-            from .data import scf_interactions_eligible
-
-            eligible, names = scf_interactions_eligible(interactions)
-            if not eligible:
-                raise NotImplementedError(
-                    f"{route_name} does not support interaction "
-                    f"extension(s): {names}."
-                )
-            if config.fermi.etemp < 0.0:
-                raise ValueError("Electronic Temperature must be non-negative.")
-            if config.fermi.maxiter < 0:
-                raise ValueError("Fermi maxiter must be non-negative.")
-            if config.maxiter < 0:
-                raise ValueError(
-                    "The SCF solver requires maxiter >= 0."
-                )
-            if integrals.hcore is None or integrals.overlap is None:
-                raise ValueError(
-                    f"{route_name} requires hcore and overlap integrals."
-                )
-            raise ValueError(
-                f"Unsupported {route_name} strategy "
-                f"'{type(config.strategy.stages[0].converger).__name__}'."
-            )
-
-        from .eager import (
-            scf_core_result,
-            run_prepared_implicit_scf,
-        )
-
-        result = run_prepared_implicit_scf(
-            numbers,
-            charges,
-            n0,
-            occupation,
-            nab,
-            interactions,
-            cache,
-            ihelp,
-            config,
-            integrals,
-            core_index=core_index,
-            core_index_owner=core_index_owner,
-        )
-        return scf_core_result(result)
-    elif config.differentiation.value == "unrolled":
-        # pylint: disable=import-outside-toplevel
-        from dxtb import OutputHandler
-
-        from .eager import (
-            apply_eager_scf_policy,
-            resolve_scf_plan,
-            run_prepared_scf,
-        )
-
-        route = resolve_scf_plan(
-            config,
-            interactions,
-            ihelp,
-            numbers,
-            integrals,
-        )
-        if route.warning is not None:
-            OutputHandler.warn(route.warning)
-        result = run_prepared_scf(
-            numbers,
-            charges,
-            n0,
-            occupation,
-            nab,
-            interactions,
-            cache,
-            ihelp,
-            config,
-            integrals,
-            route,
-            core_index=core_index,
-            core_index_owner=core_index_owner,
-        )
-        return apply_eager_scf_policy(result, config, route)
-    else:
+    if config.differentiation.value != "implicit":
         raise ValueError(
             f"Unknown differentiation policy '{config.differentiation}'."
         )
+
+    from .data import _validate_scf_preamble, scf_interactions_eligible
+    from .eager import run_prepared_implicit_scf, scf_core_result
+
+    _validate_scf_preamble(
+        numbers, ihelp, positions=positions, refocc=refocc, chrg=chrg, spin=spin
+    )
+    n0, occupation, nab = get_refocc(refocc, chrg, spin, ihelp)
+    charges = get_guess(numbers, positions, chrg, ihelp, config.guess)
+    is_public_batch = ihelp.batch_mode != 0 or numbers.ndim != 1
+    route_name = (
+        "batched implicit SCF"
+        if is_public_batch
+        else "single-System implicit SCF"
+    )
+    if not _implicit_differentiation_supported(
+        config, interactions, ihelp, numbers, integrals
+    ):
+        eligible, names = scf_interactions_eligible(interactions)
+        if not eligible:
+            raise NotImplementedError(
+                f"{route_name} does not support interaction "
+                f"extension(s): {names}."
+            )
+        if integrals.hcore is None or integrals.overlap is None:
+            raise ValueError(
+                f"{route_name} requires hcore and overlap integrals."
+            )
+        raise ValueError(
+            f"Unsupported {route_name} strategy "
+            f"'{type(config.strategy.stages[0].converger).__name__}'."
+        )
+
+    result = run_prepared_implicit_scf(
+        numbers,
+        charges,
+        n0,
+        occupation,
+        nab,
+        interactions,
+        cache,
+        ihelp,
+        config,
+        integrals,
+    )
+    return scf_core_result(result)
 
 
 def reference_electron_count(refs: Tensor, ihelp: IndexHelper) -> Tensor:

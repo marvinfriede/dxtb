@@ -257,7 +257,7 @@ def test_default_full_singlepoint_uses_functional_route(
     assert system.config.scf.fermi.etemp == 300.0
 
     core_module = importlib.import_module("dxtb._src.calculators.singlepoint")
-    original_solve = core_module.scf.solve_with_core_index
+    original_solve = core_module.scf.solve
     captured: dict[str, object] = {}
 
     def capture_solve(*args: object, **kwargs: object) -> object:
@@ -265,7 +265,7 @@ def test_default_full_singlepoint_uses_functional_route(
         captured["result"] = result
         return result
 
-    monkeypatch.setattr(core_module.scf, "solve_with_core_index", capture_solve)
+    monkeypatch.setattr(core_module.scf, "solve", capture_solve)
     OutputHandler.clear_warnings()
     result = singlepoint(system, positions)
     assert OutputHandler.warnings == []

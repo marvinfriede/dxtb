@@ -467,8 +467,6 @@ class _PreparedSinglepoint:
     interaction_data: Any
     ihelp: Any
     config: Any
-    core_index: Any
-    core_index_owner: System | None
 
     def scf_arguments(self) -> tuple[Any, ...]:
         """Positional arguments shared by every SCF entry point."""
@@ -511,17 +509,7 @@ def _singlepoint_impl(
     if fixed_trip and prepared.config.scf.differentiation.value != "implicit":
         from dxtb._src.scf.eager import run_system_fixed_trip
 
-        scf_results = run_system_fixed_trip(
-            *prepared.scf_arguments(),
-            core_index=prepared.core_index,
-            core_index_owner=prepared.core_index_owner,
-        )
-    elif prepared.core_index is not None:
-        scf_results = scf.solve_with_core_index(
-            *prepared.scf_arguments(),
-            core_index=prepared.core_index,
-            core_index_owner=prepared.core_index_owner,
-        )
+        scf_results = run_system_fixed_trip(*prepared.scf_arguments())
     else:
         scf_results = scf.solve(*prepared.scf_arguments())
     return _singlepoint_result(prepared, scf_results)
@@ -807,17 +795,10 @@ def _prepare_singlepoint(
             f"to '{config.ints.level}'."
         )
 
-    candidate_index = core.index if core is not None else None
-    core_index = (
-        candidate_index
-        if candidate_index is not None
-        and candidate_index.has_uniform_device(system.numbers.device)
-        else None
-    )
     matrices, refocc = build_integral_matrices(
         integral_setup,
         h0_setup,
-        core_index if core_index is not None else system.ihelp,
+        system.ihelp,
         positions,
         charge,
     )
@@ -863,8 +844,4 @@ def _prepare_singlepoint(
         interaction_data=interaction_data,
         ihelp=system.ihelp,
         config=config,
-        core_index=core_index if core is not None else None,
-        core_index_owner=(
-            system if core is not None and core_index is not None else None
-        ),
     )

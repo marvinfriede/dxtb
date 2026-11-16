@@ -84,6 +84,16 @@ def solve_nonselfconsistent(
             f"Interaction components (received: {interaction_labels})."
         )
 
+    from .data import _check_scf_tensor, _validate_scf_preamble
+
+    dev, float_dtype, batch_shape, _, _, nao = _validate_scf_preamble(
+        numbers, ihelp, integrals=integrals
+    )
+    _check_scf_tensor("n0", n0, dev, float_dtype, (*batch_shape, nao))
+    _check_scf_tensor(
+        "occupation", occupation, dev, float_dtype, (*batch_shape, 2, nao)
+    )
+
     data = _Data(
         occupation,
         n0,

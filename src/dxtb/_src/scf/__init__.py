@@ -22,7 +22,7 @@ Definition of the self-consistent iterations.
 """
 
 from .guess import get_guess
-from .iterator import solve, solve_with_core_index
+from .iterator import solve
 from .nonselfconsistent import (
     solve_nonselfconsistent as solve_nonselfconsistent,
 )
@@ -160,7 +160,6 @@ __all__ = [
     "SCFResult",
     "solve",
     "solve_nonselfconsistent",
-    "solve_with_core_index",
 
     "AndersonConverger",
     "AndersonConvergerSettings",
