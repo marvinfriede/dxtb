@@ -30,7 +30,11 @@ from tad_mctc.exceptions import DeviceError, DtypeError
 
 from dxtb import labels
 from dxtb._src import scf
-from dxtb._src.calculators.model import ClassicalTermDescriptor, System
+from dxtb._src.calculators.model import (
+    BUILTIN_CLASSICAL_TYPES,
+    ClassicalTermDescriptor,
+    System,
+)
 from dxtb._src.calculators.result import ChargeLike, PotentialLike, Result
 from dxtb._src.components.classicals.dispersion.d3 import (
     DispersionD3,
@@ -56,6 +60,7 @@ from dxtb._src.components.classicals.shortrangebond import (
     ShortRangeBondCoreSetup,
     short_range_bond_energy,
 )
+from dxtb._src.components.custom import CustomClassicalCoreSetup
 from dxtb._src.components.interactions.coulomb.multipole import (
     AES2CoreSetup,
     build_aes2_data,
@@ -169,6 +174,32 @@ def _normalize_scf_output(result: Any, like: Tensor) -> _SCFOutput:
     )
 
 
+def _evaluate_custom_classical_fallback(
+    system: System,
+    component: Any,
+    positions: Tensor,
+    charge: Tensor,
+) -> Tensor:
+    """Evaluate a custom classical fallback setup, syncing internal call counters."""
+    matched_snap = None
+    setup = None
+    for owner, snap, captured_setup in system._custom_classical_snapshots:
+        if owner is component:
+            if snap.matches(component):
+                matched_snap = snap
+                setup = captured_setup
+            break
+    if matched_snap is None:
+        setup = component.get_cache(system.numbers, system.ihelp)
+    energy: Tensor = component.get_energy(positions, setup, charge=charge)
+    if (
+        matched_snap is not None
+        and torch._C._functorch.peek_interpreter_stack() is None
+    ):
+        matched_snap.sync_post_eval_static_state(component)
+    return energy
+
+
 def _evaluate_classical_descriptor(
     descriptor: ClassicalTermDescriptor,
     positions: Tensor,
@@ -176,7 +207,7 @@ def _evaluate_classical_descriptor(
     *,
     q: Tensor | None = None,
 ) -> Tensor:
-    """Evaluate a captured built-in term without component dispatch."""
+    """Evaluate a captured built-in or tensor-only custom term."""
     setup = descriptor.setup
     if descriptor.kind == "d3":
         return dispersion_d3_energy(setup, positions)  # type: ignore[arg-type]
@@ -198,6 +229,9 @@ def _evaluate_classical_descriptor(
         return ies_energy(setup, positions, charge)  # type: ignore[arg-type]
     if descriptor.kind == "halogen":
         return halogen_energy(setup, positions)  # type: ignore[arg-type]
+    if descriptor.kind == "custom":
+        assert isinstance(setup, CustomClassicalCoreSetup)
+        return setup.evaluate_energy(positions, charge)
     raise RuntimeError(f"Unknown classical term kind '{descriptor.kind}'.")
 
 
@@ -746,6 +780,17 @@ def _prepare_singlepoint(
                         (
                             component.label,
                             ies_energy(ies_setup, positions, charge),
+                        )
+                    )
+                    timer.stop(component.label)
+                    continue
+                elif type(component) not in BUILTIN_CLASSICAL_TYPES:
+                    classical.append(
+                        (
+                            component.label,
+                            _evaluate_custom_classical_fallback(
+                                system, component, positions, charge
+                            ),
                         )
                     )
                     timer.stop(component.label)

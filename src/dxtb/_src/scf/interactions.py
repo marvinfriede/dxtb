@@ -19,14 +19,19 @@
 from __future__ import annotations
 
 import torch
-from tad_dftd.model.d4 import d4sc_atom_energy, d4sc_atom_potential
 from tad_mctc.math import einsum
 
 from dxtb import IndexHelper
+from dxtb._src.components.custom import (
+    prepare_custom_interaction_entry,
+    reconstruct_custom_interaction,
+)
 from dxtb._src.components.interactions import (
+    Interaction,
     InteractionList,
     InteractionListCache,
 )
+from dxtb._src.components.interactions.base import call_monopole_hook
 from dxtb._src.components.interactions.coulomb.multipole import AES2
 from dxtb._src.components.interactions.coulomb.secondorder import ES2
 from dxtb._src.components.interactions.coulomb.thirdorder import ES3
@@ -42,6 +47,7 @@ from dxtb._src.components.interactions.field.efield import ElectricField
 from dxtb._src.components.interactions.field.efieldgrad import ElectricFieldGrad
 from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
 from dxtb._src.typing import Tensor
+from tad_dftd.model.d4 import d4sc_atom_energy, d4sc_atom_potential
 
 from .core import (
     SCFInteractionEntry,
@@ -115,6 +121,7 @@ def prepare_scf_interactions(
                 )
             )
         elif kind == "d4sc":
+            assert isinstance(component, DispersionD4SC)
             setup = (
                 _d4sc_setup_view(d4sc_setup)
                 if d4sc_setup is not None
@@ -129,9 +136,7 @@ def prepare_scf_interactions(
             )
         elif kind == "generalized_born":
             entries.append(
-                SCFInteractionEntry(
-                    "generalized_born", (("mat", cache.mat),)
-                )
+                SCFInteractionEntry("generalized_born", (("mat", cache.mat),))
             )
         elif kind == "electric_field":
             entries.append(
@@ -151,10 +156,10 @@ def prepare_scf_interactions(
                     ),
                 )
             )
-        else:  # guarded by exact-type eligibility before conversion
-            raise TypeError(
-                f"Unsupported interaction {type(component)!r}."
-            )
+        elif isinstance(component, Interaction):
+            entries.append(prepare_custom_interaction_entry(component, cache))
+        else:
+            raise TypeError(f"Unsupported interaction {type(component)!r}.")
     return SCFInteractionSet(tuple(entries))
 
 
@@ -236,6 +241,30 @@ def _potential_parts(
         atom = entry.tensor("vat")
         dipole = entry.tensor("vdp")
         quadrupole = entry.tensor("vqp")
+    elif entry.kind == "custom":
+        component, cache = reconstruct_custom_interaction(entry)
+        shell = call_monopole_hook(
+            component.get_monopole_shell_potential,
+            cache,
+            shell_charges,
+            charges.dipole,
+            charges.quad,
+        )
+        atom = call_monopole_hook(
+            component.get_monopole_atom_potential,
+            cache,
+            atom_charges,
+            charges.dipole,
+            charges.quad,
+        )
+        dipole = component.get_dipole_atom_potential(
+            cache, atom_charges, charges.dipole, charges.quad
+        )
+        quadrupole = component.get_quadrupole_atom_potential(
+            cache, atom_charges, charges.dipole, charges.quad
+        )
+        if quadrupole is not None and dipole is None:
+            dipole = atom_charges.new_zeros((*atom_charges.shape, 3))
     else:
         raise TypeError(f"Unknown interaction kind {entry.kind!r}.")
 
@@ -267,6 +296,7 @@ def _entry_energy(
     charges: SCFCharges,
     shell_charges: Tensor,
     atom_charges: Tensor,
+    index: IndexHelper,
 ) -> Tensor:
     """Return one entry's atom-resolved interaction energy."""
     result = torch.zeros_like(atom_charges)
@@ -341,6 +371,37 @@ def _entry_energy(
             result = result + einsum(
                 "...ix,...ix->...i", entry.tensor("vqp"), charges.quad
             )
+    elif entry.kind == "custom":
+        component, cache = reconstruct_custom_interaction(entry)
+        esh = call_monopole_hook(
+            component.get_monopole_shell_energy,
+            cache,
+            shell_charges,
+            charges.dipole,
+            charges.quad,
+        )
+        eat = call_monopole_hook(
+            component.get_monopole_atom_energy,
+            cache,
+            atom_charges,
+            charges.dipole,
+            charges.quad,
+        )
+        result = result + eat + index.reduce_shell_to_atom(esh)
+        if charges.dipole is not None:
+            result = result + component.get_dipole_atom_energy(
+                cache,
+                qat=atom_charges,
+                qdp=charges.dipole,
+                qqp=charges.quad,
+            )
+        if charges.quad is not None:
+            result = result + component.get_quadrupole_atom_energy(
+                cache,
+                qat=atom_charges,
+                qdp=charges.dipole,
+                qqp=charges.quad,
+            )
     return result
 
 
@@ -354,7 +415,9 @@ def interaction_energy_from_charges(
     atom_charges = index.reduce_shell_to_atom(shell_charges)
     result = atom_charges.new_zeros(atom_charges.shape)
     for entry in interactions.entries:
-        local = _entry_energy(entry, charges, shell_charges, atom_charges)
+        local = _entry_energy(
+            entry, charges, shell_charges, atom_charges, index
+        )
         if entry.kind == "es2" and entry.option("shell_resolved"):
             shell_energy = entry.tensor("mat")
             shell_energy = (

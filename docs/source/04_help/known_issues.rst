@@ -155,7 +155,7 @@ slower if each worker uses several threads; set ``OMP_NUM_THREADS=1``.
 ---------------------------------------------------
 
 ``calc.reset()``, ``reset_all()`` and the ``reset_*`` methods of the
-interaction and classical lists replace the tensors of user-supplied
+interaction and classical lists replace the tensors of custom or user-supplied
 Components with detached copies. Gradients with respect to a tensor the user
 passed into such a Component, e.g., ``requires_grad=True`` component
 parameters, are then
@@ -164,8 +164,9 @@ state; their graph is preserved across ``Calculator.reset()``. ``Model.par``
 parameters are re-evaluated on each call and remain differentiable across
 ``Calculator.reset()``.
 
-**Workaround:** for user-supplied Component parameters, pass a fresh Component or
-rebuild the Calculator after reset if gradients to the original leaves matter.
+**Workaround:** for custom or user-supplied Component parameters, pass a fresh
+Component or rebuild the Calculator after reset if gradients to the original
+leaves matter.
 
 
 ``Calculator.to(device)`` does not move all state

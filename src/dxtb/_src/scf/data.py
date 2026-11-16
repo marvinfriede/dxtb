@@ -26,11 +26,9 @@ from tad_mctc.units.energy import KELVIN2AU
 
 from dxtb import IndexHelper
 from dxtb._src.components.interactions import (
+    Interaction,
     InteractionList,
     InteractionListCache,
-)
-from dxtb._src.components.interactions.list import (
-    _SCF_INTERACTION_TYPES,
 )
 from dxtb._src.constants import defaults
 from dxtb._src.integral.container import IntegralMatrices
@@ -551,9 +549,7 @@ def _symmetric_inverse_sqrt(overlap: Tensor) -> Tensor:
     puts every positive overlap spectrum in the convergence interval.
     """
     input_dtype = overlap.dtype
-    work_dtype = (
-        torch.float64 if input_dtype != torch.float64 else input_dtype
-    )
+    work_dtype = torch.float64 if input_dtype != torch.float64 else input_dtype
     overlap = overlap.to(dtype=work_dtype)
     overlap = 0.5 * (overlap + overlap.transpose(-2, -1))
     size = overlap.shape[-1]
@@ -575,28 +571,23 @@ def _symmetric_inverse_sqrt(overlap: Tensor) -> Tensor:
 def validate_scf_interactions(
     interactions: InteractionList,
 ) -> None:
-    """Reject interaction extensions without a purity contract.
-
-    The E4.0 raw map is guaranteed pure for exact migrated built-in
-    interactions. Arbitrary subclasses are rejected by SCF setup
-    and are not routed to another iterative solver.
-    """
+    """Validate that all SCF interaction entries inherit from :class:`Interaction`."""
     eligible, names = scf_interactions_eligible(interactions)
     if not eligible:
         raise TypeError(
-            "SCF currently supports exact migrated built-in "
-            f"interactions only; unsupported extension(s): {names}."
+            "SCF requires Interaction instances; got unsupported "
+            f"component(s): {names}."
         )
 
 
 def scf_interactions_eligible(
     interactions: InteractionList,
 ) -> tuple[bool, str]:
-    """Check exact interaction types before SCF setup begins."""
+    """Check that all entries in ``interactions`` inherit from :class:`Interaction`."""
     unsupported = [
         component
         for component in interactions.components
-        if type(component) not in _SCF_INTERACTION_TYPES
+        if not isinstance(component, Interaction)
     ]
     names = ", ".join(
         f"{type(component).__module__}.{type(component).__qualname__}"

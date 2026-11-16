@@ -44,12 +44,17 @@ from torch import Tensor
 from torch.utils._pytree import tree_map
 
 from dxtb import labels
-from dxtb._src.calculators.model import System
+from dxtb._src.calculators.model import (
+    BUILTIN_CLASSICAL_TYPES,
+    BUILTIN_INTERACTION_TYPES,
+    System,
+)
 from dxtb._src.calculators.result import Result
 from dxtb._src.calculators.singlepoint import (
     _singlepoint_impl,
     system_singlepoint,
 )
+from dxtb._src.components.custom import is_tensor_only_object
 from dxtb._src.scf.data import scf_interactions_eligible
 from dxtb._src.scf.iterator import get_refocc, reference_electron_count
 from dxtb._src.wavefunction.filling import spin_electron_violations
@@ -162,6 +167,11 @@ def can_vmap_system(system: System) -> bool:
         or system._active_exact_core() is None
         or scf_config.differentiation.value == "implicit"
         or eager_only
+        or any(
+            type(inter) not in BUILTIN_INTERACTION_TYPES
+            and not is_tensor_only_object(inter)
+            for inter in system.interactions.components
+        )
     ):
         return False
 
@@ -381,9 +391,43 @@ def evaluate_lane_group(
         stacked_fields,
         stacked_field_grads,
     )
-    mapped = torch.func.vmap(
+    has_custom_component = any(
+        type(c) not in BUILTIN_CLASSICAL_TYPES
+        for c in group.system.classicals.components
+    ) or any(
+        type(i) not in BUILTIN_INTERACTION_TYPES
+        for i in group.system.interactions.components
+    )
+    mapped_kernel = torch.func.vmap(
         partial(system_singlepoint, group.system), in_dims=in_dims
-    )(*args)
+    )
+    if has_custom_component:
+        try:
+            mapped = mapped_kernel(*args)
+        except (RuntimeError, NotImplementedError) as exc:
+            msg = str(exc)
+            if any(
+                token in msg
+                for token in (
+                    "vmap",
+                    "BatchedTensor",
+                    "functorch",
+                    "data-dependent",
+                    "doesn't have storage",
+                )
+            ):
+                return _evaluate_prevalidated(
+                    tuple(group.system for _ in ids),
+                    tuple(positions[i] for i in ids),
+                    tuple(charges[i] for i in ids),
+                    tuple(spins[i] for i in ids),
+                    tuple(fields[i] for i in ids),
+                    tuple(field_grads[i] for i in ids),
+                    ids,
+                )
+            raise
+    else:
+        mapped = mapped_kernel(*args)
     return tuple(_select_lane(mapped, lane) for lane in range(len(ids)))
 
 

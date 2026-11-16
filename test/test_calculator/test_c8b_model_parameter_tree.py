@@ -1221,18 +1221,24 @@ def test_functional_setup_preserves_additional_classical_component() -> None:
     )
 
 
-def test_functional_setup_rejects_custom_classical_component() -> None:
-    """Functional setup applies the same built-in Component check."""
+def test_functional_setup_preserves_custom_classical_component() -> None:
+    """Functional setup accepts custom Classical subclasses and rejects non-Classicals."""
     from dxtb._src.components.classicals import Repulsion
     from dxtb._src.components.classicals.repulsion import new_repulsion
 
     par = ParamModule(GFN1_XTB, dtype=torch.float64)
     numbers = torch.tensor([1, 1], dtype=torch.int64)
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
+    )
     builtin = new_repulsion(numbers, par, dtype=torch.float64)
     assert builtin is not None
+    calls: list[str] = []
 
     class CustomRepulsion(Repulsion):
-        pass
+        def get_cache(self, numbers, ihelp=None, **kwargs):
+            calls.append("get_cache")
+            return super().get_cache(numbers, ihelp=ihelp, **kwargs)
 
     custom = CustomRepulsion(
         builtin.arep,
@@ -1251,5 +1257,26 @@ def test_functional_setup_rejects_custom_classical_component() -> None:
         ),
         classical=(custom,),
     )
-    with pytest.raises(TypeError, match="Only the built-in"):
-        model.setup_functional(numbers, model.parameter_tree)
+    tree = model.parameter_tree
+    h0_name = "parameter_tree.element.H.lgam.param"
+    changed_h0 = (tree.parameters.params[h0_name] + 0.01).requires_grad_(True)
+    system = model.setup_functional(
+        numbers,
+        _replace_tree_value(tree, h0_name, changed_h0),
+    )
+    assert system.classicals.components[-1] is custom
+    assert "get_cache" in calls
+    assert system.classical_cache[custom.label] is not None
+    energy = system.singlepoint(positions).energy.sum()
+    (grad,) = torch.autograd.grad(energy, changed_h0)
+    assert torch.isfinite(grad).all()
+
+    invalid_model = Model(
+        par=par,
+        config=Config.create(
+            method=labels.GFN1_XTB, int_driver=labels.INTDRIVER_PYTORCH
+        ),
+        classical=(object(),),  # type: ignore[arg-type]
+    )
+    with pytest.raises(TypeError, match="Classical"):
+        invalid_model.setup_functional(numbers, invalid_model.parameter_tree)

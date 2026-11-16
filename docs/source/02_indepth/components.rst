@@ -9,11 +9,11 @@ Tight-Binding Components
 
    Classical <components_classicals>
    Interactions <components_interactions>
+   Creating New Components <components_new>
 
 
 .. automodule:: dxtb.components
    :no-index:
 
-Only the built-in Components listed on these pages are supported. A
-:class:`~dxtb.Model` rejects other Classical or Interaction types, including
-subclasses of the built-in ones, with a ``TypeError``.
+If you want to create a custom component, check out
+:ref:`indepth_components_new`.

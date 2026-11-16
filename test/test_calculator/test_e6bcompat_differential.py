@@ -1045,6 +1045,67 @@ def test_packed_classical_multiplicity_and_gradients() -> None:
     assert g_a[1] is not None and float(g_a[1].abs()) > 0.0 and g_a[2] is None
     assert g_b[1] is None and g_b[2] is not None and float(g_b[2].abs()) > 0.0
 
+    # 3. Distinct custom classical terms sharing a label keep distinct gradients
+    from dxtb._src.components.classicals.base import Classical
+
+    class _ScaledHarmonicClassical(Classical):
+        def __init__(self, scale: torch.Tensor) -> None:
+            super().__init__(device=DEVICE, dtype=DTYPE)
+            self.label = "CustomHarmonic"
+            self.scale = scale
+
+        def get_cache(self, numbers: torch.Tensor, ihelp=None, **kwargs):
+            _ = (ihelp, kwargs)
+            return numbers
+
+        def get_energy(
+            self, positions: torch.Tensor, cache, **kwargs
+        ) -> torch.Tensor:
+            _ = (cache, kwargs)
+            return self.scale * (positions**2).sum(dim=-1)
+
+    scale_a = torch.tensor(0.15, dtype=DTYPE, requires_grad=True)
+    scale_b = torch.tensor(0.35, dtype=DTYPE, requires_grad=True)
+    hc_a = _ScaledHarmonicClassical(scale_a)
+    hc_b = _ScaledHarmonicClassical(scale_b)
+    sys_harmonic = Model(
+        par=param, config=cfg_classical_only, auto_int_level=False
+    ).setup(numbers_h2)
+    sys_harmonic.classicals.components = [
+        *sys_harmonic.classicals.components,
+        hc_a,
+        hc_b,
+    ]
+    pos_hc = _geometry((1, 1), 0).clone().requires_grad_(True)
+    packed_hc = evaluate_packed_systems(
+        (sys_harmonic, sys_h2),
+        (pos_hc, pos_h2),
+    )
+    harmonic_slots = [
+        val for label, val in packed_hc.classical if label == "CustomHarmonic"
+    ]
+    assert len(harmonic_slots) == 2
+    gh_a = torch.autograd.grad(
+        harmonic_slots[0].sum(),
+        (pos_hc, scale_a, scale_b),
+        retain_graph=True,
+        allow_unused=True,
+    )
+    gh_b = torch.autograd.grad(
+        harmonic_slots[1].sum(),
+        (pos_hc, scale_a, scale_b),
+        retain_graph=True,
+        allow_unused=True,
+    )
+    torch.testing.assert_close(gh_a[0], 2.0 * scale_a * pos_hc)
+    torch.testing.assert_close(gh_b[0], 2.0 * scale_b * pos_hc)
+    assert (
+        gh_a[1] is not None and float(gh_a[1].abs()) > 0.0 and gh_a[2] is None
+    )
+    assert (
+        gh_b[1] is None and gh_b[2] is not None and float(gh_b[2].abs()) > 0.0
+    )
+
 
 def test_packed_options_charge_spin_and_unknown_kwargs_contract() -> None:
     """Verify unknown kwargs, charge/spin normalization, parity, and capacity rules."""

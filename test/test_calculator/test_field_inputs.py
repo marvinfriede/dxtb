@@ -11,11 +11,13 @@ from dxtb import GFN1_XTB, Calculator, ParamModule, labels
 from dxtb._src.calculators.model import Model
 from dxtb._src.components.interactions.container import Charges
 from dxtb._src.components.interactions.field.efield import (
+    LABEL_EFIELD,
     ElectricField,
     build_electric_field_data,
     new_efield,
 )
 from dxtb._src.components.interactions.field.efieldgrad import (
+    LABEL_EFIELD_GRAD,
     ElectricFieldGrad,
     build_electric_field_grad_data,
     new_efield_grad,
@@ -407,26 +409,78 @@ def test_direct_model_rejects_exact_field_components() -> None:
         ).setup(numbers)
 
 
-def test_field_subclasses_are_rejected() -> None:
-    """Field subclasses are custom Interactions and fail at setup."""
+def test_field_subclasses_work_as_custom_interactions_and_guard_label_conflicts() -> (
+    None
+):
+    """Field subclasses evaluate as custom Interactions and reject same-label conflicts."""
 
     class FieldExtension(ElectricField):
-        pass
+        def __init__(
+            self, field: torch.Tensor, *, same_label: bool = False
+        ) -> None:
+            super().__init__(field)
+            if same_label:
+                self.label = LABEL_EFIELD
 
     class FieldGradExtension(ElectricFieldGrad):
-        pass
+        def __init__(
+            self, field_grad: torch.Tensor, *, same_label: bool = False
+        ) -> None:
+            super().__init__(field_grad)
+            if same_label:
+                self.label = LABEL_EFIELD_GRAD
 
     numbers = torch.tensor([8, 1, 1])
-    with pytest.raises(TypeError, match="Only the built-in"):
-        _calc(
-            numbers,
-            interaction=FieldExtension(torch.ones(3, dtype=torch.double)),
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 1.4, 1.0], [0.0, -1.4, 1.0]],
+        dtype=torch.double,
+    )
+    field_vec = torch.tensor([0.01, -0.02, 0.015], dtype=torch.double)
+    field_grad_mat = torch.eye(3, dtype=torch.double) * 0.01
+
+    ref_calc = _calc(numbers)
+    ext_field_calc = _calc(
+        numbers, interaction=FieldExtension(field_vec, same_label=True)
+    )
+    ext_grad_calc = _calc(
+        numbers,
+        interaction=FieldGradExtension(field_grad_mat, same_label=True),
+    )
+    torch.testing.assert_close(
+        ext_field_calc.energy(positions),
+        ref_calc.energy(positions, field=field_vec),
+    )
+    torch.testing.assert_close(
+        ext_grad_calc.energy(positions),
+        ref_calc.energy(positions, field_grad=field_grad_mat),
+    )
+
+    with pytest.raises(ValueError, match="ElectricField"):
+        ext_field_calc.energy(
+            positions, field=torch.zeros(3, dtype=torch.double)
         )
-    with pytest.raises(TypeError, match="Only the built-in"):
-        _calc(
-            numbers,
-            interaction=FieldGradExtension(torch.eye(3, dtype=torch.double)),
+    with pytest.raises(ValueError, match="ElectricFieldGrad"):
+        ext_grad_calc.energy(
+            positions, field_grad=torch.zeros((3, 3), dtype=torch.double)
         )
+
+    # Integral level auto-promotion for same-label field subclasses on Model.setup
+    par = ParamModule(GFN1_XTB, dtype=torch.double)
+    sys_f = Model(
+        par=par,
+        config=Config.create(int_driver="pytorch"),
+        interaction=(FieldExtension(field_vec, same_label=True),),
+        auto_int_level=True,
+    ).setup(numbers)
+    assert sys_f.config.ints.level >= labels.INTLEVEL_DIPOLE
+
+    sys_fg = Model(
+        par=par,
+        config=Config.create(int_driver="pytorch"),
+        interaction=(FieldGradExtension(field_grad_mat, same_label=True),),
+        auto_int_level=True,
+    ).setup(numbers)
+    assert sys_fg.config.ints.level >= labels.INTLEVEL_QUADRUPOLE
 
 
 def test_calculate_forwards_explicit_field_and_grad() -> None:

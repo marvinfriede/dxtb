@@ -21,8 +21,8 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError, fields, replace
 from typing import Any
 
-import torch
 import pytest
+import torch
 from tad_mctc.tree import Node, stack
 from torch.utils import _pytree
 
@@ -35,11 +35,11 @@ from dxtb._src.components.interactions.dispersion.d4sc import (
     D4SCCoreSetup,
     D4SCSetup,
     DispersionD4SC,
-    _StaticList,
-    _StaticMapping,
     _build_d4sc_model,
     _extra_model_state,
     _restore_static,
+    _StaticList,
+    _StaticMapping,
     build_d4sc_data,
     core_d4sc_setup,
     new_d4sc,
@@ -526,10 +526,14 @@ def test_independent_systems_and_alternate_d4sc_setup_authority() -> None:
         alternate.cutoff,
         **DD,
     )
-    with pytest.raises(TypeError, match="Only the built-in"):
-        Model(
-            par=model_a.par,
-            config=Config.create(exclude=("es2", "es3", "aes2", "d4sc")),
-            interaction=(subclass,),
-            auto_int_level=False,
-        ).setup(numbers)
+    sub_system = Model(
+        par=model_a.par,
+        config=Config.create(exclude=("es2", "es3", "aes2", "d4sc")),
+        interaction=(subclass,),
+        auto_int_level=False,
+    ).setup(numbers)
+    assert sub_system.d4sc_setup is None
+    assert sub_system.d4sc_interaction is None
+    sub_data = _interaction_data(sub_system, positions)
+    assert sub_data.d4sc_setup is None
+    assert sub_data.scf_kinds == {}

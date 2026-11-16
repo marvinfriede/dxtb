@@ -315,6 +315,56 @@ def test_additional_classical_keeps_global_result_order() -> None:
         torch.testing.assert_close(energy, expected_energy)
 
 
+def test_mixed_classical_extension_keeps_global_result_order() -> None:
+    """Descriptor-built terms and custom Classical subclasses retain list ordering."""
+    from dxtb._src.components.classicals import Classical
+
+    class ClassicalExtension(Classical):
+        __slots__ = ("scale",)
+
+        def __init__(self) -> None:
+            super().__init__(device="cpu", dtype=torch.float64)
+            self.label = "ClassicalExtension"
+            self.scale = torch.tensor(0.125, dtype=torch.float64)
+
+        def get_cache(self, numbers, ihelp=None, **kwargs):
+            _ = (numbers, ihelp, kwargs)
+            return self.scale
+
+        def get_energy(self, positions, cache, **kwargs):
+            _ = kwargs
+            return (
+                torch.ones(positions.shape[-2], dtype=positions.dtype) * cache
+            )
+
+    numbers = torch.tensor([1, 1])
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4]], dtype=torch.float64
+    )
+    extension = ClassicalExtension()
+    system = Model(
+        par=ParamModule(GFN1_XTB, dtype=torch.float64),
+        config=Config.create(
+            method=labels.GFN1_XTB,
+            int_driver=labels.INTDRIVER_PYTORCH,
+            exclude="scf",
+        ),
+        classical=(extension,),
+    ).setup(numbers)
+    assert system.exact_core is not None
+    assert system._active_exact_core() is system.exact_core
+    actual = system.singlepoint(positions)
+    expected = replace(system, exact_core=None).singlepoint(positions)
+    assert [label for label, _ in actual.classical] == [
+        component.label for component in system.classicals.components
+    ]
+    for (label, energy), (expected_label, expected_energy) in zip(
+        actual.classical, expected.classical
+    ):
+        assert label == expected_label
+        torch.testing.assert_close(energy, expected_energy)
+
+
 @pytest.mark.parametrize(
     "method,method_label",
     [

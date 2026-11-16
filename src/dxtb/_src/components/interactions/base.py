@@ -24,6 +24,9 @@ The `Interaction` class is not purely abstract as its methods return zero.
 
 from __future__ import annotations
 
+import functools
+import inspect
+
 import torch
 
 from dxtb import IndexHelper
@@ -32,7 +35,47 @@ from dxtb._src.typing import Any, Tensor, TensorOrTensors, final
 from ...components.base import Component, ComponentCache
 from .container import Charges, Potential
 
-__all__ = ["Interaction", "InteractionCache"]
+__all__ = ["Interaction", "InteractionCache", "call_monopole_hook"]
+
+
+@functools.lru_cache(maxsize=None)
+def _monopole_multipole_flags(func: Any) -> tuple[bool, bool]:
+    """Return ``(accepts_qdp, accepts_qqp)`` for an Interaction monopole hook."""
+    try:
+        params = inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return (True, True)
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return (True, True)
+    accepts_qdp = (
+        "qdp" in params
+        and params["qdp"].kind != inspect.Parameter.POSITIONAL_ONLY
+    )
+    accepts_qqp = (
+        "qqp" in params
+        and params["qqp"].kind != inspect.Parameter.POSITIONAL_ONLY
+    )
+    return (accepts_qdp, accepts_qqp)
+
+
+def call_monopole_hook(
+    method: Any,
+    cache: Any,
+    q: Tensor,
+    qdp: Tensor | None,
+    qqp: Tensor | None,
+) -> Tensor:
+    """Invoke a monopole potential or energy hook with optional multipoles."""
+    accepts_qdp, accepts_qqp = _monopole_multipole_flags(
+        getattr(method, "__func__", method)
+    )
+    if accepts_qdp and accepts_qqp:
+        return method(cache, q, qdp=qdp, qqp=qqp)
+    if accepts_qdp:
+        return method(cache, q, qdp=qdp)
+    if accepts_qqp:
+        return method(cache, q, qqp=qqp)
+    return method(cache, q)
 
 
 class InteractionCache(ComponentCache):
@@ -152,12 +195,22 @@ class Interaction(Component):
 
         # monopole potential: shell-resolved
         qsh = ihelp.reduce_orbital_to_shell(charges.mono)
-        vsh = self.get_monopole_shell_potential(cache, qsh)
+        vsh = call_monopole_hook(
+            self.get_monopole_shell_potential,
+            cache,
+            qsh,
+            charges.dipole,
+            charges.quad,
+        )
 
         # monopole potential: atom-resolved
         qat = ihelp.reduce_shell_to_atom(qsh)
-        vat = self.get_monopole_atom_potential(
-            cache, qat, qdp=charges.dipole, qqp=charges.quad
+        vat = call_monopole_hook(
+            self.get_monopole_atom_potential,
+            cache,
+            qat,
+            charges.dipole,
+            charges.quad,
         )
 
         # spread to orbital-resolution
@@ -332,10 +385,22 @@ class Interaction(Component):
             )
 
         qsh = ihelp.reduce_orbital_to_shell(charges.mono)
-        esh = self.get_monopole_shell_energy(cache, qsh)
+        esh = call_monopole_hook(
+            self.get_monopole_shell_energy,
+            cache,
+            qsh,
+            charges.dipole,
+            charges.quad,
+        )
 
         qat = ihelp.reduce_shell_to_atom(qsh)
-        eat = self.get_monopole_atom_energy(cache, qat)
+        eat = call_monopole_hook(
+            self.get_monopole_atom_energy,
+            cache,
+            qat,
+            charges.dipole,
+            charges.quad,
+        )
 
         e = eat + ihelp.reduce_shell_to_atom(esh)
 
@@ -354,7 +419,12 @@ class Interaction(Component):
         return e
 
     def get_monopole_atom_energy(
-        self, cache: InteractionCache, qat: Tensor, **_: Any
+        self,
+        cache: InteractionCache,
+        qat: Tensor,
+        qdp: Tensor | None = None,
+        qqp: Tensor | None = None,
+        **_: Any,
     ) -> Tensor:
         """
         Compute the energy from the charges, all quantities are atom-resolved.
@@ -366,6 +436,10 @@ class Interaction(Component):
         ----------
         qat : Tensor
             Atom-resolved partial charges (shape: ``(..., nat)``).
+        qdp : Tensor | None, optional
+            Atom-resolved dipole moments (shape: ``(..., nat, 3)``).
+        qqp : Tensor | None, optional
+            Atom-resolved quadrupole moments (shape: ``(..., nat, 6)``).
 
         Returns
         -------
@@ -375,7 +449,12 @@ class Interaction(Component):
         return torch.zeros_like(qat)
 
     def get_monopole_shell_energy(
-        self, cache: InteractionCache, qat: Tensor, **_: Any
+        self,
+        cache: InteractionCache,
+        qat: Tensor,
+        qdp: Tensor | None = None,
+        qqp: Tensor | None = None,
+        **_: Any,
     ) -> Tensor:
         """
         Compute the energy from the charges, all quantities are shell-resolved.
@@ -387,6 +466,10 @@ class Interaction(Component):
         ----------
         qat : Tensor
             Shell-resolved partial charges.
+        qdp : Tensor | None, optional
+            Atom-resolved dipole moments (shape: ``(..., nat, 3)``).
+        qqp : Tensor | None, optional
+            Atom-resolved quadrupole moments (shape: ``(..., nat, 6)``).
 
         Returns
         -------

@@ -45,7 +45,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from functools import wraps
 from threading import Lock, RLock
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Union
 from weakref import WeakKeyDictionary
 
 import torch
@@ -92,6 +92,13 @@ from dxtb._src.components.classicals import (
     new_srb,
 )
 from dxtb._src.components.classicals.list import ClassicalListCache
+from dxtb._src.components.custom import (
+    ComponentMutationSnapshot,
+    CustomClassicalCoreSetup,
+    build_custom_classical_core_setup,
+    can_build_custom_classical_core_setup,
+    snapshot_component_state,
+)
 from dxtb._src.components.interactions import Interaction, InteractionList
 from dxtb._src.components.interactions.coulomb import (
     AES2,
@@ -168,26 +175,46 @@ BUILTIN_CLASSICAL_TYPES = (
     Repulsion,
     ShortRangeBond,
 )
-"""The Classical Components a Model can set up."""
+"""Exact built-in Classical Component types."""
 
 BUILTIN_INTERACTION_TYPES = (AES2, ES2, ES3, DispersionD4SC, GeneralizedBorn)
-"""The Interactions a Model can set up (External fields are call inputs)."""
+"""Exact built-in SCF Interaction types (External fields are call inputs)."""
 
 
-def _require_builtin_components(
-    components: Sequence[Any], builtin: tuple[type, ...], kind: str
+def _require_component_instances(
+    components: Sequence[Any], base_cls: type, kind: str
 ) -> None:
-    """Reject Components whose exact type is not a built-in one."""
-    custom = [c for c in components if type(c) not in builtin]
-    if custom:
+    """Reject entries that do not inherit from ``base_cls``."""
+    invalid = [c for c in components if not isinstance(c, base_cls)]
+    if invalid:
         names = ", ".join(
-            f"{type(c).__module__}.{type(c).__qualname__}" for c in custom
+            f"{type(c).__module__}.{type(c).__qualname__}" for c in invalid
         )
-        supported = ", ".join(t.__name__ for t in builtin)
         raise TypeError(
-            f"Only the built-in {kind} Components ({supported}) are "
-            f"supported; got {names}."
+            f"All {kind} Components must inherit from {base_cls.__name__}; "
+            f"got {names}."
         )
+
+
+def _custom_interaction_required_int_level(
+    interaction: Interaction,
+) -> int:
+    """Infer multipole integral level required by overridden custom hooks."""
+    cls = type(interaction)
+    if (
+        cls.get_quadrupole_atom_potential
+        is not Interaction.get_quadrupole_atom_potential
+        or cls.get_quadrupole_atom_energy
+        is not Interaction.get_quadrupole_atom_energy
+    ):
+        return labels.INTLEVEL_QUADRUPOLE
+    if (
+        cls.get_dipole_atom_potential
+        is not Interaction.get_dipole_atom_potential
+        or cls.get_dipole_atom_energy is not Interaction.get_dipole_atom_energy
+    ):
+        return labels.INTLEVEL_DIPOLE
+    return 0
 
 
 def _parameter_setup_lock(par: ParamModule) -> RLock:
@@ -212,19 +239,20 @@ def _serialize_parameter_setup(
     return wrapped
 
 
-CoreSetup = (
-    RepulsionCoreSetup
-    | ShortRangeBondCoreSetup
-    | DispersionD3CoreSetup
-    | DispersionD4CoreSetup
-    | IESCoreSetup
-    | HalogenCoreSetup
-    | ES2CoreSetup
-    | ES3CoreSetup
-    | AES2CoreSetup
-    | D4SCCoreSetup
-    | GeneralizedBornCoreSetup
-)
+CoreSetup = Union[
+    RepulsionCoreSetup,
+    ShortRangeBondCoreSetup,
+    DispersionD3CoreSetup,
+    DispersionD4CoreSetup,
+    IESCoreSetup,
+    HalogenCoreSetup,
+    CustomClassicalCoreSetup,
+    ES2CoreSetup,
+    ES3CoreSetup,
+    AES2CoreSetup,
+    D4SCCoreSetup,
+    GeneralizedBornCoreSetup,
+]
 
 
 class ClassicalTermDescriptor(Node):
@@ -346,7 +374,11 @@ class _ModelSetupAdapter(nn.Module):
 def _classical_term_kind(
     component: Classical, setup: CoreSetup | None
 ) -> tuple[str, bool] | None:
-    """Describe only exact built-ins whose setup is already captured."""
+    """Describe built-in and tensor-only custom Classical core setups."""
+    if type(component) not in BUILTIN_CLASSICAL_TYPES and isinstance(
+        setup, CustomClassicalCoreSetup
+    ):
+        return ("custom", True)
     kinds: dict[type, tuple[type, str, bool]] = {
         Repulsion: (RepulsionCoreSetup, "repulsion", False),
         ShortRangeBond: (ShortRangeBondCoreSetup, "srb", False),
@@ -1092,6 +1124,21 @@ class System:
         default=None, repr=False
     )
     """Setup-time ownership and tensor-version snapshot for fast validation."""
+
+    _custom_classical_snapshots: tuple[
+        tuple[Classical, ComponentMutationSnapshot, Any], ...
+    ] = field(default=(), repr=False)
+    """Setup-time ``(component, mutation_snapshot, setup)`` entries for custom Classicals."""
+
+    _auto_classical_ids: dict[int, str] = field(
+        default_factory=dict, repr=False
+    )
+    """Setup-time ``id(component) -> exclude_token`` map for auto-built Classicals."""
+
+    _auto_interaction_ids: dict[int, str] = field(
+        default_factory=dict, repr=False
+    )
+    """Setup-time ``id(interaction) -> exclude_token`` map for auto-built Interactions."""
 
     def singlepoint(
         self,
@@ -2172,6 +2219,24 @@ class System:
                         ("positions",),
                     )
                 )
+            elif type(component) not in BUILTIN_CLASSICAL_TYPES:
+                term = core.classical_term_at(position)
+                if (
+                    term is not None
+                    and term.kind == "custom"
+                    and isinstance(term.setup, CustomClassicalCoreSetup)
+                    and term.setup.matches_component_state(component)
+                ):
+                    expected_classical_terms.append(
+                        (
+                            "custom",
+                            component.label,
+                            position,
+                            term.setup,
+                            True,
+                            ("positions",),
+                        )
+                    )
 
         expected_interaction_terms: list[
             tuple[str, str, int, CoreSetup, tuple[str, ...]]
@@ -2506,6 +2571,9 @@ class Model:
 
         OutputHandler.write_stdout_nf(" - Interactions      ... ", v=4)
 
+        _require_component_instances(
+            self.interaction, Interaction, "Interaction"
+        )
         if any(
             type(interaction)
             in (efield.ElectricField, efield_grad.ElectricFieldGrad)
@@ -2533,13 +2601,68 @@ class Model:
             if not {"all", "d4sc", "disp"} & exclude
             else None
         )
+        auto_interaction_ids = {
+            id(inter): token
+            for inter, token in (
+                (es2, "es2"),
+                (aes2, "aes2"),
+                (es3, "es3"),
+                (d4sc, "d4sc"),
+            )
+            if inter is not None
+        }
 
         interactions = InteractionList(
             es2, aes2, es3, d4sc, *self.interaction, **dd
         )
-        _require_builtin_components(
-            interactions.components, BUILTIN_INTERACTION_TYPES, "Interaction"
+        _require_component_instances(
+            interactions.components, Interaction, "Interaction"
         )
+        if batch_mode == 0:
+            interaction_labels_by_name: dict[str, Interaction] = {}
+            for interaction in interactions.components:
+                previous_inter = interaction_labels_by_name.get(
+                    interaction.label
+                )
+                if (
+                    previous_inter is not None
+                    and previous_inter is not interaction
+                ):
+                    raise ValueError(
+                        "Distinct interactions in a single System share the "
+                        f"label '{interaction.label}'."
+                    )
+                interaction_labels_by_name[interaction.label] = interaction
+
+        # Preserve automatic integral promotion for field-labelled subclasses
+        # and custom multipole interactions.
+        if any(
+            interaction.label == efield.LABEL_EFIELD
+            and type(interaction) is not efield.ElectricField
+            for interaction in interactions.components
+        ):
+            config = _with_int_level(
+                config, max(labels.INTLEVEL_DIPOLE, config.ints.level)
+            )
+        if any(
+            interaction.label == efield_grad.LABEL_EFIELD_GRAD
+            and type(interaction) is not efield_grad.ElectricFieldGrad
+            for interaction in interactions.components
+        ):
+            config = _with_int_level(
+                config, max(labels.INTLEVEL_QUADRUPOLE, config.ints.level)
+            )
+        if self.auto_int_level:
+            custom_int_level = max(
+                (
+                    _custom_interaction_required_int_level(interaction)
+                    for interaction in interactions.components
+                    if type(interaction) not in BUILTIN_INTERACTION_TYPES
+                ),
+                default=0,
+            )
+            if custom_int_level > config.ints.level:
+                config = _with_int_level(config, custom_int_level)
         es2_interaction = next(
             (i for i in interactions.components if type(i) is ES2), None
         )
@@ -2609,6 +2732,7 @@ class Model:
 
         OutputHandler.write_stdout_nf(" - Classicals        ... ", v=4)
 
+        _require_component_instances(self.classical, Classical, "Classical")
         halogen = (
             new_halogen(unique, par, **dd)
             if not {"all", "hal"} & exclude
@@ -2637,12 +2761,23 @@ class Model:
         srb = (
             new_srb(unique, par, **dd) if not {"all", "srb"} & exclude else None
         )
+        auto_classical_ids = {
+            id(comp): token
+            for comp, token in (
+                (halogen, "hal"),
+                (ies, "ies"),
+                (dispersion, "disp"),
+                (repulsion, "rep"),
+                (srb, "srb"),
+            )
+            if comp is not None
+        }
 
         classicals = ClassicalList(
             halogen, ies, dispersion, repulsion, srb, *self.classical, **dd
         )
-        _require_builtin_components(
-            classicals.components, BUILTIN_CLASSICAL_TYPES, "Classical"
+        _require_component_instances(
+            classicals.components, Classical, "Classical"
         )
 
         if batch_mode == 0:
@@ -2681,9 +2816,13 @@ class Model:
                         f"{len(matches)} with distinct labels."
                     )
 
-        # The single-System core captures each built-in setup directly. A
-        # padded or conformer System keeps the D3 setups here instead.
+        # The single-System core captures each built-in and tensor-only custom
+        # setup directly; custom and packed setups are also retained in
+        # ``packed_classical_setups``.
         packed_classical_setups = ClassicalListCache()
+        custom_classical_snapshots: list[
+            tuple[Classical, ComponentMutationSnapshot, Any]
+        ] = []
         d3_setups: list[tuple[DispersionD3, DispersionD3CoreSetup]] = []
         repulsion_classical = next(
             (c for c in classicals.components if type(c) is Repulsion), None
@@ -2713,6 +2852,7 @@ class Model:
             for position, component in enumerate(classicals.components):
                 timer.start(component.label, parent_uid="Classicals")
                 component_setup = component.get_cache(numbers, ihelp)
+                setup: CoreSetup | None
                 if type(component) is DispersionD3:
                     assert isinstance(component_setup, DispersionD3Cache)
                     setup = core_dispersion_d3_setup(
@@ -2739,14 +2879,36 @@ class Model:
                     assert isinstance(component_setup, IESSetup)
                     setup = core_ies_setup(component_setup)
                     ies_setup = setup
-                else:
+                elif type(component) is Halogen:
                     assert isinstance(component_setup, HalogenSetup)
                     setup = core_halogen_setup(component_setup)
                     halogen_setup = setup
+                else:
+                    packed_classical_setups[component.label] = component_setup
+                    comp_snap = snapshot_component_state(component)
+                    custom_classical_snapshots.append(
+                        (
+                            component,
+                            comp_snap,
+                            component_setup,
+                        )
+                    )
+                    setup = (
+                        build_custom_classical_core_setup(
+                            component,
+                            component_setup,
+                            dd,
+                            mutation_snapshot=comp_snap,
+                        )
+                        if can_build_custom_classical_core_setup(
+                            component, component_setup, dd
+                        )
+                        else None
+                    )
                 timer.stop(component.label)
 
                 kind = _classical_term_kind(component, setup)
-                if kind is not None:
+                if kind is not None and setup is not None:
                     classical_terms.append(
                         ClassicalTermDescriptor(
                             kind=kind[0],
@@ -2760,19 +2922,27 @@ class Model:
         else:
             for component in classicals.components:
                 timer.start(component.label, parent_uid="Classicals")
-                setup = component.get_cache(numbers, ihelp)
+                batched_setup = component.get_cache(numbers, ihelp)
                 if component is repulsion_classical:
-                    repulsion_setup = setup
+                    repulsion_setup = batched_setup
                 elif component is srb_classical:
-                    srb_setup = setup
+                    srb_setup = batched_setup
                 elif component is d4_classical:
-                    d4_setup = setup
+                    d4_setup = batched_setup
                 elif component is ies_classical:
-                    ies_setup = setup
+                    ies_setup = batched_setup
                 elif component is halogen_classical:
-                    halogen_setup = setup
+                    halogen_setup = batched_setup
                 else:
-                    packed_classical_setups[component.label] = setup
+                    packed_classical_setups[component.label] = batched_setup
+                    if type(component) not in BUILTIN_CLASSICAL_TYPES:
+                        custom_classical_snapshots.append(
+                            (
+                                component,
+                                snapshot_component_state(component),
+                                batched_setup,
+                            )
+                        )
                 timer.stop(component.label)
 
         OutputHandler.write_stdout("done", v=4)
@@ -2888,6 +3058,9 @@ class Model:
             dd=dd,
             exact_core=exact_core,
             _setup_index_token=setup_index_token,
+            _custom_classical_snapshots=tuple(custom_classical_snapshots),
+            _auto_classical_ids=auto_classical_ids,
+            _auto_interaction_ids=auto_interaction_ids,
         )
 
 

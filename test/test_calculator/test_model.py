@@ -37,7 +37,7 @@ from dxtb._src.components.classicals.base import Classical
 from dxtb._src.components.classicals.dispersion.factory import new_dispersion
 from dxtb._src.components.classicals.repulsion.factory import new_repulsion
 from dxtb._src.components.interactions.coulomb.secondorder import ES2
-from dxtb._src.components.interactions.coulomb.thirdorder import ES3
+from dxtb._src.components.interactions.coulomb.thirdorder import ES3, ES3Cache
 from dxtb._src.constants import labels
 from dxtb._src.exlibs.available import has_libcint
 from dxtb.components.coulomb import new_es2, new_es3
@@ -123,14 +123,64 @@ def test_empty_single_system_has_no_classical_cache_entries() -> None:
     torch.testing.assert_close(result.energy, torch.zeros_like(result.energy))
 
 
-def test_custom_components_are_rejected() -> None:
-    """Model setup accepts only the exact built-in Component types."""
+def test_classical_cache_view_includes_custom_extension_data() -> None:
+    """The view combines family Nodes with setup-time custom Classical values."""
+
+    class ClassicalExtension(Classical):
+        __slots__ = ["scale"]
+
+        def __init__(self) -> None:
+            super().__init__(device=DEVICE, dtype=torch.double)
+            self.scale = torch.tensor(0.125, device=DEVICE, dtype=torch.double)
+            self.label = "ClassicalExtension"
+
+        def get_cache(self, numbers, ihelp=None, **kwargs):
+            _ = (numbers, ihelp, kwargs)
+            return self.scale
+
+        def get_energy(self, positions, cache, **kwargs):
+            _ = kwargs
+            return torch.ones(positions.shape[-2], **DD) * cache
+
+    numbers = torch.tensor([3, 1], device=DEVICE)
+    positions = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.6]], **DD)
+    extension = ClassicalExtension()
+    system = Model(
+        par=ParamModule(GFN1_XTB, **DD),
+        config=Config.create(exclude="scf"),
+        classical=(extension,),
+    ).setup(numbers)
+
+    first = system.classical_cache
+    second = system.classical_cache
+    assert first is not second
+    torch.testing.assert_close(first[extension.label], extension.scale)
+    torch.testing.assert_close(second[extension.label], extension.scale)
+    first[extension.label] = object()
+    torch.testing.assert_close(
+        system.classical_cache[extension.label], extension.scale
+    )
+
+    charge = torch.tensor(0.0, **DD)
+    compatibility = system.classicals.get_energy(
+        positions, second, charge=charge
+    )
+    expected = dict(system.singlepoint(positions, chrg=charge).classical)
+    assert compatibility.keys() == expected.keys()
+    for label, energy in compatibility.items():
+        torch.testing.assert_close(energy, expected[label])
+
+
+def test_custom_components_succeed_and_non_components_are_rejected() -> None:
+    """Model setup accepts custom Classical/Interaction subclasses and rejects non-Components."""
 
     class CustomClassical(Classical):
         def get_cache(self, numbers, ihelp=None, **kwargs):
+            _ = (numbers, ihelp, kwargs)
             return None
 
         def get_energy(self, positions, cache, **kwargs):
+            _ = (cache, kwargs)
             return positions.new_zeros(positions.shape[-2])
 
     class RepulsionExtension(Repulsion):
@@ -143,6 +193,10 @@ def test_custom_components_are_rejected() -> None:
         pass
 
     numbers = torch.tensor([8, 1, 1], device=DEVICE)
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [-1.4, 0.0, 0.0]],
+        **DD,
+    )
     par = ParamModule(GFN1_XTB, **DD)
     unique = torch.unique(numbers)
     repulsion = new_repulsion(unique, par, **DD)
@@ -150,7 +204,7 @@ def test_custom_components_are_rejected() -> None:
     es3 = new_es3(unique, par, dtype=torch.double)
     assert repulsion is not None and es2 is not None and es3 is not None
 
-    classicals = (
+    for classical in (
         CustomClassical(device=DEVICE, dtype=torch.double),
         RepulsionExtension(
             repulsion.arep,
@@ -163,16 +217,15 @@ def test_custom_components_are_rejected() -> None:
             en=repulsion.en,
             enscale=repulsion.enscale,
         ),
-    )
-    for classical in classicals:
-        with pytest.raises(TypeError, match="Only the built-in"):
-            Model(
-                par=par,
-                config=Config.create(exclude="rep"),
-                classical=(classical,),
-            ).setup(numbers)
+    ):
+        sys_c = Model(
+            par=par,
+            config=Config.create(exclude=("rep", "scf")),
+            classical=(classical,),
+        ).setup(numbers)
+        assert torch.isfinite(sys_c.singlepoint(positions).energy).all()
 
-    interactions = (
+    for interaction in (
         ES2Extension(
             es2.hubbard,
             es2.lhubbard,
@@ -186,16 +239,24 @@ def test_custom_components_are_rejected() -> None:
             shell_scale=es3.shell_scale,
             dtype=torch.double,
         ),
-    )
-    for interaction in interactions:
-        with pytest.raises(TypeError, match="Only the built-in"):
-            Calculator(
-                numbers,
-                par,
-                interaction=(interaction,),
-                opts={"verbosity": 0, "exclude": ["es2", "es3"]},
-                dtype=torch.double,
-            )
+    ):
+        calc = Calculator(
+            numbers,
+            par,
+            interaction=(interaction,),
+            opts={
+                "verbosity": 0,
+                "int_driver": "pytorch",
+                "exclude": ["es2", "es3"],
+            },
+            dtype=torch.double,
+        )
+        assert torch.isfinite(calc.energy(positions)).all()
+
+    with pytest.raises(TypeError, match="Classical"):
+        Model(par=par, classical=(object(),)).setup(numbers)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="Interaction"):
+        Model(par=par, interaction=(object(),)).setup(numbers)  # type: ignore[arg-type]
 
 
 def test_single_system_rejects_ambiguous_labels() -> None:
@@ -220,6 +281,20 @@ def test_single_system_rejects_ambiguous_labels() -> None:
             classical=(first_d3, second_d3),
         ).setup(numbers)
 
+    class D3Extension(DispersionD3):
+        pass
+
+    extension = D3Extension(
+        first_d3.numbers, first_d3.param, dtype=torch.double, device=DEVICE
+    )
+    first_d3.label = extension.label = "D3:shared-ext"
+    with pytest.raises(ValueError, match="D3:shared-ext"):
+        Model(
+            par=par,
+            config=Config.create(exclude="disp"),
+            classical=(first_d3, extension),
+        ).setup(numbers)
+
     repulsion_a = new_repulsion(numbers.unique(), par, **DD)
     repulsion_b = new_repulsion(numbers.unique(), par, **DD)
     assert repulsion_a is not None and repulsion_b is not None
@@ -229,6 +304,41 @@ def test_single_system_rejects_ambiguous_labels() -> None:
             par=par,
             config=Config.create(exclude="rep"),
             classical=(repulsion_a, repulsion_b),
+        ).setup(numbers)
+
+    class RepulsionExtension(Repulsion):
+        pass
+
+    repulsion_extension_a = RepulsionExtension(
+        repulsion_a.arep,
+        repulsion_a.zeff,
+        repulsion_a.kexp,
+        repulsion_a.klight,
+        repulsion_a.cutoff,
+        device=DEVICE,
+        dtype=torch.double,
+        en=repulsion_a.en,
+        enscale=repulsion_a.enscale,
+    )
+    repulsion_extension_b = RepulsionExtension(
+        repulsion_b.arep,
+        repulsion_b.zeff,
+        repulsion_b.kexp,
+        repulsion_b.klight,
+        repulsion_b.cutoff,
+        device=DEVICE,
+        dtype=torch.double,
+        en=repulsion_b.en,
+        enscale=repulsion_b.enscale,
+    )
+    repulsion_extension_a.label = repulsion_extension_b.label = (
+        "Repulsion:two-subclasses"
+    )
+    with pytest.raises(ValueError, match="Repulsion:two-subclasses"):
+        Model(
+            par=par,
+            config=Config.create(exclude="rep,disp"),
+            classical=(repulsion_extension_a, repulsion_extension_b),
         ).setup(numbers)
 
     d3_repulsion = new_repulsion(numbers.unique(), par, **DD)
@@ -348,6 +458,116 @@ def test_es3_custom_exact_replaces_excluded_builtin() -> None:
     result = system.singlepoint(positions)
     assert torch.isfinite(result.energy).all()
     assert not torch.isclose(result.energy.sum(), reference_result.energy.sum())
+
+
+def test_es2_subclass_evaluates_via_custom_interaction_path() -> None:
+    """A custom ES2 subclass evaluates through SCF without taking the built-in slot."""
+
+    class ES2Extension(ES2):
+        __slots__ = ("cache_calls",)
+
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.cache_calls = 0
+
+        def get_cache(self, **kwargs):
+            self.cache_calls += 1
+            return super().get_cache(**kwargs)
+
+    numbers = torch.tensor([8, 1, 1], device=DEVICE)
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [-1.4, 0.0, 0.0]],
+        **DD,
+    )
+    par = ParamModule(GFN1_XTB, **DD)
+    original = new_es2(torch.unique(numbers), par, dtype=torch.double)
+    assert original is not None
+    custom = ES2Extension(
+        original.hubbard,
+        original.lhubbard,
+        average=original.average,
+        gexp=original.gexp,
+        shell_resolved=original.shell_resolved,
+        dtype=torch.double,
+    )
+    custom.label = "ES2"
+    ref_system = Model(
+        par=par, config=Config.create(int_driver="pytorch")
+    ).setup(numbers)
+    system = Model(
+        par=par,
+        config=Config.create(exclude="es2", int_driver="pytorch"),
+        interaction=(custom,),
+    ).setup(numbers)
+
+    assert system.es2_setup is None
+    assert system.es2_interaction is None
+    result = system.singlepoint(positions)
+    assert custom.cache_calls == 1
+    torch.testing.assert_close(
+        result.energy, ref_system.singlepoint(positions).energy
+    )
+
+
+def test_es3_subclass_keeps_custom_interaction_and_mutation() -> None:
+    """An ES3 subclass uses its cache hook, evaluates in SCF, and stays mutable."""
+
+    class ES3Extension(ES3):
+        __slots__ = ("extension_scale", "cache_calls", "reset_calls")
+
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.extension_scale = torch.tensor(1.0, **DD)
+            self.cache_calls = 0
+            self.reset_calls = 0
+
+        def get_cache(self, **kwargs):
+            self.cache_calls += 1
+            cache = super().get_cache(**kwargs)
+            return ES3Cache(
+                cache.hd * self.extension_scale,
+                shell_resolved=cache.shell_resolved,
+            )
+
+        def reset(self) -> None:
+            self.reset_calls += 1
+            super().reset()
+
+    numbers = torch.tensor([8, 1, 1], device=DEVICE)
+    positions = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [-1.4, 0.0, 0.0]],
+        **DD,
+    )
+    par = ParamModule(GFN1_XTB, **DD)
+    original = new_es3(torch.unique(numbers), par, dtype=torch.double)
+    assert original is not None
+    custom = ES3Extension(
+        original.hubbard_derivs,
+        shell_scale=original.shell_scale,
+        dtype=torch.double,
+    )
+    custom.label = "ES3"
+    calc = Calculator(
+        numbers,
+        par,
+        interaction=(custom,),
+        opts={"verbosity": 0, "int_driver": "pytorch", "exclude": "es3"},
+        dtype=torch.double,
+    )
+
+    assert calc.system.es3_setup is None
+    first = calc.singlepoint(positions)
+    assert custom.cache_calls == 1
+    calc.interactions.update("ES3", extension_scale=torch.tensor(2.0, **DD))
+    assert custom.extension_scale.item() == 2.0
+    second = calc.singlepoint(positions.clone())
+    assert custom.cache_calls == 2
+    assert not torch.allclose(first.energy, second.energy)
+    calc.interactions.reset("ES3")
+    assert custom.reset_calls == 1
+    calc.reset()
+    assert custom.reset_calls == 2
+    assert custom.extension_scale.item() == 2.0
 
 
 def test_exact_es2_es3_mutations_are_rejected() -> None:

@@ -26,6 +26,7 @@ from dxtb._src.typing import Slicer as Slicer
 from dxtb._src.typing import Slicers as Slicers
 from dxtb._src.typing import Tensor as Tensor
 from dxtb._src.typing import TensorLike as TensorLike
+from dxtb._src.typing import override as override
 
 __all__ = [
     "DD",
@@ -33,4 +34,5 @@ __all__ = [
     "Slicers",
     "Tensor",
     "TensorLike",
+    "override",
 ]

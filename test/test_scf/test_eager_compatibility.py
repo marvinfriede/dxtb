@@ -34,16 +34,12 @@ from dxtb._src.calculators.singlepoint import (
 from dxtb._src.components.interactions import InteractionList
 from dxtb._src.components.interactions.field.efield import ElectricField
 from dxtb._src.components.interactions.field.efieldgrad import ElectricFieldGrad
-from dxtb._src.scf import iterator as scf_iterator
 from dxtb._src.scf import anderson as functional_anderson
-from dxtb._src.scf import eager as functional_eager
 from dxtb._src.scf import converger as functional_method
+from dxtb._src.scf import eager as functional_eager
+from dxtb._src.scf import iterator as scf_iterator
 from dxtb._src.scf import problem as functional_problem
-from dxtb._src.scf import (
-    resolve_scf_plan,
-    run_eager_scf,
-    run_prepared_scf,
-)
+from dxtb._src.scf import resolve_scf_plan, run_eager_scf, run_prepared_scf
 from dxtb._src.scf import solver as functional_solver
 from dxtb._src.scf import spectral as functional_spectral
 from dxtb._src.scf.data import setup_scf_inputs
@@ -612,24 +608,37 @@ def test_eager_failure_order_is_chronological(
         _check_subsolve_status(synthetic)
 
 
-def test_custom_interaction_extension_is_explicitly_unsupported() -> None:
-    """Unsupported interaction subclasses never select a legacy engine."""
+def test_custom_interaction_extension_is_supported_and_non_interaction_rejected() -> (
+    None
+):
+    """Custom Interaction subclasses resolve an SCF plan while non-Interactions fail."""
     case = _prepare_case(GFN1_XTB)
 
     class ExtendedField(ElectricField):
-        """A custom field extension outside the interaction API."""
+        """A custom field subclass evaluated through the custom Interaction path."""
 
-    field = ExtendedField(torch.zeros(3, dtype=torch.float64))
+    field = ExtendedField(
+        torch.zeros(3, dtype=case.positions.dtype, device=case.positions.device)
+    )
     interactions = InteractionList(
         *case.interactions.components,
         field,
         device=case.positions.device,
         dtype=case.positions.dtype,
     )
+    plan = resolve_scf_plan(
+        case.system.config.scf, interactions, case.system.ihelp
+    )
+    assert plan is not None
+
+    invalid = InteractionList(
+        *case.interactions.components,
+        device=case.positions.device,
+        dtype=case.positions.dtype,
+    )
+    invalid.components.append(object())  # type: ignore[arg-type]
     with pytest.raises(NotImplementedError, match="interaction extension"):
-        resolve_scf_plan(
-            case.system.config.scf, interactions, case.system.ihelp
-        )
+        resolve_scf_plan(case.system.config.scf, invalid, case.system.ihelp)
 
 
 @pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB], ids=["gfn1", "gfn2"])
@@ -979,7 +988,7 @@ def test_prepared_runner_rejects_variable_mismatch() -> None:
     route = resolve_scf_plan(
         case.system.config.scf, case.interactions, case.system.ihelp
     )
-    from dxtb.scf import SCFVariable, SCFStrategy
+    from dxtb.scf import SCFStrategy, SCFVariable
 
     stage = replace(
         case.system.config.scf.strategy.stages[0],
@@ -989,7 +998,9 @@ def test_prepared_runner_rejects_variable_mismatch() -> None:
         case.system.config.scf,
         strategy=SCFStrategy((stage,)),
     )
-    with pytest.raises(ValueError, match="SCF variable of the prepared SCF plan does not match"):
+    with pytest.raises(
+        ValueError, match="SCF variable of the prepared SCF plan does not match"
+    ):
         run_prepared_scf(
             case.system.numbers,
             case.initial_charges,
@@ -1061,12 +1072,8 @@ def test_eager_and_fixed_trip_controllers_match(
         case.system.ihelp,
         config,
     )
-    eager = _solve_variable(
-        case.initial_charges, inputs, config, eager=True
-    )
-    fixed = _solve_variable(
-        case.initial_charges, inputs, config, eager=False
-    )
+    eager = _solve_variable(case.initial_charges, inputs, config, eager=True)
+    fixed = _solve_variable(case.initial_charges, inputs, config, eager=False)
     assert eager.converged.item() and fixed.converged.item()
     for field in (
         "energy",

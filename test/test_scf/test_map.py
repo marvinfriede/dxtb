@@ -1145,25 +1145,59 @@ class _MutatingPotentialInteraction(Interaction):
         return torch.zeros_like(qat)
 
 
-def test_eligibility_rejects_custom_mutable_interactions() -> None:
+def test_eligibility_accepts_custom_interactions_and_rejects_non_interactions() -> (
+    None
+):
+    """Custom Interaction subclasses are eligible for SCF while non-Interactions fail."""
     case = _prepare_case(GFN1_XTB)
     custom = _MutatingPotentialInteraction()
-    interactions = InteractionList(custom, device="cpu", dtype=torch.float64)
-
-    # Ordinary interaction construction remains available to the legacy path.
-    assert len(interactions.components) == 1
-    assert interactions.components[0] is custom
-    with pytest.raises(TypeError, match="exact migrated built-in"):
-        validate_scf_interactions(interactions)
+    interactions = InteractionList(
+        *case.interactions.components,
+        custom,
+        device="cpu",
+        dtype=torch.float64,
+    )
+    eligible, names = scf_interactions_eligible(interactions)
+    assert eligible is True and names == ""
+    validate_scf_interactions(interactions)
     assert custom.calls == 0
-    with pytest.raises(TypeError, match="exact migrated built-in"):
+
+    interaction_data = InteractionListCache()
+    for key, val in case.interaction_data.items():
+        interaction_data[key] = val
+    interaction_data[custom.label] = custom.get_cache(
+        numbers=case.system.numbers,
+        positions=case.positions,
+        ihelp=case.system.ihelp,
+    )
+    inputs = setup_scf_inputs(
+        case.system.numbers,
+        case.integrals,
+        case.n0,
+        case.occupation,
+        case.nel,
+        interactions,
+        interaction_data,
+        case.system.ihelp,
+        case.system.config.scf,
+    )
+    scf_map(case.x, inputs)
+    assert custom.calls >= 1
+
+    invalid = InteractionList(device="cpu", dtype=torch.float64)
+    invalid.components.append(object())  # type: ignore[arg-type]
+    eligible_bad, names_bad = scf_interactions_eligible(invalid)
+    assert eligible_bad is False and "object" in names_bad
+    with pytest.raises(TypeError, match="Interaction"):
+        validate_scf_interactions(invalid)
+    with pytest.raises(TypeError, match="Interaction"):
         setup_scf_inputs(
             case.system.numbers,
             case.integrals,
             case.n0,
             case.occupation,
             case.nel,
-            interactions,
+            invalid,
             case.interaction_data,
             case.system.ihelp,
             case.system.config.scf,

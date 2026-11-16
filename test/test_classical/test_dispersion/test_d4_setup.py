@@ -164,8 +164,8 @@ def test_gfn2_d4_classical_list_compatibility_view_parity() -> None:
         torch.testing.assert_close(energy, expected[label])
 
 
-def test_setup_q_override_and_subclass_are_rejected() -> None:
-    """Setup-time charges and D4 subclasses are no longer accepted."""
+def test_setup_q_override_is_rejected() -> None:
+    """Setup-time charges on D4.get_cache are no longer accepted."""
     numbers, _ = _geometry()
     dispersion = DispersionD4(
         numbers,
@@ -176,23 +176,6 @@ def test_setup_q_override_and_subclass_are_rejected() -> None:
     q = torch.linspace(-0.2, 0.2, numbers.numel(), **DD)
     with pytest.raises(TypeError, match="q"):
         dispersion.get_cache(numbers, q=q)
-
-    class D4Extension(DispersionD4):
-        pass
-
-    extension = D4Extension(
-        numbers,
-        dispersion.param,
-        charge=dispersion.charge,
-        ref_charges=dispersion.ref_charges,
-        **DD,
-    )
-    with pytest.raises(TypeError, match="Only the built-in"):
-        Model(
-            par=_parameters(self_consistent=False),
-            config=Config.create(exclude=("disp", "scf")),
-            classical=(extension,),
-        ).setup(numbers)
 
 
 def test_direct_compatibility_preserves_d4_model_subclass() -> None:
@@ -588,12 +571,102 @@ def test_duplicate_classical_d4_labels_are_rejected() -> None:
         ).setup(numbers)
 
 
+def test_d4_subclass_supports_custom_hooks_update_and_reset() -> None:
+    """A D4 subclass keeps its cache, energy, update, and reset hooks."""
+    numbers, positions = _geometry()
+    par = _parameters(self_consistent=False)
+    base = DispersionD4(
+        numbers,
+        {"a1": torch.tensor(0.5, **DD)},
+        charge=torch.tensor(0.0, **DD),
+        **DD,
+    )
+
+    class D4Extension(DispersionD4):
+        __slots__ = (
+            "scale",
+            "initial_scale",
+            "cache_calls",
+            "energy_calls",
+            "reset_calls",
+        )
+
+        def __init__(self) -> None:
+            super().__init__(
+                base.numbers,
+                base.param,
+                charge=base.charge,
+                ref_charges=base.ref_charges,
+                **DD,
+            )
+            self.label = "DispersionD4"
+            self.scale = torch.tensor(2.0, **DD)
+            self.initial_scale = self.scale.clone()
+            self.cache_calls = 0
+            self.energy_calls = 0
+            self.reset_calls = 0
+
+        def get_cache(self, numbers, ihelp=None, **kwargs):
+            _ = (numbers, ihelp, kwargs)
+            self.cache_calls += 1
+            return self.scale.clone()
+
+        def get_energy(self, positions, cache, **kwargs):
+            _ = kwargs
+            self.energy_calls += 1
+            return positions.new_ones(positions.shape[-2]) * cache
+
+        def reset(self) -> None:
+            self.reset_calls += 1
+            self.scale = self.initial_scale.clone()
+
+    extension = D4Extension()
+    system = Model(
+        par=par,
+        config=Config.create(exclude=("disp", "scf")),
+        classical=(extension,),
+    ).setup(numbers)
+
+    assert system.d4_setup is None
+    assert system.d4_classical is None
+    assert extension.cache_calls == 1
+    energy = _classical_energy(system.singlepoint(positions))
+    assert extension.energy_calls == 1
+    torch.testing.assert_close(
+        energy, torch.tensor(2.0 * positions.shape[-2], **DD)
+    )
+
+    system.classicals.update("DispersionD4", scale=torch.tensor(3.0, **DD))
+    updated = _classical_energy(system.singlepoint(positions.clone()))
+    torch.testing.assert_close(
+        updated, torch.tensor(3.0 * positions.shape[-2], **DD)
+    )
+    system.classicals.reset("DispersionD4")
+    reset = _classical_energy(system.singlepoint(positions.clone()))
+    torch.testing.assert_close(reset, energy)
+    system.classicals.reset_all()
+    assert extension.reset_calls == 2
+    assert extension.cache_calls == 3
+
+    calculator_extension = D4Extension()
+    calc = Calculator(
+        numbers,
+        par,
+        classical=(calculator_extension,),
+        opts={"exclude": ("disp", "scf"), "verbosity": 0},
+        dtype=torch.double,
+        auto_int_level=False,
+    )
+    calc.reset()
+    assert calculator_extension.reset_calls == 1
+
+
 def test_core_node_call_q_model_gradients_and_unsupported_types() -> None:
     """Core D4 setup takes call-time charges, model tensor gradients, and type checks."""
     numbers, positions = _geometry()
-    dispersion = _system(_parameters(self_consistent=False)).setup(
-        numbers
-    ).d4_classical
+    dispersion = (
+        _system(_parameters(self_consistent=False)).setup(numbers).d4_classical
+    )
     assert dispersion is not None
     q = torch.linspace(-0.2, 0.2, numbers.numel(), **DD)
     base_core = core_dispersion_d4_setup(dispersion.get_cache(numbers))

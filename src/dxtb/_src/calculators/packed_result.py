@@ -43,7 +43,12 @@ from dxtb._src.calculators.lane_evaluation import (
     evaluate_lane_group,
     group_lanes,
 )
-from dxtb._src.calculators.model import Model, System
+from dxtb._src.calculators.model import (
+    BUILTIN_CLASSICAL_TYPES,
+    BUILTIN_INTERACTION_TYPES,
+    Model,
+    System,
+)
 from dxtb._src.calculators.result import ChargeResult, PotentialResult, Result
 from dxtb._src.calculators.singlepoint import _call_tensor
 from dxtb._src.calculators.types.base import (
@@ -51,16 +56,20 @@ from dxtb._src.calculators.types.base import (
     _convert_system_dtype,
 )
 from dxtb._src.calculators.types.energy import check_singlepoint_options
+from dxtb._src.components.custom import (
+    CustomClassicalCoreSetup,
+    snapshot_component_state,
+)
 from dxtb._src.constants import defaults
 from dxtb._src.scf.eager import _raise_failure_code
 from dxtb._src.scf.status import SCFStatus
 from dxtb._src.timing import timer
 from dxtb._src.typing import DD, Tensor
-from dxtb._src.utils.tensors import disable_functorch
 from dxtb._src.typing.exceptions import (
     SCFConvergenceError,
     SCFConvergenceWarning,
 )
+from dxtb._src.utils.tensors import disable_functorch
 
 __all__ = [
     "build_calculator_lane_systems",
@@ -130,9 +139,11 @@ def _pad_last_dim(
 
     return torch.stack(
         [
-            t
-            if t.shape[-1] == target_len
-            else F.pad(t, (0, target_len - t.shape[-1]))
+            (
+                t
+                if t.shape[-1] == target_len
+                else F.pad(t, (0, target_len - t.shape[-1]))
+            )
             for t in tensors
         ],
         dim=0,
@@ -465,9 +476,7 @@ def _pack_lane_results(
         like=ref,
     )
 
-    iterations = torch.stack(
-        [r.iterations.reshape(()) for r in results], dim=0
-    )
+    iterations = torch.stack([r.iterations.reshape(()) for r in results], dim=0)
     can_fill_non_scf = all(
         r.converged is not None or r.scf is None or r.density is None
         for r in results
@@ -478,9 +487,7 @@ def _pack_lane_results(
                 (
                     r.converged.reshape(())
                     if r.converged is not None
-                    else torch.tensor(
-                        True, device=ref.device, dtype=torch.bool
-                    )
+                    else torch.tensor(True, device=ref.device, dtype=torch.bool)
                 )
                 for r in results
             ],
@@ -494,12 +501,8 @@ def _pack_lane_results(
         for r in results
     )
     if any(r.residual is not None for r in results) and can_fill_residual:
-        sample_res = next(
-            r.residual for r in results if r.residual is not None
-        )
-        if all(
-            r.residual is None or r.residual.numel() == 1 for r in results
-        ):
+        sample_res = next(r.residual for r in results if r.residual is not None)
+        if all(r.residual is None or r.residual.numel() == 1 for r in results):
             residual = torch.stack(
                 [
                     (
@@ -1049,9 +1052,7 @@ def evaluate_packed_systems(
 
     lane_charges = _normalize_packed_charges(chrg, lane_positions)
     lane_spins = _normalize_packed_spins(spin, lane_positions)
-    lane_fields = _normalize_packed_fields(
-        "field", field, lane_positions, (3,)
-    )
+    lane_fields = _normalize_packed_fields("field", field, lane_positions, (3,))
     lane_field_grads = _normalize_packed_fields(
         "field_grad", field_grad, lane_positions, (3, 3)
     )
@@ -1130,12 +1131,17 @@ def _sync_lane_system_labels(
     """Restore source classical/interaction labels on a lane System without mutating caller components."""
     classical_changed = False
     interaction_changed = False
-    if len(lane_sys.classicals.components) == len(source_classicals):
-        new_classicals = list(lane_sys.classicals.components)
+    old_classical_comps = list(lane_sys.classicals.components)
+    old_classical_labels = [c.label for c in old_classical_comps]
+    if len(old_classical_comps) == len(source_classicals):
+        new_classicals = list(old_classical_comps)
         for idx, (lane_comp, orig_comp) in enumerate(
             zip(new_classicals, source_classicals)
         ):
-            if lane_comp.label != orig_comp.label:
+            if lane_comp.label != orig_comp.label and (
+                type(lane_comp) is type(orig_comp)
+                or lane_comp.label.startswith("__dxtb_lane_setup_")
+            ):
                 if id(lane_comp) in caller_owned_ids:
                     lane_comp = copy.copy(lane_comp)
                     new_classicals[idx] = lane_comp
@@ -1149,7 +1155,10 @@ def _sync_lane_system_labels(
         for idx, (lane_inter, orig_inter) in enumerate(
             zip(new_interactions, source_interactions)
         ):
-            if lane_inter.label != orig_inter.label:
+            if lane_inter.label != orig_inter.label and (
+                type(lane_inter) is type(orig_inter)
+                or lane_inter.label.startswith("__dxtb_lane_setup_")
+            ):
                 if id(lane_inter) in caller_owned_ids:
                     lane_inter = copy.copy(lane_inter)
                     new_interactions[idx] = lane_inter
@@ -1161,12 +1170,66 @@ def _sync_lane_system_labels(
     if not (classical_changed or interaction_changed):
         return lane_sys
 
+    packed_setups = lane_sys._packed_classical_setups
+    custom_snapshots = lane_sys._custom_classical_snapshots
+    auto_classical_ids = lane_sys._auto_classical_ids
+    snap_by_pos: dict[int, Any] = {}
+    if classical_changed:
+        old_to_new_cls = {
+            id(old_c): id(new_c)
+            for old_c, new_c in zip(
+                old_classical_comps, lane_sys.classicals.components
+            )
+        }
+        auto_classical_ids = {
+            old_to_new_cls.get(cid, cid): tok
+            for cid, tok in auto_classical_ids.items()
+        }
+        if packed_setups:
+            from dxtb._src.components.classicals.list import ClassicalListCache
+
+            remapped = ClassicalListCache()
+            for old_lbl, comp in zip(
+                old_classical_labels, lane_sys.classicals.components
+            ):
+                if old_lbl in packed_setups:
+                    remapped[comp.label] = packed_setups[old_lbl]
+            packed_setups = remapped
+        old_setup_by_cid = {
+            id(owner): captured_setup
+            for owner, _, captured_setup in custom_snapshots
+        }
+        rebound_snapshots: list[tuple[Any, Any, Any]] = []
+        for pos, (old_c, new_c) in enumerate(
+            zip(old_classical_comps, lane_sys.classicals.components)
+        ):
+            if type(new_c) not in BUILTIN_CLASSICAL_TYPES:
+                new_snap = snapshot_component_state(new_c)
+                snap_by_pos[pos] = new_snap
+                if id(old_c) in old_setup_by_cid:
+                    rebound_snapshots.append(
+                        (
+                            new_c,
+                            new_snap,
+                            old_setup_by_cid[id(old_c)],
+                        )
+                    )
+        custom_snapshots = tuple(rebound_snapshots)
+
     exact_core = lane_sys.exact_core
     if exact_core is not None:
         new_c_terms = tuple(
             replace(
                 term,
                 label=lane_sys.classicals.components[term.position].label,
+                setup=(
+                    term.setup.with_converted_component(
+                        lane_sys.classicals.components[term.position],
+                        mutation_snapshot=snap_by_pos.get(term.position),
+                    )
+                    if isinstance(term.setup, CustomClassicalCoreSetup)
+                    else term.setup
+                ),
             )
             for term in exact_core.classical_terms
         )
@@ -1185,6 +1248,9 @@ def _sync_lane_system_labels(
     return replace(
         lane_sys,
         exact_core=exact_core,
+        _packed_classical_setups=packed_setups,
+        _custom_classical_snapshots=custom_snapshots,
+        _auto_classical_ids=auto_classical_ids,
     )
 
 
@@ -1206,13 +1272,35 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
     batch_size = int(calc.numbers.shape[0])
     source_classicals = tuple(calc.classicals.components)
     source_interactions = tuple(calc.interactions.components)
-    model_classicals = tuple(calc.model.classical)
-    model_interactions = tuple(calc.model.interaction)
+    auto_cls_ids = calc.system._auto_classical_ids
+    auto_int_ids = calc.system._auto_interaction_ids
+    explicit_classicals = tuple(
+        c for c in source_classicals if id(c) not in auto_cls_ids
+    )
+    explicit_interactions = tuple(
+        i for i in source_interactions if id(i) not in auto_int_ids
+    )
+    present_cls_ids = {id(c) for c in source_classicals}
+    present_int_ids = {id(i) for i in source_interactions}
+    removed_tokens = {
+        tok for cid, tok in auto_cls_ids.items() if cid not in present_cls_ids
+    } | {tok for iid, tok in auto_int_ids.items() if iid not in present_int_ids}
+    setup_config = (
+        replace(
+            calc.opts,
+            exclude=tuple(
+                dict.fromkeys([*calc.opts.exclude, *sorted(removed_tokens)])
+            ),
+        )
+        if removed_tokens
+        else calc.opts
+    )
+
     caller_owned_ids = {
         id(c)
         for c in (
-            *model_classicals,
-            *model_interactions,
+            *calc.model.classical,
+            *calc.model.interaction,
             *source_classicals,
             *source_interactions,
         )
@@ -1220,6 +1308,10 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
 
     current_labels = [c.label for c in source_classicals]
     has_label_collision = len(set(current_labels)) < len(current_labels)
+    current_int_labels = [i.label for i in source_interactions]
+    has_int_label_collision = len(set(current_int_labels)) < len(
+        current_int_labels
+    )
 
     # Atomic numbers are structural metadata: resolve them on the host with
     # one transfer per tensor instead of one scalar transfer per atom. The
@@ -1228,7 +1320,7 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
         host_numbers = calc.numbers.detach().cpu().tolist()
         host_component_numbers = [
             (id(c), c.numbers.detach().cpu().tolist())
-            for c in model_classicals
+            for c in (*explicit_classicals, *explicit_interactions)
             if getattr(c, "numbers", None) is not None
             and isinstance(c.numbers, Tensor)
             and c.numbers.ndim == 2
@@ -1246,7 +1338,7 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
         dedup_key = (
             tuple(int(host_row[slot]) for slot in real_slots),
             comp_nums_key,
-            calc.opts,
+            setup_config,
             calc.dtype,
             calc.device,
             tuple((id(c), c.label) for c in source_classicals),
@@ -1260,38 +1352,76 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                 real_slots, dtype=torch.long, device=calc.numbers.device
             )
             row_nums = calc.numbers[idx].index_select(0, slots)
+            setup_dd: DD = (
+                {"device": calc.device, "dtype": calc.model.par.dtype}
+                if calc.dtype != calc.model.par.dtype
+                else calc.dd
+            )
             lane_classical_list = []
-            for c_idx, comp in enumerate(model_classicals):
+            for c_idx, comp in enumerate(explicit_classicals):
                 has_2d_nums = (
                     getattr(comp, "numbers", None) is not None
                     and isinstance(comp.numbers, Tensor)
                     and comp.numbers.ndim == 2
                 )
-                # Caller-owned Components are never mutated in place.
-                c_copy = copy.copy(comp)
-                if has_2d_nums:
-                    c_copy.numbers = comp.numbers[idx].index_select(
-                        0, slots.to(comp.numbers.device)
+                if (
+                    has_2d_nums
+                    or has_label_collision
+                    or type(comp) in BUILTIN_CLASSICAL_TYPES
+                ):
+                    # Caller-owned Components are never mutated in place.
+                    c_copy = (
+                        comp.type(setup_dd["dtype"])
+                        if type(comp) in BUILTIN_CLASSICAL_TYPES
+                        and comp.dtype != setup_dd["dtype"]
+                        else copy.copy(comp)
                     )
-                if has_label_collision:
-                    c_copy.label = f"__dxtb_lane_setup_{c_idx}_{comp.label}"
-                lane_classical_list.append(c_copy)
+                    if has_2d_nums:
+                        c_copy.numbers = comp.numbers[idx].index_select(
+                            0, slots.to(comp.numbers.device)
+                        )
+                    if has_label_collision:
+                        c_copy.label = f"__dxtb_lane_setup_{c_idx}_{comp.label}"
+                    lane_classical_list.append(c_copy)
+                else:
+                    lane_classical_list.append(comp)
 
-            lane_interaction_list = [
-                copy.copy(inter) for inter in model_interactions
-            ]
+            lane_interaction_list = []
+            for i_idx, inter in enumerate(explicit_interactions):
+                inter_has_2d_nums = (
+                    getattr(inter, "numbers", None) is not None
+                    and isinstance(inter.numbers, Tensor)
+                    and inter.numbers.ndim == 2
+                )
+                if (
+                    inter_has_2d_nums
+                    or has_int_label_collision
+                    or type(inter) in BUILTIN_INTERACTION_TYPES
+                ):
+                    i_copy = (
+                        inter.type(setup_dd["dtype"])
+                        if type(inter) in BUILTIN_INTERACTION_TYPES
+                        and inter.dtype != setup_dd["dtype"]
+                        else copy.copy(inter)
+                    )
+                    if inter_has_2d_nums:
+                        i_copy.numbers = inter.numbers[idx].index_select(
+                            0, slots.to(inter.numbers.device)
+                        )
+                    if has_int_label_collision:
+                        i_copy.label = (
+                            f"__dxtb_lane_setup_{i_idx}_{inter.label}"
+                        )
+                    lane_interaction_list.append(i_copy)
+                else:
+                    lane_interaction_list.append(inter)
 
             lane_model = Model(
                 par=calc.model.par,
-                config=calc.opts,
+                config=setup_config,
                 classical=tuple(lane_classical_list),
                 interaction=tuple(lane_interaction_list),
-                auto_int_level=False,
-            )
-            setup_dd: DD = (
-                {"device": calc.device, "dtype": calc.model.par.dtype}
-                if calc.dtype != calc.model.par.dtype
-                else calc.dd
+                auto_int_level=calc.model.auto_int_level,
             )
             lane_sys = lane_model.setup(row_nums, batch_mode=0, dd=setup_dd)
             lane_sys = _sync_lane_system_labels(
@@ -1325,9 +1455,7 @@ def evaluate_calculator_packed_singlepoint(
     ``Calculator.singlepoint`` calls.
     """
     check_singlepoint_options(kwargs, "singlepoint")
-    resolved_field, resolved_field_grad = calc._check_fields(
-        field, field_grad
-    )
+    resolved_field, resolved_field_grad = calc._check_fields(field, field_grad)
     assert shape_checks(calc.numbers, positions, allow_batched=True)
     assert content_checks(
         calc.numbers,
@@ -1348,7 +1476,9 @@ def evaluate_calculator_packed_singlepoint(
     lane_systems = build_calculator_lane_systems(calc)
     # The Calculator synchronizes CUDA in its SCF timer unless told otherwise.
     kwargs.setdefault("cuda_sync_in_scf", positions.device.type != "cpu")
-    atom_masks = tuple(calc.numbers[idx] > 0 for idx in range(len(lane_systems)))
+    atom_masks = tuple(
+        calc.numbers[idx] > 0 for idx in range(len(lane_systems))
+    )
     target_atoms = int(calc.numbers.shape[1])
     result = evaluate_packed_systems(
         lane_systems,

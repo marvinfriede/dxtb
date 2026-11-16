@@ -29,6 +29,7 @@ from dxtb._src.calculators.model import Model
 from dxtb._src.calculators.singlepoint import _interaction_data
 from dxtb._src.components.classicals.dispersion import _d4_adapter as d4
 from dxtb._src.components.interactions import InteractionList
+from dxtb._src.components.interactions.base import InteractionCache
 from dxtb._src.components.interactions.dispersion.d4sc import (
     D4SCCoreSetup,
     D4SCSetup,
@@ -580,14 +581,37 @@ def test_duplicate_d4sc_labels_are_rejected() -> None:
         ).setup(numbers)
 
 
-def test_subclass_is_rejected() -> None:
-    """D4SC subclasses are custom Interactions and fail at setup."""
-    numbers, _ = _sample()
+def test_subclass_stays_on_fresh_custom_cache_path() -> None:
+    """D4SC subclasses keep their update/reset, get_cache, and SCF evaluation hooks."""
+    numbers, positions = _sample()
     base = new_d4sc(numbers, _parameters(), **DD)
     assert base is not None
 
+    class ScaleCache(InteractionCache):
+        __slots__ = ("scale",)
+
+        def __init__(self, scale: Tensor) -> None:
+            super().__init__(**DD)
+            self.scale = scale
+
     class D4SCExtension(DispersionD4SC):
-        pass
+        __slots__ = ("scale",)
+
+        def get_cache(self, *, numbers=None, positions=None, ihelp=None, **_):
+            _ = ihelp
+            assert numbers is not None and positions is not None
+            return ScaleCache(self.scale.clone())
+
+        def get_monopole_atom_potential(
+            self, cache, qat, qdp=None, qqp=None
+        ) -> Tensor:
+            _ = (qat, qdp, qqp)
+            assert isinstance(cache, ScaleCache)
+            return torch.full_like(qat, cache.scale)
+
+        def get_monopole_atom_energy(self, cache, qat, **_) -> Tensor:
+            assert isinstance(cache, ScaleCache)
+            return cache.scale * qat
 
     extension = D4SCExtension(
         base.param,
@@ -599,13 +623,35 @@ def test_subclass_is_rejected() -> None:
         base.damping_function,
         **DD,
     )
-    with pytest.raises(TypeError, match="Only the built-in"):
-        Model(
-            par=_parameters(),
-            interaction=(extension,),
-            config=Config.create(exclude=("d4sc", "es2", "es3", "aes2")),
-            auto_int_level=False,
-        ).setup(numbers)
+    extension.label = base.label
+    extension.scale = torch.tensor(1.0, **DD)
+    system = Model(
+        par=_parameters(),
+        interaction=(extension,),
+        config=Config.create(
+            exclude=("d4sc", "es2", "es3", "aes2"), int_driver="pytorch"
+        ),
+        auto_int_level=False,
+    ).setup(numbers)
+    assert system.d4sc_setup is None
+    assert system.d4sc_interaction is None
+    q = torch.tensor([0.2, -0.1], **DD)
+
+    first_data = _interaction_data(system, positions)[extension.label]
+    first_energy = extension.get_monopole_atom_energy(first_data, q).sum()
+    first_scf = system.singlepoint(positions).energy
+    extension.update(scale=torch.tensor(2.0, **DD))
+    second_data = _interaction_data(system, positions)[extension.label]
+    second_energy = extension.get_monopole_atom_energy(second_data, q).sum()
+    second_scf = system.singlepoint(positions).energy
+    assert first_data is not second_data
+    assert not torch.equal(first_energy, second_energy)
+    assert not torch.allclose(first_scf, second_scf)
+
+    extension.reset()
+    system.interactions.reset_all()
+    after_reset = _interaction_data(system, positions)[extension.label]
+    torch.testing.assert_close(after_reset.scale, extension.scale)
 
 
 def test_calculator_reset_preserves_exact_d4sc_setup() -> None:
@@ -735,4 +781,3 @@ def test_setup_d4sc_rejects_non_rational_damping() -> None:
             config=Config.create(exclude=("d4sc", "es2", "es3", "aes2")),
             auto_int_level=False,
         ).setup(numbers)
-

@@ -144,7 +144,9 @@ def test_upstream_eeq_optional_solve_modes_match_schur() -> None:
         charges, energy = setup.eeq.solve(
             structure, cn, return_energy=True, solve_mode=mode
         )
-        grad = torch.autograd.grad(energy.sum(), positions, retain_graph=True)[0]
+        grad = torch.autograd.grad(energy.sum(), positions, retain_graph=True)[
+            0
+        ]
         references[mode] = (charges, energy, grad)
 
     expected_charges, expected_energy, expected_grad = references["schur"]
@@ -414,33 +416,69 @@ def test_exact_custom_ies_replaces_excluded_builtin_and_mutation_is_rejected() -
         system.classicals.reset("IES")
 
 
-def test_ies_subclass_is_rejected() -> None:
-    """IES subclasses are custom Classicals and fail at setup."""
-    numbers, _ = _geometry()
+def test_ies_subclass_refreshes_custom_cache_and_reset() -> None:
+    """IES subclasses remain cache-driven mutable extensions."""
+    numbers, positions = _geometry()
     par = _module()
     base = new_ies(numbers, par, **DD)
     assert base is not None
 
     class IESExtension(IES):
-        pass
+        __slots__ = ("scale", "initial_scale", "cache_calls", "reset_calls")
 
-    extension = IESExtension(
-        base.chi,
-        base.eeq_kcn,
-        base.eta,
-        base.rad,
-        base.rcov,
-        base.cutoff,
-        base.cn_max,
-        base.cn_kcn,
-        **DD,
+        def __init__(self) -> None:
+            super().__init__(
+                base.chi,
+                base.eeq_kcn,
+                base.eta,
+                base.rad,
+                base.rcov,
+                base.cutoff,
+                base.cn_max,
+                base.cn_kcn,
+                **DD,
+            )
+            self.scale = torch.tensor(1.0, **DD)
+            self.initial_scale = self.scale.clone()
+            self.cache_calls = 0
+            self.reset_calls = 0
+            self.label = "IES"
+
+        def get_cache(self, numbers, ihelp=None, **kwargs):
+            _ = (numbers, ihelp, kwargs)
+            self.cache_calls += 1
+            return self.scale.clone()
+
+        def get_energy(self, positions, cache, **kwargs):
+            _ = kwargs
+            return positions.new_ones(positions.shape[-2]) * cache
+
+        def reset(self) -> None:
+            self.reset_calls += 1
+            self.scale = self.initial_scale.clone()
+
+    extension = IESExtension()
+    calc = Calculator(
+        numbers,
+        par,
+        classical=(extension,),
+        opts={"exclude": ("ies", *EXCLUDE), "verbosity": 0},
+        dtype=torch.double,
+        auto_int_level=False,
     )
-    with pytest.raises(TypeError, match="Only the built-in"):
-        Model(
-            par=par,
-            config=Config.create(exclude=("ies", *EXCLUDE)),
-            classical=(extension,),
-        ).setup(numbers)
+    assert calc.system.ies_setup is None
+    assert extension.cache_calls == 1
+    first = dict(calc.system.singlepoint(positions).classical)["IES"].sum()
+    assert extension.cache_calls == 1
+    calc.classicals.update("IES", scale=torch.tensor(2.0, **DD))
+    updated = dict(calc.system.singlepoint(positions).classical)["IES"].sum()
+    assert updated == 2 * first
+    assert extension.cache_calls == 2
+    calc.reset()
+    reset = dict(calc.system.singlepoint(positions).classical)["IES"].sum()
+    torch.testing.assert_close(reset, first)
+    assert extension.cache_calls == 3
+    assert extension.reset_calls == 1
 
 
 def test_ies_duplicate_labels_are_rejected() -> None:

@@ -14,8 +14,12 @@ from dxtb._src.calculators.model import Model, System
 from dxtb._src.components.classicals import DispersionD3
 from dxtb._src.components.classicals.base import Classical
 from dxtb._src.components.classicals.dispersion import new_dispersion
-from dxtb._src.components.interactions.base import Interaction
+from dxtb._src.components.interactions.base import (
+    Interaction,
+    InteractionCache,
+)
 from dxtb._src.components.interactions.container import Charges
+from dxtb._src.components.interactions.field.efield import LABEL_EFIELD
 from dxtb.config import Config
 
 DTYPE = torch.float64
@@ -58,6 +62,68 @@ def _positions(numbers: list[int], shift: float = 0.0) -> torch.Tensor:
         )
         + shift
     )
+
+
+class _GeometryInteractionCache(InteractionCache):
+    __slots__ = ["geometry_scale"]
+
+    def __init__(self, geometry_scale: torch.Tensor) -> None:
+        super().__init__(
+            device=geometry_scale.device, dtype=geometry_scale.dtype
+        )
+        self.geometry_scale = geometry_scale
+
+
+class _NonzeroInteraction(Interaction):
+    label = "E6bCustomNonzeroInteraction"
+
+    def __init__(self) -> None:
+        super().__init__(device=DEVICE, dtype=DTYPE)
+        self.calls = 0
+
+    def get_cache(self, *, numbers=None, positions=None, ihelp=None):
+        _ = (numbers, ihelp)
+        assert positions is not None
+        return _GeometryInteractionCache(positions.square().sum() * 1.0e-1)
+
+    def get_monopole_atom_potential(
+        self,
+        cache: InteractionCache,
+        qat: torch.Tensor,
+        qdp: torch.Tensor | None = None,
+        qqp: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        _ = (qdp, qqp)
+        self.calls += 1
+        assert isinstance(cache, _GeometryInteractionCache)
+        atom_shape = qat.shape[-1]
+        pattern = torch.arange(atom_shape, dtype=qat.dtype, device=qat.device)
+        return cache.geometry_scale * pattern
+
+    def get_monopole_atom_energy(
+        self, cache: InteractionCache, qat: torch.Tensor, **kwargs
+    ) -> torch.Tensor:
+        _ = kwargs
+        self.calls += 1
+        assert isinstance(cache, _GeometryInteractionCache)
+        return 0.5 * cache.geometry_scale * qat.square()
+
+
+class _CacheClassical(Classical):
+    def __init__(self) -> None:
+        super().__init__(device=DEVICE, dtype=DTYPE)
+        self.label = "E6bCacheClassical"
+        self.cache_calls = 0
+
+    def get_cache(self, numbers, ihelp=None, **kwargs):
+        _ = (ihelp, kwargs)
+        self.cache_calls += 1
+        return numbers.to(dtype=DTYPE).sum()
+
+    def get_energy(self, positions, cache, **kwargs):
+        _ = kwargs
+        atom_scale = cache / positions.shape[-2]
+        return atom_scale * positions.square().sum(dim=-1) * 1.0e-4
 
 
 def _extra_d3(numbers: list[int], label: str) -> DispersionD3:
@@ -177,28 +243,95 @@ def test_libcint_independent_evaluation_preserves_model_parameter_gradient() -> 
     assert par.parameter_tree.hamiltonian.xtb.kpol.param is kpol
 
 
-def test_custom_components_are_rejected() -> None:
-    """Custom Classicals and Interactions fail at Model setup."""
+def test_field_label_conflict_is_not_silently_replaced() -> None:
+    """Explicit field= rejects Systems carrying a same-label custom Interaction."""
+    custom = _NonzeroInteraction()
+    custom.label = LABEL_EFIELD
+    numbers = [1, 1]
+    system = _system(numbers, interaction=(custom,))
+    with pytest.raises(ValueError, match="ElectricField"):
+        evaluate_systems_independently(
+            (system,),
+            (_positions(numbers),),
+            field=torch.ones(3, dtype=DTYPE),
+        )
 
-    class CustomClassical(Classical):
+
+def test_custom_interaction_independent_and_vmap_eligibility() -> None:
+    """Tensor-only custom Interactions are vmap-eligible and match serial evaluation."""
+    interaction = _NonzeroInteraction()
+    na, nb = [1, 1], [3, 1]
+    a = _system(na, interaction=(interaction,))
+    b = _system(nb, interaction=(interaction,))
+    pa, pb = _positions(na), _positions(nb)
+    assert can_vmap_system(a)
+    composed = evaluate_systems_independently((a, b), (pa, pb))
+    for actual, system, pos in zip(composed, (a, b), (pa, pb)):
+        expected = system.singlepoint(pos)
+        torch.testing.assert_close(actual.energy, expected.energy)
+
+    class _OpaqueInteraction(_NonzeroInteraction):
+        def __init__(self) -> None:
+            super().__init__()
+            self.opaque = object()
+
+    assert not can_vmap_system(_system(na, interaction=(_OpaqueInteraction(),)))
+
+
+def test_custom_classical_cache_and_non_component_rejection() -> None:
+    """Tensor-only custom Classicals are vmap-eligible while opaque caches fall back."""
+    component = _CacheClassical()
+    numbers = [1, 1]
+    system = _system(numbers, classical=(component,))
+    positions = _positions(numbers)
+    assert can_vmap_system(system)
+    assert component.cache_calls == 1
+    first = evaluate_systems_independently((system,), (positions,))[0]
+    second = evaluate_systems_independently((system,), (positions,))[0]
+    first_classicals = dict(first.classical)
+    second_classicals = dict(second.classical)
+    assert component.label in first_classicals
+    assert torch.count_nonzero(first_classicals[component.label]) > 0
+    torch.testing.assert_close(
+        first_classicals[component.label], second_classicals[component.label]
+    )
+    torch.testing.assert_close(first.energy, second.energy)
+
+    class _OpaqueClassical(Classical):
         def get_cache(self, numbers, ihelp=None, **kwargs):
-            return None
+            _ = (numbers, ihelp, kwargs)
+            return object()
 
         def get_energy(self, positions, cache, **kwargs):
+            _ = (cache, kwargs)
             return positions.new_zeros(positions.shape[-2])
 
-    class CustomInteraction(Interaction):
-        pass
+    opaque_sys = _system(
+        numbers, classical=(_OpaqueClassical(device=DEVICE, dtype=DTYPE),)
+    )
+    assert not can_vmap_system(opaque_sys)
 
-    with pytest.raises(TypeError, match="Only the built-in"):
-        _system(
-            [1, 1], classical=(CustomClassical(device=DEVICE, dtype=DTYPE),)
-        )
-    with pytest.raises(TypeError, match="Only the built-in"):
-        _system(
-            [1, 1],
-            interaction=(CustomInteraction(device=DEVICE, dtype=DTYPE),),
-        )
+    with pytest.raises(TypeError, match="Classical"):
+        _system([1, 1], classical=(object(),))  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="Interaction"):
+        _system([1, 1], interaction=(object(),))  # type: ignore[arg-type]
+
+
+def test_independent_evaluation_preserves_custom_classical_position_gradient() -> (
+    None
+):
+    """Independent evaluation preserves position gradients through custom Classicals."""
+    component = _CacheClassical()
+    numbers = [1, 1]
+    system = _system(numbers, classical=(component,))
+    mapped_pos = _positions(numbers).requires_grad_()
+    serial_pos = _positions(numbers).requires_grad_()
+    result = evaluate_systems_independently((system,), (mapped_pos,))[0]
+    serial = system.singlepoint(serial_pos)
+    (mapped_grad,) = torch.autograd.grad(result.energy.sum(), mapped_pos)
+    (serial_grad,) = torch.autograd.grad(serial.energy.sum(), serial_pos)
+    torch.testing.assert_close(mapped_grad, serial_grad)
+    assert torch.count_nonzero(mapped_grad) > 0
 
 
 def test_independent_evaluation_preserves_additional_classical_position_gradient() -> (
@@ -389,12 +522,12 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
         BroydenConvergerSettings,
         CDIISConverger,
         CDIISConvergerSettings,
+        CPSCFSettings,
         LinearConverger,
         SCFDifferentiation,
-        SCFVariable,
-        CPSCFSettings,
         SCFStage,
         SCFStrategy,
+        SCFVariable,
         SOSCFConverger,
         strategy_preset,
     )
@@ -495,9 +628,7 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
     #    - rejected under UNROLLED differentiation at both ConfigSCF.__post_init__ and can_vmap_system
     #    - SOSCF rejected with active Fermi smearing (fermi_etemp > 0)
     #    - routed to LEGACY_COMPOSED under IMPLICIT differentiation (with etemp=0 for SOSCF)
-    soscf_strat = SCFStrategy(
-        (SCFStage(SOSCFConverger(), SCFVariable.FOCK),)
-    )
+    soscf_strat = SCFStrategy((SCFStage(SOSCFConverger(), SCFVariable.FOCK),))
     base_cfg = Config.create(
         method="GFN1-xTB",
         int_driver=labels.INTDRIVER_PYTORCH,
@@ -533,7 +664,9 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
                 (mutated_sys, mutated_sys), (pos_h2, pos_h2)
             )
 
-    with pytest.raises(ValueError, match="Fermi smearing at nonzero electronic temperature"):
+    with pytest.raises(
+        ValueError, match="Fermi smearing at nonzero electronic temperature"
+    ):
         Config.create(
             method="GFN1-xTB",
             int_driver=labels.INTDRIVER_PYTORCH,
@@ -558,7 +691,8 @@ def test_s13_strategy_method_and_differentiation_eligibility() -> None:
         config=bypassed_smear_cfg,
     )
     with pytest.raises(
-        ValueError, match="Fermi smearing at nonzero electronic temperature|fixed-occupation"
+        ValueError,
+        match="Fermi smearing at nonzero electronic temperature|fixed-occupation",
     ):
         can_vmap_system(sys_soscf_smear)
 

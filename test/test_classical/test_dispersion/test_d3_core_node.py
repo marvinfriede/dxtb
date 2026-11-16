@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-
 import pytest
-import tad_dftd as d3
 import torch
 from tad_mctc.ncoord import exp_count
 from tad_mctc.tree import stack
 from torch.utils._pytree import tree_flatten, tree_unflatten
 
+import tad_dftd as d3
 from dxtb import GFN1_XTB, Calculator
 from dxtb._src.calculators.model import Model
 from dxtb._src.components.classicals import (
@@ -765,19 +764,33 @@ def test_normal_singlepoint_uses_captured_d3_core() -> None:
     )
 
 
-def test_d3_subclass_is_rejected() -> None:
-    """D3 subclasses are custom Classicals and fail at setup."""
+def test_d3_subclass_evaluates_via_custom_classical_path() -> None:
+    """D3 subclasses evaluate through the custom Classical hook path."""
     from dxtb.config import Config
 
     class D3Extension(DispersionD3):
-        pass
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.energy_calls = 0
 
-    numbers = samples["LiH"]["numbers"]
+        def get_energy(self, positions, cache, **kwargs):
+            self.energy_calls += 1
+            return super().get_energy(positions, cache, **kwargs)
+
+    sample = samples["LiH"]
+    numbers = sample["numbers"]
+    positions = sample["positions"].double()
     base = _component(numbers)
     extension = D3Extension(numbers, base.param, dtype=torch.double)
-    with pytest.raises(TypeError, match="Only the built-in"):
-        Model(
-            par=ParamModule(GFN1_XTB, dtype=torch.double),
-            config=Config.create(exclude=("disp", "scf")),
-            classical=(extension,),
-        ).setup(numbers)
+    extension.label = "D3:extension"
+    system = Model(
+        par=ParamModule(GFN1_XTB, dtype=torch.double),
+        config=Config.create(exclude=("disp", "scf")),
+        classical=(extension,),
+    ).setup(numbers)
+    assert system.d3_setups == ()
+    assert isinstance(
+        system.classical_cache[extension.label], DispersionD3Cache
+    )
+    system.singlepoint(positions)
+    assert extension.energy_calls == 1

@@ -561,13 +561,34 @@ def test_exact_user_halogen_replaces_excluded_builtin() -> None:
     )
 
 
-def test_halogen_subclass_is_rejected() -> None:
-    """Halogen subclasses are custom Classicals and fail at setup."""
+def test_halogen_subclass_refreshes_call_data_and_stays_mutable() -> None:
+    """A subclass uses custom cache/energy hooks and update/reset calls."""
 
     class HalogenExtension(Halogen):
-        pass
+        __slots__ = ("scale", "initial_scale", "cache_calls", "reset_calls")
 
-    numbers, _ = _geometry()
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.scale = torch.tensor(1.0, **DD)
+            self.initial_scale = self.scale.clone()
+            self.cache_calls = 0
+            self.reset_calls = 0
+
+        def get_cache(self, numbers, ihelp=None, **kwargs):
+            _ = (numbers, ihelp, kwargs)
+            self.cache_calls += 1
+            return self.scale.clone()
+
+        def get_energy(self, positions, cache, **kwargs):
+            _ = kwargs
+            return positions.new_ones(positions.shape[-2]) * cache
+
+        def reset(self) -> None:
+            self.reset_calls += 1
+            self.scale = self.initial_scale.clone()
+            super().reset()
+
+    numbers, positions = _geometry()
     par = get_param_module("gfn1", **DD)
     original = new_halogen(torch.unique(numbers), par, **DD)
     assert original is not None
@@ -578,12 +599,42 @@ def test_halogen_subclass_is_rejected() -> None:
         cutoff=original.cutoff,
         **DD,
     )
-    with pytest.raises(TypeError, match="Only the built-in"):
-        Model(
-            par=par,
-            config=Config.create(exclude=(*_EXCLUDE, "hal")),
-            classical=(extension,),
-        ).setup(numbers)
+    extension.label = "Halogen"
+    system = Model(
+        par=par,
+        config=Config.create(exclude=(*_EXCLUDE, "hal")),
+        classical=(extension,),
+    ).setup(numbers)
+    assert system.halogen_setup is None
+    assert extension.cache_calls == 1
+
+    first = _classical_energy(system, positions)
+    assert extension.cache_calls == 1
+    system.classicals.update("Halogen", scale=torch.tensor(2.0, **DD))
+    updated = _classical_energy(system, positions)
+    assert updated == 2.0 * first
+    assert extension.cache_calls == 2
+    system.classicals.reset("Halogen")
+    restored = _classical_energy(system, positions)
+    assert extension.cache_calls == 3
+    torch.testing.assert_close(restored, first)
+    system.classicals.update("Halogen", scale=torch.tensor(2.0, **DD))
+    updated = _classical_energy(system, positions)
+    system.classicals.reset_all()
+    assert extension.reset_calls == 2
+    torch.testing.assert_close(_classical_energy(system, positions), first)
+
+    calc = Calculator(
+        numbers,
+        par,
+        classical=(extension,),
+        opts={"exclude": (*_EXCLUDE, "hal"), "verbosity": 0},
+        dtype=torch.double,
+        auto_int_level=False,
+    )
+    calc.reset()
+    assert extension.reset_calls == 3
+    torch.testing.assert_close(_classical_energy(calc.system, positions), first)
 
 
 @pytest.mark.parametrize("with_subclass", [False, True])

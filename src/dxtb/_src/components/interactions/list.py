@@ -55,8 +55,7 @@ _SCF_INTERACTION_TYPES = (
     ElectricFieldGrad,
 )
 _SCF_INTERACTION_LABELS = tuple(
-    interaction_type.__name__
-    for interaction_type in _SCF_INTERACTION_TYPES
+    interaction_type.__name__ for interaction_type in _SCF_INTERACTION_TYPES
 )
 
 
@@ -79,6 +78,12 @@ class InteractionList(ComponentList[Interaction]):
         dtype: torch.dtype | None = None,
     ) -> None:
         """Create a list and reject duplicate migrated interaction labels."""
+        for component in components:
+            if component is not None and not isinstance(component, Interaction):
+                raise TypeError(
+                    "Interaction components must inherit from Interaction; got "
+                    f"{type(component).__module__}.{type(component).__qualname__}."
+                )
         for label in _SCF_INTERACTION_LABELS:
             matching = [
                 component

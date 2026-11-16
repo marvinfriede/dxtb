@@ -69,6 +69,12 @@ class ClassicalList(ComponentList[Classical]):
         dtype: torch.dtype | None = None,
     ) -> None:
         """Create a classical list and reject duplicate migrated labels."""
+        for component in components:
+            if component is not None and not isinstance(component, Classical):
+                raise TypeError(
+                    "Classical components must inherit from Classical; got "
+                    f"{type(component).__module__}.{type(component).__qualname__}."
+                )
         for label in (
             LABEL_REPULSION,
             LABEL_SRB,

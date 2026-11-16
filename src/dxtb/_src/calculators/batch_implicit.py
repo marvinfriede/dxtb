@@ -46,13 +46,15 @@ from tad_mctc.tools.compile import is_compiling
 from torch.func import vmap
 
 from dxtb import OutputHandler, labels
-from dxtb._src.calculators.model import System
+from dxtb._src.calculators.model import BUILTIN_CLASSICAL_TYPES, System
 from dxtb._src.calculators.result import Result
 from dxtb._src.calculators.singlepoint import (
     _evaluate_classical_descriptor,
+    _evaluate_custom_classical_fallback,
     _floating_setup_tensor,
     _interaction_data,
 )
+from dxtb._src.components.base import _iter_mro_slots
 from dxtb._src.components.classicals.dispersion.d3 import (
     DispersionD3,
     DispersionD3CoreSetup,
@@ -98,6 +100,10 @@ from dxtb._src.scf.core import (
     replace_tensor_leaves,
     tensor_leaves,
 )
+from dxtb._src.scf.cpscf import (
+    CPSCFSettings,
+    prepare_response_root,
+)
 from dxtb._src.scf.data import (
     PotentialLayout,
     SCFCharges,
@@ -111,14 +117,14 @@ from dxtb._src.scf.eager import (
     public_scf_status,
     resolve_scf_plan,
 )
+from dxtb._src.scf.guess import get_guess
 from dxtb._src.scf.implicit import (
     _LINEAR_SOLVE_ATOL,
     _LINEAR_SOLVE_RTOL,
     _SCFMapTensorTree,
 )
-from dxtb._src.scf.implicit import (
-    implicit_root as _implicit_scf_root,
-)
+from dxtb._src.scf.implicit import implicit_root as _implicit_scf_root
+from dxtb._src.scf.iterator import get_refocc
 from dxtb._src.scf.map import (
     evaluate_hamiltonian,
     evaluate_potential,
@@ -133,10 +139,6 @@ from dxtb._src.scf.problem import (
     SCFPhysicalState,
     SCFProblem,
     SCFVariable,
-)
-from dxtb._src.scf.cpscf import (
-    CPSCFSettings,
-    prepare_response_root,
 )
 from dxtb._src.scf.solver import (
     FERMI_FAILURE_ELECTRON_COUNT,
@@ -155,10 +157,8 @@ from dxtb._src.scf.solver import (
     finalize_scf_potential,
 )
 from dxtb._src.scf.spectral import eager_primal_fermi_scope
-from dxtb._src.scf.strategy import SCFStrategy
-from dxtb._src.scf.guess import get_guess
-from dxtb._src.scf.iterator import get_refocc
 from dxtb._src.scf.status import SCFStatus
+from dxtb._src.scf.strategy import SCFStrategy
 from dxtb._src.typing import Any, Tensor
 from dxtb._src.typing.exceptions import (
     SCFConvergenceError,
@@ -283,9 +283,7 @@ def implicit_root(
             and atol == _LINEAR_SOLVE_ATOL
             and maxiter is None
         ):
-            return _implicit_scf_root(
-                root_x, *parameters, raw_map=raw_map
-            )
+            return _implicit_scf_root(root_x, *parameters, raw_map=raw_map)
         return _implicit_scf_root(
             root_x,
             *parameters,
@@ -576,7 +574,7 @@ def _collect_object_tensors(
     elif isinstance(obj, (tuple, list, set, frozenset)):
         for item in obj:
             _collect_object_tensors(item, excluded_ids, seen_objs, found)
-    elif dataclasses.is_dataclass(obj):
+    elif dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         for field_info in dataclasses.fields(obj):
             _collect_object_tensors(
                 getattr(obj, field_info.name, None),
@@ -584,8 +582,14 @@ def _collect_object_tensors(
                 seen_objs,
                 found,
             )
-    elif hasattr(obj, "__dict__"):
-        _collect_object_tensors(vars(obj), excluded_ids, seen_objs, found)
+    else:
+        for slot in _iter_mro_slots(obj):
+            if hasattr(obj, slot):
+                _collect_object_tensors(
+                    getattr(obj, slot), excluded_ids, seen_objs, found
+                )
+        if hasattr(obj, "__dict__"):
+            _collect_object_tensors(vars(obj), excluded_ids, seen_objs, found)
     return found
 
 
@@ -1332,15 +1336,15 @@ def _make_variable_projections(
         layout = None
         map_fn = lambda x, _inp=primal_inputs: fock_map(x, _inp)
     else:
-        raise ValueError(
-            f"Unknown SCF variable '{variable}'."
-        )
+        raise ValueError(f"Unknown SCF variable '{variable}'.")
 
     return initial_state, layout, state_projection, map_fn
 
 
 @torch._dynamo.disable
-def _validate_prepared_system_owner(prepared: PreparedConvergedRootBatch) -> None:
+def _validate_prepared_system_owner(
+    prepared: PreparedConvergedRootBatch,
+) -> None:
     """Reject configuration or atomic-number replacement before structural setup validation."""
     system = prepared.system
     if not isinstance(system, System):
@@ -1354,12 +1358,9 @@ def _validate_prepared_system_owner(prepared: PreparedConvergedRootBatch) -> Non
             "configuration has changed; prepare roots again."
         )
     if (
-        (
-            prepared.numbers_version is not None
-            and _tensor_version(system.numbers) != prepared.numbers_version
-        )
-        or not _matches_snapshot(system.numbers, prepared.numbers_snapshot)
-    ):
+        prepared.numbers_version is not None
+        and _tensor_version(system.numbers) != prepared.numbers_version
+    ) or not _matches_snapshot(system.numbers, prepared.numbers_snapshot):
         raise RuntimeError(
             "Prepared physical roots cannot be reused after atomic numbers "
             "have changed; prepare roots again."
@@ -1590,9 +1591,7 @@ def _solve_and_validate_lane_primal(
     """Solve one lane's detached fixed-point problem and validate with static Fermi."""
     with torch.no_grad():
         initial_state, layout, state_projection, map_fn = (
-            _make_variable_projections(
-                primal_inputs, variable, guess_charges
-            )
+            _make_variable_projections(primal_inputs, variable, guess_charges)
         )
         solver_problem = None
         if (
@@ -2007,9 +2006,7 @@ def prepare_converged_root_batch(
             )
         )
 
-        same_variable = (
-            response_variable is variable
-        )
+        same_variable = response_variable is variable
         response_root = None
         if solve_outcome.root_valid and not same_variable:
             response_root = _prepare_lane_response_root(
@@ -2037,9 +2034,7 @@ def prepare_converged_root_batch(
         response_root_x = (
             None
             if not solve_outcome.root_valid
-            else (
-                primal_root_x if same_variable else response_root.root_x
-            )
+            else (primal_root_x if same_variable else response_root.root_x)
         )
 
         lanes.append(
@@ -2065,11 +2060,7 @@ def prepare_converged_root_batch(
                 response_adapter=(
                     None
                     if not solve_outcome.root_valid
-                    else (
-                        adapter
-                        if same_variable
-                        else response_root.adapter
-                    )
+                    else (adapter if same_variable else response_root.adapter)
                 ),
                 response_parameters=(
                     None
@@ -2187,8 +2178,7 @@ def prepare_converged_root_batch(
         response_root_snapshots=tuple(
             (
                 None
-                if lane.response_root_x is None
-                or response_variable == variable
+                if lane.response_root_x is None or response_variable == variable
                 else _snapshot_required_tensor(lane.response_root_x)
             )
             for lane in lanes
@@ -2314,6 +2304,16 @@ def _evaluate_lane_classical(
                 setup = system.repulsion_setup
             elif component is system.srb_classical:
                 setup = system.srb_setup
+            elif type(component) not in BUILTIN_CLASSICAL_TYPES:
+                classical.append(
+                    (
+                        component.label,
+                        _evaluate_custom_classical_fallback(
+                            system, component, lane_positions, lane_charge
+                        ),
+                    )
+                )
+                continue
             else:
                 raise RuntimeError(
                     f"No setup for the Classical '{component.label}'."
@@ -2560,10 +2560,7 @@ def _refresh_prepared_batch_inputs(
         response_parameters = None
         if lane.root_valid:
             assert lane.response_adapter is not None
-            if (
-                prepared.response_variable
-                == prepared.primal_variable
-            ):
+            if prepared.response_variable == prepared.primal_variable:
                 response_adapter, response_parameters = new_adapter, parameters
             else:
                 response_adapter, response_parameters = (
