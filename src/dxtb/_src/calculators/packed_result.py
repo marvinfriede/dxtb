@@ -58,6 +58,7 @@ from dxtb._src.calculators.types.base import (
 from dxtb._src.calculators.types.energy import check_singlepoint_options
 from dxtb._src.components.custom import (
     CustomClassicalCoreSetup,
+    build_custom_classical_core_setup,
     snapshot_component_state,
 )
 from dxtb._src.components.interactions.base import (
@@ -1206,21 +1207,21 @@ def _sync_lane_system_labels(
             for owner, _, captured_setup in custom_snapshots
         }
         rebound_snapshots: list[tuple[Any, Any, Any]] = []
-        for old_c, new_c in zip(
-            old_classical_comps, lane_sys.classicals.components
+        for pos, (old_c, new_c) in enumerate(
+            zip(old_classical_comps, lane_sys.classicals.components)
         ):
             if (
                 type(new_c) not in BUILTIN_CLASSICAL_TYPES
                 and id(old_c) in old_setup_by_cid
             ):
                 cap_setup = old_setup_by_cid[id(old_c)]
-                rebound_snapshots.append(
-                    (
-                        new_c,
-                        snapshot_component_state(new_c, cap_setup),
-                        cap_setup,
-                    )
+                snap_entry = (
+                    new_c,
+                    snapshot_component_state(new_c, cap_setup),
+                    cap_setup,
                 )
+                rebound_snapshots.append(snap_entry)
+                snap_by_pos[pos] = snap_entry
         custom_snapshots = tuple(rebound_snapshots)
 
     exact_core = lane_sys.exact_core
@@ -1230,10 +1231,18 @@ def _sync_lane_system_labels(
                 term,
                 label=lane_sys.classicals.components[term.position].label,
                 setup=(
-                    term.setup.with_converted_component(
-                        lane_sys.classicals.components[term.position]
+                    build_custom_classical_core_setup(
+                        snap_by_pos[term.position][0],
+                        snap_by_pos[term.position][2],
+                        {
+                            "device": term.setup.anchor.device,
+                            "dtype": term.setup.anchor.dtype,
+                        },
+                        mutation_snapshot=snap_by_pos[term.position][1],
                     )
-                    if isinstance(term.setup, CustomClassicalCoreSetup)
+                    if classical_changed
+                    and isinstance(term.setup, CustomClassicalCoreSetup)
+                    and term.position in snap_by_pos
                     else term.setup
                 ),
             )

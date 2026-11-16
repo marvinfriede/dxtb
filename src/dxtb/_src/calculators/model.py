@@ -95,9 +95,8 @@ from dxtb._src.components.classicals.list import ClassicalListCache
 from dxtb._src.components.custom import (
     ComponentMutationSnapshot,
     CustomClassicalCoreSetup,
-    build_custom_classical_core_setup,
-    can_build_custom_classical_core_setup,
     snapshot_component_state,
+    try_build_custom_classical_core_setup,
     validate_custom_component_graph,
 )
 from dxtb._src.components.interactions import Interaction, InteractionList
@@ -2843,6 +2842,8 @@ class Model:
         classical_terms: list[ClassicalTermDescriptor] = []
         if batch_mode == 0:
             for position, component in enumerate(classicals.components):
+                if type(component) not in BUILTIN_CLASSICAL_TYPES:
+                    validate_custom_component_graph(component)
                 timer.start(component.label, parent_uid="Classicals")
                 component_setup = component.get_cache(numbers, ihelp)
                 setup: CoreSetup | None
@@ -2877,8 +2878,9 @@ class Model:
                     setup = core_halogen_setup(component_setup)
                     halogen_setup = setup
                 else:
-                    validate_custom_component_graph(component)
-                    validate_custom_component_graph(component_setup)
+                    validate_custom_component_graph(
+                        (component, component_setup)
+                    )
                     packed_classical_setups[component.label] = component_setup
                     comp_snap = snapshot_component_state(
                         component, component_setup
@@ -2890,17 +2892,11 @@ class Model:
                             component_setup,
                         )
                     )
-                    setup = (
-                        build_custom_classical_core_setup(
-                            component,
-                            component_setup,
-                            dd,
-                            mutation_snapshot=comp_snap,
-                        )
-                        if can_build_custom_classical_core_setup(
-                            component, component_setup, dd
-                        )
-                        else None
+                    setup = try_build_custom_classical_core_setup(
+                        component,
+                        component_setup,
+                        dd,
+                        mutation_snapshot=comp_snap,
                     )
                 timer.stop(component.label)
 
@@ -2918,6 +2914,8 @@ class Model:
                     )
         else:
             for component in classicals.components:
+                if type(component) not in BUILTIN_CLASSICAL_TYPES:
+                    validate_custom_component_graph(component)
                 timer.start(component.label, parent_uid="Classicals")
                 batched_setup = component.get_cache(numbers, ihelp)
                 if component is repulsion_classical:
@@ -2933,8 +2931,9 @@ class Model:
                 else:
                     packed_classical_setups[component.label] = batched_setup
                     if type(component) not in BUILTIN_CLASSICAL_TYPES:
-                        validate_custom_component_graph(component)
-                        validate_custom_component_graph(batched_setup)
+                        validate_custom_component_graph(
+                            (component, batched_setup)
+                        )
                         custom_classical_snapshots.append(
                             (
                                 component,

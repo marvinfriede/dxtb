@@ -198,7 +198,7 @@ def _evaluate_custom_classical_fallback(
     if not matched:
         validate_custom_component_graph(component)
         setup = component.get_cache(system.numbers, system.ihelp)
-        validate_custom_component_graph(setup)
+        validate_custom_component_graph((component, setup))
     energy: Tensor = component.get_energy(positions, setup, charge=charge)
     return energy
 
@@ -381,11 +381,14 @@ def _interaction_data(
                 setup, positions
             )
         else:
-            data[interaction.label] = interaction.get_cache(
+            validate_custom_component_graph(interaction)
+            cache = interaction.get_cache(
                 numbers=(core.numbers if core is not None else system.numbers),
                 positions=positions,
                 ihelp=system.ihelp,
             )
+            validate_custom_component_graph((interaction, cache))
+            data[interaction.label] = cache
     return data
 
 

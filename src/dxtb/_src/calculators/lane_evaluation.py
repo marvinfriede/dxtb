@@ -95,7 +95,15 @@ _TORCH_VMAP_LIMITATION_SIGNATURES = (
 
 
 def _is_torch_vmap_limitation(exc: BaseException) -> bool:
-    """Return ``True`` iff ``exc`` originates from a genuine PyTorch ``vmap`` limitation."""
+    """Return ``True`` iff ``exc`` originates from a genuine PyTorch ``vmap`` limitation.
+
+    Message matching alone cannot distinguish a C++/functorch dispatch failure
+    from a user hook raising an unrelated ``RuntimeError`` or
+    ``NotImplementedError`` whose text happens to mention ``vmap``. When the
+    innermost Python frame lies outside ``torch/``, we therefore verify that
+    its current bytecode instruction is a call/operator dispatch into C++
+    rather than an explicit Python ``raise`` or generator ``.throw(...)``.
+    """
     if not isinstance(exc, (RuntimeError, NotImplementedError)):
         return False
     tb = exc.__traceback__

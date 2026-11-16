@@ -57,6 +57,7 @@ from dxtb._src.components.classicals import (
 )
 from dxtb._src.components.custom import (
     CustomClassicalCoreSetup,
+    build_custom_classical_core_setup,
     snapshot_component_state,
 )
 from dxtb._src.components.interactions import Interaction, InteractionList
@@ -96,7 +97,12 @@ def _convert_packed_classical_setups(
     converted = ClassicalListCache()
     for key, value in packed_setups.items():
         converted[key] = _convert_component_value(
-            value, device=device, dtype=dtype, memo=memo
+            value,
+            device=device,
+            dtype=dtype,
+            memo=memo,
+            use_to=False,
+            explicit_device=False,
         )
     return converted
 
@@ -222,7 +228,10 @@ def _convert_system_dtype(
         for owner, _, old_setup in system._custom_classical_snapshots
     }
     custom_snapshots_list: list[tuple[Classical, Any, Any]] = []
-    for old_cid, new_c in zip(src_cls_ids, resolved_classicals.components):
+    snap_by_pos: dict[int, tuple[Classical, Any, Any]] = {}
+    for pos, (old_cid, new_c) in enumerate(
+        zip(src_cls_ids, resolved_classicals.components)
+    ):
         if (
             type(new_c) not in BUILTIN_CLASSICAL_TYPES
             and old_cid in old_setup_by_cid
@@ -232,14 +241,16 @@ def _convert_system_dtype(
                 device=sys_device,
                 dtype=dtype,
                 memo=memo,
+                use_to=False,
+                explicit_device=False,
             )
-            custom_snapshots_list.append(
-                (
-                    new_c,
-                    snapshot_component_state(new_c, conv_setup),
-                    conv_setup,
-                )
+            snap_entry = (
+                new_c,
+                snapshot_component_state(new_c, conv_setup),
+                conv_setup,
             )
+            custom_snapshots_list.append(snap_entry)
+            snap_by_pos[pos] = snap_entry
     if exact_core is not None and any(
         isinstance(term.setup, CustomClassicalCoreSetup)
         for term in exact_core.classical_terms
@@ -248,11 +259,18 @@ def _convert_system_dtype(
             (
                 replace(
                     term,
-                    setup=term.setup.with_converted_component(
-                        resolved_classicals.components[term.position]
+                    setup=build_custom_classical_core_setup(
+                        snap_by_pos[term.position][0],
+                        snap_by_pos[term.position][2],
+                        {
+                            "device": term.setup.anchor.device,
+                            "dtype": dtype,
+                        },
+                        mutation_snapshot=snap_by_pos[term.position][1],
                     ),
                 )
                 if isinstance(term.setup, CustomClassicalCoreSetup)
+                and term.position in snap_by_pos
                 else term
             )
             for term in exact_core.classical_terms
@@ -374,6 +392,7 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
             _setup_index_token=eval_token,
         )
 
+    sys_device = normalize_device(system.dd["device"])
     old_cls_ids = [id(c) for c in system.classicals.components]
     old_int_ids = [id(i) for i in system.interactions.components]
     has_custom_cls = any(
@@ -387,7 +406,12 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
                     c
                     if type(c) in BUILTIN_CLASSICAL_TYPES
                     else _convert_component_value(
-                        c, device=None, dtype=dtype, memo=conversion_memo
+                        c,
+                        device=sys_device,
+                        dtype=dtype,
+                        memo=conversion_memo,
+                        use_to=False,
+                        explicit_device=False,
                     )
                 )
                 for c in system.classicals.components
@@ -409,7 +433,12 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
                     i
                     if type(i) in BUILTIN_INTERACTION_TYPES
                     else _convert_component_value(
-                        i, device=None, dtype=dtype, memo=conversion_memo
+                        i,
+                        device=sys_device,
+                        dtype=dtype,
+                        memo=conversion_memo,
+                        use_to=False,
+                        explicit_device=False,
                     )
                 )
                 for i in system.interactions.components

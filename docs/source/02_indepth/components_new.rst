@@ -226,32 +226,44 @@ Transforms, ``vmap``, and Differentiation
 -----------------------------------------
 
 - **Unique interaction labels**: Distinct :class:`~dxtb.components.base.Interaction`
-  instances in a single ``System`` or ``Calculator`` must have unique ``label``
-  strings so their per-geometry SCF caches remain unambiguous. Duplicate
-  interaction labels raise :class:`ValueError`.
-- **Supported state and container types**: Custom components and their caches
-  may store floating and integer/boolean PyTorch ``Tensor`` leaves inside
-  ``__slots__``, ``__dict__``, ``ComponentCache``, ``tad_mctc.tree.Node``,
-  ``tuple``, ``NamedTuple``, ``list``, ``dict``, mutable ``@dataclass``
-  instances, and ``@dataclass(frozen=True)`` instances whose ``init=False``
-  fields hold only non-tensor static metadata. Frozen dataclasses with
-  tensor-valued ``init=False`` fields are explicitly rejected with
-  :class:`TypeError`; use an ``init=True`` field, a mutable dataclass, a
-  ``NamedTuple``, or ``tad_mctc.tree.Node`` instead. Shared tensor references
+  instances in a single ``System`` or ``Calculator`` (including ``batch_mode=1``
+  padded batches and ``batch_mode=2`` conformer batches) must have unique
+  ``label`` strings so their per-geometry SCF caches remain unambiguous.
+  Duplicate interaction labels raise :class:`ValueError`.
+- **Supported state, containers, and object-graph contract**: Custom components
+  and their caches may store floating and integer/boolean PyTorch ``Tensor``
+  leaves inside ``__slots__``, ``__dict__``, ``ComponentCache``,
+  :class:`~dxtb.typing.TensorLike`, ``tad_mctc.tree.Node``, ``tuple``,
+  ``NamedTuple``, ``list``, ``dict``, mutable ``@dataclass`` instances, and
+  ``@dataclass(frozen=True)`` instances whose ``init=False`` fields hold only
+  non-tensor static metadata. Acyclic shared tensor and container references
   (aliases) are preserved across ``.to()``, ``.type()``, and
-  ``Calculator.type()``.
+  ``Calculator.type()``. Cyclic component or cache object graphs are rejected
+  with :class:`ValueError`, and frozen dataclasses with tensor-valued
+  ``init=False`` fields are rejected with :class:`TypeError` (use an
+  ``init=True`` field, a mutable dataclass, a ``NamedTuple``, or
+  ``tad_mctc.tree.Node`` instead).
+- **Opaque external objects**: Arbitrary third-party or helper objects outside
+  the supported container types above remain opaque and are not recursively
+  traversed for dtype/device conversion or functional leaf extraction. Opaque
+  objects holding only non-tensor state are supported and route custom
+  components to independent (non-``vmap``) evaluation; opaque objects storing
+  any reachable PyTorch ``Tensor`` raise :class:`TypeError` so conversion and
+  SCF differentiation never silently skip active tensor parameters.
 - **Hook purity and automatic ``vmap`` fallback**: ``get_cache``,
   ``get_energy``, and interaction potential/energy hooks must be pure functions
-  of their arguments and component tensors without mutating component state.
-  Components holding opaque external objects are routed directly to independent
-  per-lane evaluation. Tensor-only custom components that hit a genuine PyTorch
-  ``vmap`` operator limitation (such as ``.item()`` or data-dependent host
-  branching) automatically fall back to independent evaluation provided no
-  component state was mutated during the mapped attempt; mutating state during
-  a failed mapped attempt raises :class:`RuntimeError`.
-- **Differentiation and mutation invalidation**: Tensor parameters stored on a
-  component or its cache participate in autograd under both
-  ``differentiation="unrolled"`` and ``differentiation="implicit"``. Any
-  between-call change to a custom ``Classical``'s tensor or non-tensor
-  attributes invalidates its captured setup and triggers a fresh ``get_cache``
-  call on the next evaluation.
+  of their arguments and component tensors without mutating component or cache
+  state. Components holding non-tensor opaque objects are routed directly to
+  independent per-lane evaluation. Tensor-only custom components that hit a
+  genuine PyTorch ``vmap`` operator limitation (such as ``.item()`` or
+  data-dependent host branching) automatically fall back to independent
+  evaluation provided neither component nor cache state was mutated during the
+  mapped attempt; mutating state during a failed mapped attempt raises
+  :class:`RuntimeError`.
+- **Differentiation and mutation invalidation**: Tensor parameters stored in
+  supported containers on a component or its cache participate in autograd
+  under both ``differentiation="unrolled"`` and ``differentiation="implicit"``.
+  Any between-call change to a custom ``Classical``'s (or its captured
+  cache's) tensor or non-tensor attributes invalidates that term's captured
+  setup and triggers a fresh ``get_cache`` call on the next evaluation without
+  discarding unrelated built-in setups.

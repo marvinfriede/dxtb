@@ -25,7 +25,7 @@ from typing import Any, NamedTuple
 
 import pytest
 import torch
-from tad_mctc.tree import ModuleNode, Node, child
+from tad_mctc.tree import ModuleNode, Node, child, context
 from tad_mctc.tree import stack as tree_stack
 from torch.func import grad as func_grad
 from torch.func import hessian, jacrev, vmap
@@ -1451,6 +1451,28 @@ class _CustomConvertChildNode(Node):
         return super()._convert_child(name, value, device, dtype)
 
 
+class _KeepDtypeFloatNode(Node):
+    """Default Node keeping a reference float64 tensor on keep_dtype=True."""
+
+    primary: Tensor = child()
+    ref_fp64: Tensor = child(keep_dtype=True)
+
+
+class _DualBoxNode(Node):
+    """Default Node sharing a container across keep_dtype=True and normal child fields."""
+
+    kept_box: list[Tensor] = child(keep_dtype=True)
+    normal_box: list[Tensor] = child()
+
+
+class _ContextMetaNode(Node):
+    """Default Node storing arbitrary metadata in a context() field."""
+
+    primary: Tensor = child()
+    meta: Any = context()
+    items: Any = child(keep_dtype=True, default=None)
+
+
 @dataclass(frozen=True)
 class _PostInitFrozenTensorConfig:
     """Frozen dataclass initializing an init=False Tensor in __post_init__."""
@@ -2728,3 +2750,958 @@ def test_nonlinear_multipole_interaction_variational_and_second_derivatives() ->
     for gib, gub in zip(g_ib, g_ub):
         torch.testing.assert_close(gib, gub, rtol=1e-6, atol=1e-7)
     torch.testing.assert_close(d2_ib, d2_ub, rtol=1e-4, atol=1e-5)
+
+
+def test_cyclic_component_and_cache_graphs_rejected_while_acyclic_dags_work() -> (
+    None
+):
+    """Cyclic graphs raise ValueError across conversion and setup while acyclic DAG aliases work."""
+    numbers, pos = _lih_inputs()
+    par = ParamModule(GFN1_XTB, **DD64)
+    cfg_noscf = Config.create(int_driver="pytorch", exclude="scf")
+    cfg_scf = Config.create(int_driver="pytorch")
+
+    class PayloadClassical(Classical):
+        def __init__(self, payload: Any, param: Tensor) -> None:
+            super().__init__(device=param.device, dtype=param.dtype)
+            self.payload = payload
+            self.param = param
+
+        @override
+        def get_cache(
+            self, numbers: Tensor, ihelp: IndexHelper | None = None
+        ) -> Any:
+            _ = (numbers, ihelp)
+            return self.payload
+
+        @override
+        def get_energy(self, positions: Tensor, cache: Any, **_: Any) -> Tensor:
+            _ = cache
+            return 0.5 * self.param * positions.square().sum(dim=-1)
+
+    class PayloadInteraction(Interaction):
+        def __init__(self, payload: Any, param: Tensor) -> None:
+            super().__init__(device=param.device, dtype=param.dtype)
+            self.payload = payload
+            self.param = param
+
+        @override
+        def get_cache(
+            self,
+            *,
+            numbers: Tensor | None = None,
+            positions: Tensor | None = None,
+            ihelp: IndexHelper | None = None,
+        ) -> Any:
+            _ = (numbers, positions, ihelp)
+            return self.payload
+
+        @override
+        def get_monopole_atom_potential(
+            self,
+            cache: Any,
+            qat: Tensor,
+            qdp: Tensor | None = None,
+            qqp: Tensor | None = None,
+        ) -> Tensor:
+            _ = (cache, qdp, qqp)
+            return 2.0 * self.param * qat
+
+        @override
+        def get_monopole_atom_energy(
+            self,
+            cache: Any,
+            qat: Tensor,
+            qdp: Tensor | None = None,
+            qqp: Tensor | None = None,
+            **_: Any,
+        ) -> Tensor:
+            _ = (cache, qdp, qqp)
+            return self.param * qat.square()
+
+    p0 = torch.tensor(0.05, **DD64)
+
+    # 1. Self-referential list
+    self_list: list[Any] = [p0]
+    self_list.append(self_list)
+
+    # 2. Self-referential dict
+    self_dict: dict[str, Any] = {"p": p0}
+    self_dict["self"] = self_dict
+
+    # 3. Mutually referencing containers
+    mut_a: list[Any] = [p0]
+    mut_b: dict[str, Any] = {"a": mut_a}
+    mut_a.append(mut_b)
+
+    for cyclic_payload in (self_list, self_dict, mut_a):
+        cls_cyc = PayloadClassical(cyclic_payload, p0)
+        int_cyc = PayloadInteraction(cyclic_payload, p0)
+        for comp in (cls_cyc, int_cyc):
+            with pytest.raises(ValueError, match="Circular reference"):
+                comp.type(torch.float32)
+            with pytest.raises(ValueError, match="Circular reference"):
+                comp.type(torch.float64)
+            with pytest.raises(ValueError, match="Circular reference"):
+                comp.to(device=torch.device("meta"))
+        with pytest.raises(ValueError, match="Circular reference"):
+            Model(par=par, config=cfg_noscf, classical=(cls_cyc,)).setup(
+                numbers
+            )
+        with pytest.raises(ValueError, match="Circular reference"):
+            Model(par=par, config=cfg_scf, interaction=(int_cyc,)).setup(
+                numbers
+            )
+
+    # 4. Component referencing itself (Classical and Interaction), plus post-setup cycle injection
+    cls_self = PayloadClassical(p0, p0)
+    cls_self.self_ref = cls_self
+    int_self = PayloadInteraction(p0, p0)
+    int_self.self_ref = int_self
+    for comp in (cls_self, int_self):
+        with pytest.raises(ValueError, match="Circular reference"):
+            comp.type(torch.float32)
+    with pytest.raises(ValueError, match="Circular reference"):
+        Model(par=par, config=cfg_noscf, classical=(cls_self,)).setup(numbers)
+    with pytest.raises(ValueError, match="Circular reference"):
+        Model(par=par, config=cfg_scf, interaction=(int_self,)).setup(numbers)
+
+    valid_cls = PayloadClassical([p0], p0)
+    sys_post = Model(par=par, config=cfg_noscf, classical=(valid_cls,)).setup(
+        numbers
+    )
+    valid_cls.payload.append(valid_cls.payload)
+    with pytest.raises(ValueError, match="Circular reference"):
+        sys_post.singlepoint(pos)
+
+    # 5a. Mutual component <-> cache cycle is rejected
+    class MutualCycleCache(ClassicalCache):
+        __slots__ = ["owner", "scale"]
+
+        def __init__(self, owner: Any, scale: Tensor) -> None:
+            super().__init__(device=scale.device, dtype=scale.dtype)
+            self.owner = owner
+            self.scale = scale
+
+    class MutualCycleClassical(Classical):
+        def __init__(self, scale: Tensor) -> None:
+            super().__init__(device=scale.device, dtype=scale.dtype)
+            self.scale = scale
+            self.cached_ref: Any = None
+
+        @override
+        def get_cache(
+            self, numbers: Tensor, ihelp: IndexHelper | None = None
+        ) -> MutualCycleCache:
+            _ = (numbers, ihelp)
+            c = MutualCycleCache(self, self.scale)
+            self.cached_ref = c
+            return c
+
+        @override
+        def get_energy(
+            self, positions: Tensor, cache: MutualCycleCache, **_: Any
+        ) -> Tensor:
+            return 0.5 * cache.scale * positions.square().sum(dim=-1)
+
+    with pytest.raises(ValueError, match="Circular reference"):
+        Model(
+            par=par,
+            config=cfg_noscf,
+            classical=(MutualCycleClassical(p0),),
+        ).setup(numbers)
+
+    # 5b. One-way acyclic cache -> component DAG reference is accepted and preserves view identity
+    class DagOwnerCache(ClassicalCache):
+        __slots__ = ["owner", "scale"]
+
+        def __init__(self, owner: Any, scale: Tensor) -> None:
+            super().__init__(device=scale.device, dtype=scale.dtype)
+            self.owner = owner
+            self.scale = scale
+
+    class DagOwnerClassical(Classical):
+        __slots__ = ["scale"]
+
+        def __init__(self, scale: Tensor) -> None:
+            super().__init__(device=scale.device, dtype=scale.dtype)
+            self.scale = scale
+
+        @override
+        def get_cache(
+            self, numbers: Tensor, ihelp: IndexHelper | None = None
+        ) -> DagOwnerCache:
+            _ = (numbers, ihelp)
+            return DagOwnerCache(self, self.scale)
+
+        @override
+        def get_energy(
+            self, positions: Tensor, cache: DagOwnerCache, **_: Any
+        ) -> Tensor:
+            return 0.5 * cache.owner.scale * positions.square().sum(dim=-1)
+
+    dag_cls = DagOwnerClassical(torch.tensor(0.05, **DD64))
+    sys_dag = Model(par=par, config=cfg_noscf, classical=(dag_cls,)).setup(
+        numbers
+    )
+    assert sys_dag.exact_core is not None
+    core_dag32 = sys_dag.exact_core.to(dtype=torch.float32)
+    dag_term = core_dag32.classical_terms[-1].setup
+    assert isinstance(dag_term, CustomClassicalCoreSetup)
+    comp_v, cache_v = dag_term.reconstruct()
+    assert cache_v.owner is comp_v
+    assert cache_v.owner.scale.dtype == torch.float32
+    assert dag_cls.scale.dtype == torch.float64
+
+    # 6 & 7. Acyclic shared tensor AND shared nested container aliases across conversion and func_grad
+    class DagSharedInteraction(Interaction):
+        def __init__(self, shared_box: list[Tensor], shared_t: Tensor) -> None:
+            super().__init__(device=shared_t.device, dtype=shared_t.dtype)
+            self.left_box = shared_box
+            self.right_map = {"box": shared_box, "leaf": shared_t}
+
+        @override
+        def get_cache(
+            self,
+            *,
+            numbers: Tensor | None = None,
+            positions: Tensor | None = None,
+            ihelp: IndexHelper | None = None,
+        ) -> dict[str, Any]:
+            _ = (numbers, positions, ihelp)
+            return {"box": self.left_box, "map": self.right_map}
+
+        @override
+        def get_monopole_atom_potential(
+            self,
+            cache: dict[str, Any],
+            qat: Tensor,
+            qdp: Tensor | None = None,
+            qqp: Tensor | None = None,
+        ) -> Tensor:
+            _ = (qdp, qqp)
+            eff = (
+                cache["box"][0] + cache["map"]["box"][0] + cache["map"]["leaf"]
+            )
+            return 2.0 * eff * qat
+
+        @override
+        def get_monopole_atom_energy(
+            self,
+            cache: dict[str, Any],
+            qat: Tensor,
+            qdp: Tensor | None = None,
+            qqp: Tensor | None = None,
+            **_: Any,
+        ) -> Tensor:
+            _ = (qdp, qqp)
+            eff = (
+                cache["box"][0] + cache["map"]["box"][0] + cache["map"]["leaf"]
+            )
+            return eff * qat.square()
+
+    shared_leaf = torch.tensor(0.03, **DD64, requires_grad=True)
+    shared_box = [shared_leaf]
+    dag_int = DagSharedInteraction(shared_box, shared_leaf)
+    dag_int32 = dag_int.type(torch.float32)
+    assert dag_int32.left_box is dag_int32.right_map["box"]
+    assert dag_int32.left_box[0] is dag_int32.right_map["leaf"]
+    assert dag_int32.left_box[0].dtype == torch.float32
+
+    def eval_dag_energy(theta: Tensor, diff_mode: str) -> Tensor:
+        """Total SCF energy where one leaf appears 3 times via shared tensor and container DAG."""
+        box = [theta]
+        sys_theta = Model(
+            par=par,
+            config=Config.create(
+                int_driver="pytorch",
+                differentiation=diff_mode,
+                x_atol=1.0e-11,
+                x_atol_max=1.0e-11,
+                maxiter=80,
+            ),
+            interaction=(DagSharedInteraction(box, theta),),
+        ).setup(numbers)
+        return sys_theta.singlepoint(pos).energy.sum()
+
+    def eval_dag_unrolled(theta: Tensor) -> Tensor:
+        """Unrolled energy wrapper for torch.func.grad."""
+        return eval_dag_energy(theta, "unrolled")
+
+    def eval_dag_implicit(theta: Tensor) -> Tensor:
+        """Implicit energy wrapper for torch.func.grad."""
+        return eval_dag_energy(theta, "implicit")
+
+    theta0 = torch.tensor(0.03, **DD64)
+    g_unrolled = func_grad(eval_dag_unrolled)(theta0)
+    g_implicit = func_grad(eval_dag_implicit)(theta0)
+    torch.testing.assert_close(g_implicit, g_unrolled, rtol=1e-6, atol=1e-7)
+
+
+def test_opaque_external_object_tensor_rejected_and_nontensor_consistent() -> (
+    None
+):
+    """Opaque objects holding Tensors raise TypeError while non-tensor opaque objects stay consistent."""
+    from functools import partial
+
+    from dxtb import GFN2_XTB
+    from dxtb._src.components.interactions.dispersion.d4sc import (
+        DispersionD4SC,
+        new_d4sc,
+    )
+
+    numbers, pos_a = _lih_inputs()
+    pos_b = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 3.25]], **DD64)
+    par = ParamModule(GFN1_XTB, **DD64)
+
+    class ExternalState:
+        def __init__(self, parameter: Any) -> None:
+            self.parameter = parameter
+
+    class ExtClassical(Classical):
+        def __init__(self, state: Any, weight: Tensor) -> None:
+            super().__init__(device=weight.device, dtype=weight.dtype)
+            self.state = state
+            self.weight = weight
+
+        @override
+        def get_cache(
+            self, numbers: Tensor, ihelp: IndexHelper | None = None
+        ) -> Tensor:
+            _ = ihelp
+            return self.weight * numbers.to(dtype=self.weight.dtype)
+
+        @override
+        def get_energy(
+            self, positions: Tensor, cache: Tensor, **_: Any
+        ) -> Tensor:
+            return (
+                0.5
+                * self.state.parameter
+                * cache
+                * positions.square().sum(dim=-1)
+            )
+
+    class ExtInteraction(Interaction):
+        def __init__(self, state: Any, weight: Tensor) -> None:
+            super().__init__(device=weight.device, dtype=weight.dtype)
+            self.state = state
+            self.weight = weight
+
+        @override
+        def get_cache(
+            self,
+            *,
+            numbers: Tensor | None = None,
+            positions: Tensor | None = None,
+            ihelp: IndexHelper | None = None,
+        ) -> InteractionCache:
+            _ = (numbers, positions, ihelp)
+            return InteractionCache(device=self.device, dtype=self.dtype)
+
+        @override
+        def get_monopole_atom_potential(
+            self,
+            cache: InteractionCache,
+            qat: Tensor,
+            qdp: Tensor | None = None,
+            qqp: Tensor | None = None,
+        ) -> Tensor:
+            _ = (cache, qdp, qqp)
+            return 2.0 * self.state.parameter * self.weight * qat
+
+        @override
+        def get_monopole_atom_energy(
+            self,
+            cache: InteractionCache,
+            qat: Tensor,
+            qdp: Tensor | None = None,
+            qqp: Tensor | None = None,
+            **_: Any,
+        ) -> Tensor:
+            _ = (cache, qdp, qqp)
+            return self.state.parameter * self.weight * qat.square()
+
+    # 1. Opaque object holding a Tensor (or partial holding a Tensor) is rejected across all entry points
+    t_hidden = torch.tensor(2.5, **DD64, requires_grad=True)
+    w0 = torch.tensor(0.04, **DD64, requires_grad=True)
+    for bad_holder in (
+        ExternalState(t_hidden),
+        partial(int, t_hidden),
+    ):
+        bad_cls = ExtClassical(bad_holder, w0)
+        bad_int = ExtInteraction(bad_holder, w0)
+        for bad_comp in (bad_cls, bad_int):
+            with pytest.raises(TypeError, match="Opaque object"):
+                bad_comp.type(torch.float32)
+            with pytest.raises(TypeError, match="Opaque object"):
+                bad_comp.type(torch.float64)
+            with pytest.raises(TypeError, match="Opaque object"):
+                bad_comp.to(device=torch.device("meta"))
+        for bm, nums in (
+            (0, numbers),
+            (1, torch.tensor([[8, 1, 1], [3, 1, 0]], device=DEVICE)),
+            (2, torch.stack([numbers, numbers], dim=0)),
+        ):
+            with pytest.raises(TypeError, match="Opaque object"):
+                Model(
+                    par=par,
+                    config=Config.create(int_driver="pytorch"),
+                    classical=(bad_cls,),
+                ).setup(nums, batch_mode=bm)
+            with pytest.raises(TypeError, match="Opaque object"):
+                Model(
+                    par=par,
+                    config=Config.create(int_driver="pytorch"),
+                    interaction=(bad_int,),
+                ).setup(nums, batch_mode=bm)
+
+    # Post-setup injection of an opaque Tensor holder onto an Interaction fails before SCF
+    post_int = ExtInteraction(ExternalState(2.5), w0)
+    sys_post_int = Model(
+        par=par,
+        config=Config.create(int_driver="pytorch", differentiation="implicit"),
+        interaction=(post_int,),
+    ).setup(numbers)
+    post_int.state = ExternalState(t_hidden)
+    with pytest.raises(TypeError, match="Opaque object"):
+        sys_post_int.singlepoint(pos_a)
+
+    # 2. Opaque object holding ONLY non-tensor state works across conversion, SCF, func_grad, and batches
+    ok_state = ExternalState(2.5)
+    ok_cls = ExtClassical(ok_state, torch.tensor(0.02, **DD64))
+    ok_int = ExtInteraction(ok_state, torch.tensor(0.04, **DD64))
+    calc64 = Calculator(
+        numbers,
+        GFN1_XTB,
+        classical=(ok_cls,),
+        interaction=(ok_int,),
+        opts={"verbosity": 0, "int_driver": "pytorch"},
+        **DD64,
+    )
+    e64 = calc64.energy(pos_a)
+    calc32 = calc64.type(torch.float32)
+    e32 = calc32.energy(pos_a.to(dtype=torch.float32))
+    assert e32.dtype == torch.float32
+    assert calc32.interactions.components[-1].state is ok_state
+    torch.testing.assert_close(
+        e32.to(dtype=torch.float64), e64, rtol=1e-4, atol=1e-4
+    )
+
+    def eval_nontensor_opaque(weight: Tensor, diff_mode: str) -> Tensor:
+        """Total SCF energy with non-tensor ExternalState and differentiable Interaction weight."""
+        sys_m = Model(
+            par=par,
+            config=Config.create(
+                int_driver="pytorch",
+                differentiation=diff_mode,
+                x_atol=1.0e-11,
+                x_atol_max=1.0e-11,
+                maxiter=80,
+            ),
+            classical=(ExtClassical(ok_state, torch.tensor(0.02, **DD64)),),
+            interaction=(ExtInteraction(ok_state, weight),),
+        ).setup(numbers)
+        assert not can_vmap_system(sys_m)
+        return sys_m.singlepoint(pos_a).energy.sum()
+
+    def eval_opaque_unrolled(weight: Tensor) -> Tensor:
+        """Unrolled wrapper for torch.func.grad."""
+        return eval_nontensor_opaque(weight, "unrolled")
+
+    def eval_opaque_implicit(weight: Tensor) -> Tensor:
+        """Implicit wrapper for torch.func.grad."""
+        return eval_nontensor_opaque(weight, "implicit")
+
+    w_test = torch.tensor(0.04, **DD64, requires_grad=True)
+    e_u = eval_nontensor_opaque(w_test, "unrolled")
+    (g_auto_u,) = torch.autograd.grad(e_u, (w_test,))
+    g_func_u = func_grad(eval_opaque_unrolled)(w_test.detach())
+    g_func_i = func_grad(eval_opaque_implicit)(w_test.detach())
+    torch.testing.assert_close(g_auto_u, g_func_u, rtol=1e-9, atol=1e-10)
+    torch.testing.assert_close(g_func_i, g_func_u, rtol=1e-6, atol=1e-7)
+
+    # Independent batch evaluation via evaluate_packed_systems and Calculator (batch_mode=1 and 2)
+    sys_ind = Model(
+        par=par,
+        config=Config.create(int_driver="pytorch"),
+        classical=(ok_cls,),
+        interaction=(ok_int,),
+    ).setup(numbers)
+    packed_res = evaluate_packed_systems(
+        (sys_ind, sys_ind), torch.stack([pos_a, pos_b], dim=0)
+    )
+    torch.testing.assert_close(
+        packed_res.energy.sum(-1),
+        torch.stack([e64, sys_ind.singlepoint(pos_b).energy.sum(-1)]),
+    )
+    calc_bm2 = Calculator(
+        torch.stack([numbers, numbers], dim=0),
+        GFN1_XTB,
+        classical=(ok_cls,),
+        interaction=(ok_int,),
+        opts={"verbosity": 0, "int_driver": "pytorch", "batch_mode": 2},
+        **DD64,
+    )
+    torch.testing.assert_close(
+        calc_bm2.energy(torch.stack([pos_a, pos_b], dim=0)),
+        packed_res.energy.sum(-1),
+    )
+
+    # 3. Custom DispersionD4SC subclass preserves TensorLike (D4Model/Cutoff) + RationalDamping
+    class CustomD4SC(DispersionD4SC):
+        pass
+
+    nums_h2o = torch.tensor([8, 1, 1], device=DEVICE)
+    pos_h2o = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.8], [0.0, 1.7, -0.4]], **DD64
+    )
+    par2 = ParamModule(GFN2_XTB, **DD64)
+    base_d4sc = new_d4sc(nums_h2o, par2, **DD64)
+    assert base_d4sc is not None
+    sub_d4sc = CustomD4SC(
+        base_d4sc.param,
+        base_d4sc.model,
+        base_d4sc.rcov,
+        base_d4sc.r4r2,
+        base_d4sc.cutoff,
+        base_d4sc.counting_function,
+        base_d4sc.damping_function,
+        **DD64,
+    )
+    sub_d4sc.label = "CustomD4SC"
+    sub_d4sc_32 = sub_d4sc.type(torch.float32)
+    assert sub_d4sc_32.model.wf.dtype == torch.float32
+    assert sub_d4sc_32.model.numbers.dtype == nums_h2o.dtype
+
+    wf_grads: list[Tensor] = []
+    for diff_mode in ("unrolled", "implicit"):
+        wf_p = torch.tensor(6.0, **DD64, requires_grad=True)
+        model_p = type(base_d4sc.model)(nums_h2o, wf=wf_p, **DD64)
+        sub_p = CustomD4SC(
+            base_d4sc.param,
+            model_p,
+            base_d4sc.rcov,
+            base_d4sc.r4r2,
+            base_d4sc.cutoff,
+            base_d4sc.counting_function,
+            base_d4sc.damping_function,
+            **DD64,
+        )
+        sub_p.label = "CustomD4SC"
+        sys_d4sc = Model(
+            par=par2,
+            config=Config.create(
+                int_driver="pytorch",
+                exclude="d4sc",
+                differentiation=diff_mode,
+                x_atol=1.0e-10,
+                x_atol_max=1.0e-10,
+                maxiter=80,
+            ),
+            interaction=(sub_p,),
+        ).setup(nums_h2o)
+        loss_d4sc = sys_d4sc.singlepoint(pos_h2o).energy.sum()
+        wf_grads.append(torch.autograd.grad(loss_d4sc, wf_p)[0])
+    torch.testing.assert_close(wf_grads[1], wf_grads[0], rtol=1e-6, atol=1e-8)
+
+
+def test_mutation_and_reconstruction_boundaries_preserve_unrelated_builtins() -> (
+    None
+):
+    """Component and converted-cache mutations invalidate only the affected setup without mutating caller state."""
+    numbers = torch.tensor([8, 1, 1, 17], device=DEVICE)
+    pos = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.8],
+            [0.0, 1.7, -0.4],
+            [2.5, 0.0, 0.0],
+        ],
+        **DD64,
+    )
+    par = ParamModule(GFN1_XTB, **DD64)
+
+    class SharedAliasCache(ClassicalCache):
+        __slots__ = ["shared", "buf"]
+
+        def __init__(self, shared: Tensor, buf: Tensor) -> None:
+            super().__init__(device=shared.device, dtype=shared.dtype)
+            self.shared = shared
+            self.buf = buf
+            self.note = "clean"
+
+    class TrackedClassical(Classical):
+        def __init__(self, label: str, shared: Tensor, factor: float) -> None:
+            super().__init__(device=shared.device, dtype=shared.dtype)
+            self.label = label
+            self.left = shared
+            self.right = shared
+            self.factor = factor
+            self.cache_calls = 0
+
+        @override
+        def get_cache(
+            self, numbers: Tensor, ihelp: IndexHelper | None = None
+        ) -> SharedAliasCache:
+            _ = ihelp
+            self.cache_calls += 1
+            buf = torch.full(
+                numbers.shape, self.factor, device=self.device, dtype=self.dtype
+            )
+            return SharedAliasCache(self.left, buf)
+
+        @override
+        def get_energy(
+            self, positions: Tensor, cache: SharedAliasCache, **_: Any
+        ) -> Tensor:
+            return (
+                0.25
+                * (self.left + self.right + cache.shared)
+                * cache.buf
+                * positions.square().sum(dim=-1)
+            )
+
+    p_pure = torch.tensor(0.02, **DD64, requires_grad=True)
+    p_mut = torch.tensor(0.03, **DD64, requires_grad=True)
+    pure_comp = TrackedClassical("PureCustom", p_pure, 1.0)
+    mut_comp = TrackedClassical("MutCustom", p_mut, 1.5)
+
+    sys64 = Model(
+        par=par,
+        config=Config.create(int_driver="pytorch"),
+        classical=(pure_comp, mut_comp),
+    ).setup(numbers)
+
+    orig_rep = sys64.repulsion_setup
+    orig_hal = sys64.halogen_setup
+    orig_d3 = sys64.d3_setups
+    orig_es2 = sys64.es2_setup
+    orig_es3 = sys64.es3_setup
+    assert orig_rep is not None and orig_hal is not None
+    assert orig_es2 is not None and orig_es3 is not None
+    assert (pure_comp.cache_calls, mut_comp.cache_calls) == (1, 1)
+
+    # 1. Repeated evaluations of pure custom components reuse captured setups
+    r1 = sys64.singlepoint(pos)
+    r2 = sys64.singlepoint(pos)
+    assert (pure_comp.cache_calls, mut_comp.cache_calls) == (1, 1)
+    torch.testing.assert_close(r1.energy, r2.energy)
+
+    # 2. Reconstruction preserves tensor aliases and never mutates caller-owned components
+    assert sys64.exact_core is not None
+    core32 = sys64.exact_core.to(dtype=torch.float32)
+    pure_term32 = core32.classical_terms[-2].setup
+    assert isinstance(pure_term32, CustomClassicalCoreSetup)
+    comp_v32, cache_v32 = pure_term32.reconstruct()
+    assert comp_v32 is not pure_comp
+    assert comp_v32.left is comp_v32.right
+    assert comp_v32.left is cache_v32.shared
+    assert comp_v32.left.dtype == torch.float32
+    assert pure_comp.dtype == torch.float64
+    assert pure_comp.left is p_pure
+
+    # 3. Mutating mut_comp invalidates only mut_comp; pure_comp and all built-in setups are reused
+    mut_comp.factor = 2.75
+    assert sys64._active_exact_core() is None
+    r3 = sys64.singlepoint(pos)
+    assert pure_comp.cache_calls == 1
+    assert mut_comp.cache_calls == 2
+    assert sys64.repulsion_setup is orig_rep
+    assert sys64.halogen_setup is orig_hal
+    assert sys64.d3_setups == orig_d3
+    assert sys64.es2_setup is orig_es2
+    assert sys64.es3_setup is orig_es3
+
+    ref_sys = Model(
+        par=par,
+        config=Config.create(int_driver="pytorch"),
+        classical=(
+            TrackedClassical("PureCustom", p_pure.detach(), 1.0),
+            TrackedClassical("MutCustom", p_mut.detach(), 2.75),
+        ),
+    ).setup(numbers)
+    torch.testing.assert_close(r3.energy, ref_sys.singlepoint(pos).energy)
+
+    # 4. Converted Calculator cache shares identity with CustomClassicalCoreSetup and invalidates on cache mutation
+    calc_c = TrackedClassical("CalcCustom", torch.tensor(0.04, **DD64), 1.0)
+    calc32 = Calculator(
+        numbers,
+        GFN1_XTB,
+        classical=(calc_c,),
+        opts={"verbosity": 0, "int_driver": "pytorch", "exclude": ["scf"]},
+        **DD64,
+    ).type(torch.float32)
+    eval32 = calc32._prepare_eval_system()
+    assert eval32._active_exact_core() is not None
+    pub_cache32 = eval32.classical_cache[calc_c.label]
+    assert eval32.exact_core is not None
+    core_cache32 = eval32.exact_core.classical_terms[-1].setup.template.cache  # type: ignore[union-attr]
+    assert pub_cache32 is core_cache32
+    pub_cache32.note = "dirty"
+    assert eval32._active_exact_core() is None
+    conv_comp32 = eval32.classicals.components[-1]
+    assert isinstance(conv_comp32, TrackedClassical)
+    before_calls = conv_comp32.cache_calls
+    eval32.singlepoint(pos.to(dtype=torch.float32))
+    assert conv_comp32.cache_calls == before_calls + 1
+
+    # 5. In-place mutations of non-tensor set/deque attributes invalidate snapshots,
+    #    and Node keep_dtype=True floating fields stay float64 across core conversion.
+    from collections import deque
+    from types import MappingProxyType
+
+    class KeepDtypeNodeClassical(Classical):
+        __slots__ = ["knode"]
+
+        def __init__(self, knode: _KeepDtypeFloatNode) -> None:
+            super().__init__(
+                device=knode.primary.device, dtype=knode.primary.dtype
+            )
+            self.knode = knode
+
+        @override
+        def get_cache(
+            self, numbers: Tensor, ihelp: IndexHelper | None = None
+        ) -> _KeepDtypeFloatNode:
+            _ = (numbers, ihelp)
+            return self.knode
+
+        @override
+        def get_energy(
+            self, positions: Tensor, cache: _KeepDtypeFloatNode, **_: Any
+        ) -> Tensor:
+            return (
+                0.01
+                * (cache.primary + cache.ref_fp64.to(cache.primary.dtype))
+                * positions.square().sum(dim=-1)
+            )
+
+    class SetDequeClassical(Classical):
+        def __init__(self, weight: Tensor) -> None:
+            super().__init__(device=weight.device, dtype=weight.dtype)
+            self.weight = weight
+            self.active_z: set[int] = {1, 8}
+            self.weights_dq: deque[float] = deque([1.0])
+            self.cache_calls = 0
+
+        @override
+        def get_cache(
+            self, numbers: Tensor, ihelp: IndexHelper | None = None
+        ) -> Tensor:
+            _ = ihelp
+            self.cache_calls += 1
+            factor = sum(self.weights_dq) * len(self.active_z)
+            return factor * self.weight * numbers.to(dtype=self.weight.dtype)
+
+        @override
+        def get_energy(
+            self, positions: Tensor, cache: Tensor, **_: Any
+        ) -> Tensor:
+            return 0.01 * cache * positions.square().sum(dim=-1)
+
+    knode64 = _KeepDtypeFloatNode(
+        primary=torch.tensor(0.2, **DD64),
+        ref_fp64=torch.tensor(0.3, **DD64),
+    )
+    sys_kn = Model(
+        par=par,
+        config=Config.create(int_driver="pytorch", exclude="scf"),
+        classical=(KeepDtypeNodeClassical(knode64),),
+    ).setup(numbers)
+    assert sys_kn.exact_core is not None
+    kn_core32 = sys_kn.exact_core.to(dtype=torch.float32)
+    kn_term32 = kn_core32.classical_terms[-1].setup
+    assert isinstance(kn_term32, CustomClassicalCoreSetup)
+    _, kn_cache32 = kn_term32.reconstruct()
+    assert kn_cache32.primary.dtype == torch.float32
+    assert kn_cache32.ref_fp64.dtype == torch.float64
+
+    sd_comp = SetDequeClassical(torch.tensor(0.2, **DD64))
+    sys_sd = Model(
+        par=par,
+        config=Config.create(int_driver="pytorch", exclude="scf"),
+        classical=(sd_comp,),
+    ).setup(numbers)
+    sys_sd.singlepoint(pos)
+    assert sd_comp.cache_calls == 1
+    sd_comp.active_z.add(17)
+    sys_sd.singlepoint(pos)
+    assert sd_comp.cache_calls == 2
+    sd_comp.weights_dq.append(0.5)
+    sys_sd.singlepoint(pos)
+    assert sd_comp.cache_calls == 3
+
+    # 6. Shared-DAG opaque/frozen tensor holders, stdlib C containers, Node context(),
+    #    and custom .to/.type overrides agree across all conversion and setup entry points.
+    class _ExtHolder:
+        def __init__(self, inner: Any) -> None:
+            self.inner = inner
+
+    class _CustomTypeOnlyCache(ClassicalCache):
+        __slots__ = ["val", "type_calls"]
+
+        def __init__(self, val: Tensor, type_calls: int = 0) -> None:
+            super().__init__(device=val.device, dtype=val.dtype)
+            self.val = val
+            self.type_calls = type_calls
+
+        @override
+        def type(self, dtype: torch.dtype) -> _CustomTypeOnlyCache:
+            return _CustomTypeOnlyCache(
+                self.val.to(dtype=dtype), self.type_calls + 1
+            )
+
+    class _CustomToTypeClassical(Classical):
+        def __init__(self, payload: Any, p: Tensor) -> None:
+            super().__init__(device=p.device, dtype=p.dtype)
+            self.box = [p]
+            self.payload = payload
+            self.p = p
+
+        @override
+        def get_cache(
+            self, numbers: Tensor, ihelp: IndexHelper | None = None
+        ) -> Any:
+            _ = (numbers, ihelp)
+            return self.payload
+
+        @override
+        def get_energy(self, positions: Tensor, cache: Any, **_: Any) -> Tensor:
+            _ = cache
+            return 0.5 * self.p * positions.square().sum(dim=-1)
+
+        @override
+        def to(
+            self,
+            device: torch.device | None = None,
+            dtype: torch.dtype | None = None,
+        ) -> _CustomToTypeClassical:
+            return super().to(device=device, dtype=dtype)
+
+        @override
+        def type(self, dtype: torch.dtype) -> _CustomToTypeClassical:
+            return super().type(dtype)
+
+    class _CustomToOnlyCache(ClassicalCache):
+        __slots__ = ["val", "to_calls", "last_device"]
+
+        def __init__(
+            self,
+            val: Tensor,
+            to_calls: int = 0,
+            last_device: torch.device | None = None,
+        ) -> None:
+            super().__init__(device=val.device, dtype=val.dtype)
+            self.val = val
+            self.to_calls = to_calls
+            self.last_device = last_device
+
+        @override
+        def to(
+            self,
+            device: torch.device | None = None,
+            dtype: torch.dtype | None = None,
+        ) -> _CustomToOnlyCache:
+            return _CustomToOnlyCache(
+                self.val.to(device=device, dtype=dtype),
+                self.to_calls + 1,
+                device,
+            )
+
+    t_leaf = torch.tensor(0.05, **DD64)
+    shared_list = [t_leaf]
+
+    # Nested TensorLike overriding .type() (without .to()) has .type() invoked during parent .type()
+    type_only_owner = _CustomToTypeClassical(
+        _CustomTypeOnlyCache(t_leaf), t_leaf
+    )
+    conv_owner32 = type_only_owner.type(torch.float32)
+    assert conv_owner32.payload.type_calls == 1
+    assert conv_owner32.payload.val.dtype == torch.float32
+
+    # Nested TensorLike overriding .to() (without .type()) has .to() invoked during parent .to(dtype=...)
+    to_only_owner = _CustomToTypeClassical(_CustomToOnlyCache(t_leaf), t_leaf)
+    conv_to_only32 = to_only_owner.to(dtype=torch.float32)
+    assert conv_to_only32.payload.to_calls == 1
+    assert conv_to_only32.payload.last_device is None
+    assert conv_to_only32.payload.val.dtype == torch.float32
+
+    conv_to_dev32 = to_only_owner.to(device=DEVICE, dtype=torch.float32)
+    assert conv_to_dev32.payload.to_calls == 1
+    assert conv_to_dev32.payload.last_device == DEVICE
+    assert conv_to_dev32.payload.val.dtype == torch.float32
+
+    # Shared container visited under keep_dtype=True first still converts on sibling child field
+    p_fp32 = torch.tensor(0.05, device=DEVICE, dtype=torch.float32)
+    dual_shared_box = [torch.tensor(0.07, **DD64)]
+    dual_owner = _CustomToTypeClassical(
+        _DualBoxNode(kept_box=dual_shared_box, normal_box=dual_shared_box),
+        p_fp32,
+    )
+    assert dual_owner.dtype == torch.float32
+    dual_type32 = dual_owner.type(torch.float32)
+    assert dual_type32.payload.kept_box[0].dtype == torch.float64
+    assert dual_type32.payload.normal_box[0].dtype == torch.float32
+    dual_to32 = dual_owner.to(dtype=torch.float32)
+    assert dual_to32.payload.kept_box[0].dtype == torch.float64
+    assert dual_to32.payload.normal_box[0].dtype == torch.float32
+
+    # Shared-box opaque tensor holder + set/frozenset/deque/MappingProxyType + Node context opaque tensor
+    comp_shared_dag = _CustomToTypeClassical(_ExtHolder(shared_list), t_leaf)
+    comp_shared_dag.box = shared_list
+    for bad_obj in (
+        comp_shared_dag,
+        _CustomToTypeClassical({t_leaf}, t_leaf),
+        _CustomToTypeClassical(frozenset([t_leaf]), t_leaf),
+        _CustomToTypeClassical(deque([t_leaf]), t_leaf),
+        _CustomToTypeClassical(MappingProxyType({"t": t_leaf}), t_leaf),
+        _CustomToTypeClassical(
+            _ContextMetaNode(primary=t_leaf, meta=_ExtHolder(t_leaf)), t_leaf
+        ),
+    ):
+        with pytest.raises(TypeError):
+            bad_obj.type(torch.float64)
+        with pytest.raises(TypeError):
+            bad_obj.type(torch.float32)
+        with pytest.raises(TypeError):
+            Model(
+                par=par,
+                config=Config.create(int_driver="pytorch", exclude="scf"),
+                classical=(bad_obj,),
+            ).setup(numbers)
+
+    # Mutual cycle across custom .to/.type subclasses, cyclic deque, cyclic MappingProxyType, and cyclic Node context
+    peer_a = _CustomToTypeClassical(1, t_leaf)
+    peer_b = _CustomToTypeClassical(2, t_leaf)
+    peer_a.payload = peer_b
+    peer_b.payload = peer_a
+
+    cyc_dq: deque[Any] = deque()
+    cyc_dq.append(cyc_dq)
+
+    cyc_dict: dict[str, Any] = {}
+    cyc_dict["self"] = cyc_dict
+    cyc_mp = MappingProxyType(cyc_dict)
+
+    cyc_ext = _ExtHolder(None)
+    cyc_ext.inner = cyc_ext
+
+    for cyc_comp in (
+        peer_a,
+        _CustomToTypeClassical(cyc_dq, t_leaf),
+        _CustomToTypeClassical(cyc_mp, t_leaf),
+        _CustomToTypeClassical(
+            _ContextMetaNode(primary=t_leaf, meta=cyc_ext), t_leaf
+        ),
+    ):
+        with pytest.raises(ValueError, match="Circular reference"):
+            cyc_comp.type(torch.float64)
+        with pytest.raises(ValueError, match="Circular reference"):
+            cyc_comp.type(torch.float32)
+        with pytest.raises(ValueError, match="Circular reference"):
+            Model(
+                par=par,
+                config=Config.create(int_driver="pytorch", exclude="scf"),
+                classical=(cyc_comp,),
+            ).setup(numbers)

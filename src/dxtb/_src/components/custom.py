@@ -27,7 +27,11 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import functools
 import math
+from collections import deque
+from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
 from enum import Enum
 from typing import Any
 
@@ -44,6 +48,10 @@ from .base import (
     Component,
     ComponentCache,
     _iter_mro_slots,
+    _raise_cycle_error,
+    _uses_default_node_conversion,
+    _validate_component_object_graph,
+    _validate_opaque_object,
     _validate_supported_dataclass,
     component_mutation_epoch,
 )
@@ -59,6 +67,7 @@ __all__ = [
     "prepare_custom_interaction_entry",
     "reconstruct_custom_interaction",
     "snapshot_component_state",
+    "try_build_custom_classical_core_setup",
     "validate_custom_component_graph",
 ]
 
@@ -73,6 +82,8 @@ def _resolve_dd_device(device: torch.device | str | None) -> torch.device:
 
 def _static_key(val: Any) -> Any:
     """Build a Python-3.10-hashable, NaN-safe, type-tagged structural key."""
+    if isinstance(val, tuple):
+        return (tuple, type(val), tuple(_static_key(x) for x in val))
     if isinstance(val, slice):
         return (
             slice,
@@ -106,7 +117,8 @@ def _safe_tensor_version(tensor: Tensor) -> int | None:
 def _collect_component_state(
     obj: Any,
     path: str = "",
-    seen: set[int] | None = None,
+    active: set[int] | None = None,
+    seen: dict[int, int] | None = None,
     tensor_records: list[tuple[str, int, int | None]] | None = None,
     static_records: list[tuple[str, Any]] | None = None,
 ) -> tuple[
@@ -114,8 +126,10 @@ def _collect_component_state(
     list[tuple[str, Any]],
 ]:
     """Record reachable tensor identities/versions and non-tensor attribute state."""
+    if active is None:
+        active = set()
     if seen is None:
-        seen = set()
+        seen = {}
     if tensor_records is None:
         tensor_records = []
     if static_records is None:
@@ -131,73 +145,142 @@ def _collect_component_state(
         return tensor_records, static_records
 
     oid = id(obj)
+    if oid in active:
+        _raise_cycle_error(obj)
     if oid in seen:
-        static_records.append((path, ("seen", type(obj))))
+        static_records.append((path, ("seen", type(obj), seen[oid])))
         return tensor_records, static_records
-    seen.add(oid)
-
-    if isinstance(obj, dict):
-        static_records.append(
-            (
-                path,
-                ("dict", type(obj), tuple(_static_key(k) for k in obj.keys())),
-            )
-        )
-        for key, val in obj.items():
+    seen[oid] = len(seen)
+    active.add(oid)
+    try:
+        if isinstance(obj, functools.partial):
+            static_records.append((path, ("partial", _static_key(obj.func))))
             _collect_component_state(
-                val, f"{path}[{key!r}]", seen, tensor_records, static_records
+                obj.args,
+                f"{path}.args",
+                active,
+                seen,
+                tensor_records,
+                static_records,
             )
-        return tensor_records, static_records
+            if obj.keywords:
+                _collect_component_state(
+                    obj.keywords,
+                    f"{path}.keywords",
+                    active,
+                    seen,
+                    tensor_records,
+                    static_records,
+                )
+            return tensor_records, static_records
 
-    if isinstance(obj, (tuple, list)):
-        static_records.append((path, ("seq", type(obj), len(obj))))
-        for idx, item in enumerate(obj):
-            _collect_component_state(
-                item, f"{path}[{idx}]", seen, tensor_records, static_records
+        if isinstance(obj, Mapping):
+            static_records.append(
+                (
+                    path,
+                    (
+                        "dict",
+                        type(obj),
+                        tuple(_static_key(k) for k in obj.keys()),
+                    ),
+                )
             )
-        return tensor_records, static_records
+            for key, val in obj.items():
+                _collect_component_state(
+                    val,
+                    f"{path}[{key!r}]",
+                    active,
+                    seen,
+                    tensor_records,
+                    static_records,
+                )
+            return tensor_records, static_records
 
-    if isinstance(obj, Node) or (
-        dataclasses.is_dataclass(obj) and not isinstance(obj, type)
-    ):
-        static_records.append((path, ("dc", type(obj))))
-        for field_info in dataclasses.fields(obj):
-            val = getattr(obj, field_info.name)
-            sub = f"{path}.{field_info.name}" if path else field_info.name
-            _collect_component_state(
-                val, sub, seen, tensor_records, static_records
+        if isinstance(obj, (tuple, list, deque)):
+            static_records.append((path, ("seq", type(obj), len(obj))))
+            for idx, item in enumerate(obj):
+                _collect_component_state(
+                    item,
+                    f"{path}[{idx}]",
+                    active,
+                    seen,
+                    tensor_records,
+                    static_records,
+                )
+            return tensor_records, static_records
+
+        if isinstance(obj, AbstractSet):
+            elem_digests: list[tuple[Any, ...]] = []
+            elem_tensors: list[tuple[int, int | None]] = []
+            for item in obj:
+                item_t: list[tuple[str, int, int | None]] = []
+                item_s: list[tuple[str, Any]] = []
+                _collect_component_state(
+                    item, "", active, dict(seen), item_t, item_s
+                )
+                for _, tid, tver in item_t:
+                    elem_tensors.append((tid, tver))
+                elem_digests.append((tuple(item_t), tuple(item_s)))
+            for tid, tver in sorted(elem_tensors, key=lambda x: x[0]):
+                tensor_records.append((f"{path}{{elem}}", tid, tver))
+            static_records.append(
+                (path, ("set", type(obj), len(obj), frozenset(elem_digests)))
             )
-        return tensor_records, static_records
+            return tensor_records, static_records
 
-    ext_id = None if isinstance(obj, (Component, ComponentCache)) else oid
-    static_records.append((path, ("obj", type(obj), ext_id)))
-    slots = _iter_mro_slots(obj)
-    for slot in slots:
-        if not hasattr(obj, slot):
-            static_records.append((f"{path}.{slot}" if path else slot, "unset"))
-            continue
-        sub = f"{path}.{slot}" if path else slot
-        _collect_component_state(
-            getattr(obj, slot), sub, seen, tensor_records, static_records
-        )
+        if isinstance(obj, Node) or (
+            dataclasses.is_dataclass(obj) and not isinstance(obj, type)
+        ):
+            static_records.append((path, ("dc", type(obj))))
+            for field_info in dataclasses.fields(obj):
+                val = getattr(obj, field_info.name)
+                sub = f"{path}.{field_info.name}" if path else field_info.name
+                _collect_component_state(
+                    val, sub, active, seen, tensor_records, static_records
+                )
+            return tensor_records, static_records
 
-    extra_attrs = getattr(obj, "__dict__", None)
-    if isinstance(extra_attrs, dict):
-        static_records.append(
-            (
-                path,
-                ("dict_keys", tuple(k for k in extra_attrs if k not in slots)),
-            )
-        )
-        for key, val in extra_attrs.items():
-            if key in slots:
+        ext_id = None if isinstance(obj, (Component, ComponentCache)) else oid
+        static_records.append((path, ("obj", type(obj), ext_id)))
+        slots = _iter_mro_slots(obj)
+        for slot in slots:
+            if not hasattr(obj, slot):
+                static_records.append(
+                    (f"{path}.{slot}" if path else slot, "unset")
+                )
                 continue
-            sub = f"{path}.{key}" if path else key
+            sub = f"{path}.{slot}" if path else slot
             _collect_component_state(
-                val, sub, seen, tensor_records, static_records
+                getattr(obj, slot),
+                sub,
+                active,
+                seen,
+                tensor_records,
+                static_records,
             )
 
-    return tensor_records, static_records
+        extra_attrs = getattr(obj, "__dict__", None)
+        if isinstance(extra_attrs, dict):
+            static_records.append(
+                (
+                    path,
+                    (
+                        "dict_keys",
+                        tuple(k for k in extra_attrs if k not in slots),
+                    ),
+                )
+            )
+            for key, val in extra_attrs.items():
+                if key in slots:
+                    continue
+                sub = f"{path}.{key}" if path else key
+                _collect_component_state(
+                    val, sub, active, seen, tensor_records, static_records
+                )
+
+        return tensor_records, static_records
+    finally:
+        active.discard(oid)
 
 
 _NO_CACHE = object()
@@ -280,109 +363,141 @@ def snapshot_component_state(
 
 
 def validate_custom_component_graph(
-    obj: Any, seen: set[int] | None = None
+    obj: Any,
+    *,
+    active: set[int] | None = None,
+    visited: set[int] | None = None,
 ) -> None:
-    """Validate that ``obj`` contains no unsupported frozen dataclass tensor fields."""
-    if isinstance(obj, (Tensor, *_NON_TRAVERSABLE_TYPES, Enum)):
-        return
-    if seen is None:
-        seen = set()
-    oid = id(obj)
-    if oid in seen:
-        return
-    seen.add(oid)
-
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            validate_custom_component_graph(k, seen)
-            validate_custom_component_graph(v, seen)
-        return
-
-    if isinstance(obj, (tuple, list)):
-        for item in obj:
-            validate_custom_component_graph(item, seen)
-        return
-
-    if isinstance(obj, Node) or (
-        dataclasses.is_dataclass(obj) and not isinstance(obj, type)
-    ):
-        _validate_supported_dataclass(obj)
-        for f in dataclasses.fields(obj):
-            validate_custom_component_graph(getattr(obj, f.name), seen)
-        return
-
-    slots = _iter_mro_slots(obj)
-    for slot in slots:
-        if hasattr(obj, slot):
-            validate_custom_component_graph(getattr(obj, slot), seen)
-    extra = getattr(obj, "__dict__", None)
-    if isinstance(extra, dict):
-        for k, v in extra.items():
-            if k not in slots:
-                validate_custom_component_graph(v, seen)
+    """Validate that ``obj`` has no cycles, frozen ``init=False`` tensors, or opaque tensors."""
+    _validate_component_object_graph(obj, active=active, visited=visited)
 
 
 def is_tensor_only_object(
     obj: Any,
     *,
-    seen: set[int] | None = None,
+    active: set[int] | None = None,
+    memo: dict[int, bool] | None = None,
+    tensor_memo: dict[int, bool] | None = None,
 ) -> bool:
     """Return ``True`` iff ``obj`` recursively holds only tensors and static primitives.
 
     External stateful model objects (such as ``D4Model`` or ``Reference``) and
     Python callables return ``False`` so ``can_vmap_system`` routes them to
-    independent lane evaluation instead of ``torch.func.vmap``.
+    independent lane evaluation instead of ``torch.func.vmap``. Cyclic graphs,
+    frozen ``init=False`` tensors, and opaque tensor holders raise immediately.
     """
     if isinstance(obj, (Tensor, *_PRIMITIVE_STATIC_TYPES, Enum)):
         return True
 
-    if callable(obj) or isinstance(obj, _NON_TRAVERSABLE_TYPES):
+    if isinstance(obj, _NON_TRAVERSABLE_TYPES):
         return False
 
-    if seen is None:
-        seen = set()
+    if active is None:
+        active = set()
+    if memo is None:
+        memo = {}
+    if tensor_memo is None:
+        tensor_memo = {}
     oid = id(obj)
-    if oid in seen:
-        return True
-    seen.add(oid)
+    if oid in active:
+        _raise_cycle_error(obj)
+    if oid in memo:
+        return memo[oid]
 
-    if isinstance(obj, (tuple, list)):
-        return all(is_tensor_only_object(item, seen=seen) for item in obj)
+    if not isinstance(
+        obj, (tuple, list, dict, Node, Component, ComponentCache, TensorLike)
+    ) and not (dataclasses.is_dataclass(obj) and not isinstance(obj, type)):
+        _validate_opaque_object(obj, active=active, tensor_memo=tensor_memo)
+        memo[oid] = False
+        return False
 
-    if isinstance(obj, dict):
-        return all(
-            is_tensor_only_object(k, seen=seen)
-            and is_tensor_only_object(v, seen=seen)
-            for k, v in obj.items()
-        )
-
-    if isinstance(obj, Node):
-        return all(
-            is_tensor_only_object(getattr(obj, f.name), seen=seen)
-            for f in dataclasses.fields(obj)
-        )
-
-    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-        _validate_supported_dataclass(obj)
-        for f in dataclasses.fields(obj):
-            if not is_tensor_only_object(getattr(obj, f.name), seen=seen):
-                return False
-        return True
-
-    if isinstance(obj, (Component, ComponentCache)):
-        for slot in _iter_mro_slots(obj):
-            if hasattr(obj, slot) and not is_tensor_only_object(
-                getattr(obj, slot), seen=seen
-            ):
-                return False
-        extra_attrs = getattr(obj, "__dict__", None)
-        if isinstance(extra_attrs, dict):
-            for val in extra_attrs.values():
-                if not is_tensor_only_object(val, seen=seen):
-                    return False
-        return True
-
-    return False
+    active.add(oid)
+    try:
+        ok = True
+        if isinstance(obj, (tuple, list)):
+            for item in obj:
+                if not is_tensor_only_object(
+                    item, active=active, memo=memo, tensor_memo=tensor_memo
+                ):
+                    ok = False
+        elif isinstance(obj, dict):
+            for k, v in obj.items():
+                if not is_tensor_only_object(
+                    k, active=active, memo=memo, tensor_memo=tensor_memo
+                ):
+                    ok = False
+                if not is_tensor_only_object(
+                    v, active=active, memo=memo, tensor_memo=tensor_memo
+                ):
+                    ok = False
+        elif isinstance(obj, Node):
+            for f in dataclasses.fields(obj):
+                if not is_tensor_only_object(
+                    getattr(obj, f.name),
+                    active=active,
+                    memo=memo,
+                    tensor_memo=tensor_memo,
+                ):
+                    ok = False
+        elif dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+            _validate_supported_dataclass(
+                obj, active=active, tensor_memo=tensor_memo
+            )
+            for f in dataclasses.fields(obj):
+                if not is_tensor_only_object(
+                    getattr(obj, f.name),
+                    active=active,
+                    memo=memo,
+                    tensor_memo=tensor_memo,
+                ):
+                    ok = False
+        elif isinstance(obj, (Component, ComponentCache)):
+            slots = _iter_mro_slots(obj)
+            for slot in slots:
+                if hasattr(obj, slot) and not is_tensor_only_object(
+                    getattr(obj, slot),
+                    active=active,
+                    memo=memo,
+                    tensor_memo=tensor_memo,
+                ):
+                    ok = False
+            extra_attrs = getattr(obj, "__dict__", None)
+            if isinstance(extra_attrs, dict):
+                for k, val in extra_attrs.items():
+                    if k not in slots and not is_tensor_only_object(
+                        val,
+                        active=active,
+                        memo=memo,
+                        tensor_memo=tensor_memo,
+                    ):
+                        ok = False
+        else:
+            # Non-Component/ComponentCache TensorLike (e.g. D4Model, Cutoff):
+            # validate structure, then mark non-vmap-eligible.
+            slots = _iter_mro_slots(obj)
+            for slot in slots:
+                if hasattr(obj, slot):
+                    is_tensor_only_object(
+                        getattr(obj, slot),
+                        active=active,
+                        memo=memo,
+                        tensor_memo=tensor_memo,
+                    )
+            extra_attrs = getattr(obj, "__dict__", None)
+            if isinstance(extra_attrs, dict):
+                for k, val in extra_attrs.items():
+                    if k not in slots:
+                        is_tensor_only_object(
+                            val,
+                            active=active,
+                            memo=memo,
+                            tensor_memo=tensor_memo,
+                        )
+            ok = False
+        memo[oid] = ok
+        return ok
+    finally:
+        active.discard(oid)
 
 
 def _spec_struct_key(spec: Any) -> Any:
@@ -676,37 +791,55 @@ def _extract_spec(
     *,
     floating_list: list[Tensor],
     kept_list: list[Tensor],
-    tensor_refs_by_id: dict[int, _LeafRef],
+    tensor_refs_by_id: dict[tuple[int, bool], _LeafRef],
     target_dtype: torch.dtype | None,
     active_obj_ids: set[int],
-    memo_specs: dict[int, Any],
+    memo_specs: dict[tuple[int, bool], Any],
     snapshot_mutable: bool = False,
+    keep_dtype: bool = False,
+    tensor_memo: dict[int, bool] | None = None,
 ) -> Any:
     """Build a tensor-free structural spec and populate ``floating_list``/``kept_list``."""
+    if tensor_memo is None:
+        tensor_memo = {}
+
     if isinstance(obj, Tensor):
         tid = id(obj)
-        existing = tensor_refs_by_id.get(tid)
+        use_primary = (
+            not keep_dtype
+            and obj.is_floating_point()
+            and (target_dtype is None or obj.dtype == target_dtype)
+        )
+        tkey = (tid, use_primary)
+        existing = tensor_refs_by_id.get(tkey)
         if existing is not None:
             return existing
-        use_primary = obj.is_floating_point() and (
-            target_dtype is None or obj.dtype == target_dtype
-        )
         if use_primary:
             ref = _LeafRef(0, len(floating_list))
             floating_list.append(obj)
         else:
             ref = _LeafRef(1, len(kept_list))
             kept_list.append(obj)
-        tensor_refs_by_id[tid] = ref
+        tensor_refs_by_id[tkey] = ref
         return ref
 
     if isinstance(obj, (*_NON_TRAVERSABLE_TYPES, Enum)):
         return obj
 
     oid = id(obj)
-    if oid in memo_specs:
-        return memo_specs[oid]
     if oid in active_obj_ids:
+        _raise_cycle_error(obj)
+    mkey = (oid, keep_dtype)
+    if mkey in memo_specs:
+        return memo_specs[mkey]
+
+    if not isinstance(obj, (tuple, list, dict, Node, TensorLike)) and not (
+        dataclasses.is_dataclass(obj) and not isinstance(obj, type)
+    ):
+        _validate_opaque_object(
+            obj, active=active_obj_ids, tensor_memo=tensor_memo
+        )
+        memo_specs[mkey] = obj
         return obj
 
     active_obj_ids.add(oid)
@@ -722,12 +855,14 @@ def _extract_spec(
                     active_obj_ids=active_obj_ids,
                     memo_specs=memo_specs,
                     snapshot_mutable=snapshot_mutable,
+                    keep_dtype=keep_dtype,
+                    tensor_memo=tensor_memo,
                 )
                 for item in obj
             )
             has_dyn = any(_spec_has_dynamic(s) for s in sub_items)
             result: Any = _TupleSpec(obj, sub_items, has_dyn)
-            memo_specs[oid] = result
+            memo_specs[mkey] = result
             return result
 
         if isinstance(obj, list):
@@ -741,13 +876,15 @@ def _extract_spec(
                     active_obj_ids=active_obj_ids,
                     memo_specs=memo_specs,
                     snapshot_mutable=snapshot_mutable,
+                    keep_dtype=keep_dtype,
+                    tensor_memo=tensor_memo,
                 )
                 for item in obj
             )
             has_dyn = any(_spec_has_dynamic(s) for s in sub_items)
             orig_list = copy.copy(obj) if snapshot_mutable else obj
             result = _ListSpec(orig_list, sub_items, has_dyn)
-            memo_specs[oid] = result
+            memo_specs[mkey] = result
             return result
 
         if isinstance(obj, dict):
@@ -762,6 +899,8 @@ def _extract_spec(
                         active_obj_ids=active_obj_ids,
                         memo_specs=memo_specs,
                         snapshot_mutable=snapshot_mutable,
+                        keep_dtype=keep_dtype,
+                        tensor_memo=tensor_memo,
                     ),
                     _extract_spec(
                         val,
@@ -772,6 +911,8 @@ def _extract_spec(
                         active_obj_ids=active_obj_ids,
                         memo_specs=memo_specs,
                         snapshot_mutable=snapshot_mutable,
+                        keep_dtype=keep_dtype,
+                        tensor_memo=tensor_memo,
                     ),
                 )
                 for key, val in obj.items()
@@ -782,14 +923,25 @@ def _extract_spec(
             )
             orig_dict = copy.copy(obj) if snapshot_mutable else obj
             result = _DictSpec(orig_dict, entries, has_dyn)
-            memo_specs[oid] = result
+            memo_specs[mkey] = result
             return result
 
         if isinstance(obj, Node) or (
             dataclasses.is_dataclass(obj) and not isinstance(obj, type)
         ):
-            _validate_supported_dataclass(obj)
+            _validate_supported_dataclass(
+                obj, active=active_obj_ids, tensor_memo=tensor_memo
+            )
             is_node = isinstance(obj, Node)
+            kept_field_names: frozenset[str] = (
+                obj._keep_dtype_names
+                if (
+                    isinstance(obj, Node)
+                    and target_dtype is not None
+                    and _uses_default_node_conversion(obj)
+                )
+                else frozenset()
+            )
             params = getattr(obj, "__dataclass_params__", None)
             is_frozen = is_node or bool(params is not None and params.frozen)
             field_specs: list[tuple[str, Any]] = []
@@ -799,6 +951,7 @@ def _extract_spec(
                 if not is_node and is_frozen and not f.init:
                     non_init_keys.append((f.name, _static_key(f_val)))
                     continue
+                field_keep = keep_dtype or (f.name in kept_field_names)
                 field_specs.append(
                     (
                         f.name,
@@ -811,6 +964,8 @@ def _extract_spec(
                             active_obj_ids=active_obj_ids,
                             memo_specs=memo_specs,
                             snapshot_mutable=snapshot_mutable,
+                            keep_dtype=field_keep,
+                            tensor_memo=tensor_memo,
                         ),
                     )
                 )
@@ -826,13 +981,19 @@ def _extract_spec(
                 tuple(non_init_keys),
                 has_dyn,
             )
-            memo_specs[oid] = result
+            memo_specs[mkey] = result
             return result
 
-        is_external = not snapshot_mutable and not isinstance(
+        assert isinstance(obj, TensorLike)
+        allowed_tl = getattr(obj, "allowed_dtypes", None)
+        child_keep = keep_dtype or (
+            target_dtype is not None
+            and allowed_tl is not None
+            and target_dtype not in allowed_tl
+        )
+        child_snapshot = snapshot_mutable and isinstance(
             obj, (Component, ComponentCache)
         )
-        child_snapshot = False if is_external else snapshot_mutable
         slots = _iter_mro_slots(obj)
         slot_entries: list[tuple[str, Any]] = []
         for slot in slots:
@@ -850,6 +1011,8 @@ def _extract_spec(
                         active_obj_ids=active_obj_ids,
                         memo_specs=memo_specs,
                         snapshot_mutable=child_snapshot,
+                        keep_dtype=child_keep,
+                        tensor_memo=tensor_memo,
                     ),
                 )
             )
@@ -872,6 +1035,8 @@ def _extract_spec(
                             active_obj_ids=active_obj_ids,
                             memo_specs=memo_specs,
                             snapshot_mutable=child_snapshot,
+                            keep_dtype=child_keep,
+                            tensor_memo=tensor_memo,
                         ),
                     )
                 )
@@ -879,16 +1044,11 @@ def _extract_spec(
         has_dyn = any(_spec_has_dynamic(s) for _, s in slot_entries) or any(
             _spec_has_dynamic(s) for _, s in dict_entries
         )
-        if is_external and not has_dyn:
-            # Preserve opaque external models in custom Interaction entries when
-            # they hold no tensors; wrap them only if a tensor is nested inside.
-            memo_specs[oid] = obj
-            return obj
         orig_obj = copy.copy(obj) if child_snapshot else obj
         result = _ObjectSpec(
             orig_obj, tuple(slot_entries), tuple(dict_entries), has_dyn
         )
-        memo_specs[oid] = result
+        memo_specs[mkey] = result
         return result
     finally:
         active_obj_ids.discard(oid)
@@ -1072,68 +1232,6 @@ def _rebuild_spec(
     return view
 
 
-def _bind_leaves_from_value(
-    spec: Any,
-    val: Any,
-    primary_overrides: dict[int, Tensor],
-    secondary_overrides: dict[int, Tensor],
-) -> None:
-    """Record leaf tensors from ``val`` matching ``spec``'s ``_LeafRef`` paths."""
-    if isinstance(spec, _LeafRef):
-        if isinstance(val, Tensor):
-            if spec.bucket == 0:
-                primary_overrides[spec.index] = val
-            else:
-                secondary_overrides[spec.index] = val
-        return
-    if isinstance(spec, _TupleSpec) and isinstance(val, tuple):
-        for s_item, v_item in zip(spec.items, val):
-            _bind_leaves_from_value(
-                s_item, v_item, primary_overrides, secondary_overrides
-            )
-    elif isinstance(spec, _ListSpec) and isinstance(val, list):
-        for s_item, v_item in zip(spec.items, val):
-            _bind_leaves_from_value(
-                s_item, v_item, primary_overrides, secondary_overrides
-            )
-    elif isinstance(spec, _DictSpec) and isinstance(val, dict):
-        for (_, v_spec), v_item in zip(spec.entries, val.values()):
-            _bind_leaves_from_value(
-                v_spec, v_item, primary_overrides, secondary_overrides
-            )
-    elif isinstance(spec, _DataclassSpec) and (
-        isinstance(val, Node)
-        or (dataclasses.is_dataclass(val) and not isinstance(val, type))
-    ):
-        for name, f_spec in spec.fields:
-            if hasattr(val, name):
-                _bind_leaves_from_value(
-                    f_spec,
-                    getattr(val, name),
-                    primary_overrides,
-                    secondary_overrides,
-                )
-    elif isinstance(spec, _ObjectSpec):
-        for slot, s_spec in spec.slot_entries:
-            if hasattr(val, slot):
-                _bind_leaves_from_value(
-                    s_spec,
-                    getattr(val, slot),
-                    primary_overrides,
-                    secondary_overrides,
-                )
-        val_dict = getattr(val, "__dict__", None)
-        if isinstance(val_dict, dict):
-            for key, d_spec in spec.dict_entries:
-                if key in val_dict:
-                    _bind_leaves_from_value(
-                        d_spec,
-                        val_dict[key],
-                        primary_overrides,
-                        secondary_overrides,
-                    )
-
-
 def _extract_pair_spec(
     component: Component,
     cache: Any,
@@ -1183,7 +1281,8 @@ class CustomClassicalTemplate:
         "pair_spec",
         "primary_ids",
         "secondary_ids",
-        "initial_dd",
+        "initial_device",
+        "initial_dtype",
         "mutation_snapshot",
         "_hash_cache",
     )
@@ -1193,7 +1292,8 @@ class CustomClassicalTemplate:
     pair_spec: Any
     primary_ids: tuple[int, ...]
     secondary_ids: tuple[int, ...]
-    initial_dd: DD
+    initial_device: torch.device
+    initial_dtype: torch.dtype
     mutation_snapshot: ComponentMutationSnapshot
     _hash_cache: int | None
 
@@ -1213,7 +1313,8 @@ class CustomClassicalTemplate:
         self.pair_spec = pair_spec
         self.primary_ids = primary_ids
         self.secondary_ids = secondary_ids
-        self.initial_dd = initial_dd
+        self.initial_device = _resolve_dd_device(initial_dd["device"])
+        self.initial_dtype = initial_dd["dtype"]
         self.mutation_snapshot = mutation_snapshot
         self._hash_cache = None
 
@@ -1223,9 +1324,8 @@ class CustomClassicalTemplate:
         if not isinstance(other, CustomClassicalTemplate):
             return False
         return (
-            self.initial_dd["dtype"] == other.initial_dd["dtype"]
-            and _resolve_dd_device(self.initial_dd["device"])
-            == _resolve_dd_device(other.initial_dd["device"])
+            self.initial_dtype == other.initial_dtype
+            and self.initial_device == other.initial_device
             and self.pair_spec == other.pair_spec
         )
 
@@ -1234,8 +1334,8 @@ class CustomClassicalTemplate:
             self._hash_cache = hash(
                 (
                     CustomClassicalTemplate,
-                    _resolve_dd_device(self.initial_dd["device"]),
-                    self.initial_dd["dtype"],
+                    self.initial_device,
+                    self.initial_dtype,
                     _spec_struct_key(self.pair_spec),
                 )
             )
@@ -1268,9 +1368,8 @@ class CustomClassicalCoreSetup(Node):
             self.template.secondary_ids,
         )
         same_dd = (
-            target_device
-            == _resolve_dd_device(self.template.initial_dd["device"])
-            and target_dd["dtype"] == self.template.initial_dd["dtype"]
+            target_device == self.template.initial_device
+            and target_dd["dtype"] == self.template.initial_dtype
         )
         if same_leaves and same_dd:
             return self.template.component, self.template.cache
@@ -1304,77 +1403,45 @@ class CustomClassicalCoreSetup(Node):
         )
         return energy
 
-    def with_converted_component(
-        self,
-        component: Component,
-        mutation_snapshot: ComponentMutationSnapshot | None = None,
-    ) -> CustomClassicalCoreSetup:
-        """Rebind the mutation snapshot and shared leaves after ``component`` conversion."""
-        primary_overrides: dict[int, Tensor] = {}
-        secondary_overrides: dict[int, Tensor] = {}
-        if (
-            isinstance(self.template.pair_spec, _TupleSpec)
-            and len(self.template.pair_spec.items) == 2
-        ):
-            _bind_leaves_from_value(
-                self.template.pair_spec.items[0],
-                component,
-                primary_overrides,
-                secondary_overrides,
-            )
-        merged_primary = tuple(
-            primary_overrides.get(idx, t)
-            for idx, t in enumerate(self.floating_tensors)
-        )
-        merged_secondary = tuple(
-            secondary_overrides.get(idx, t)
-            for idx, t in enumerate(self.kept_dtype_tensors)
-        )
-        target_dd: DD = {
-            "device": self.anchor.device,
-            "dtype": self.anchor.dtype,
-        }
-        rebuilt = _rebuild_spec(
-            self.template.pair_spec,
-            merged_primary,
-            merged_secondary,
-            target_dd,
-            {},
-        )
-        cache_view = (
-            rebuilt[1]
-            if isinstance(rebuilt, tuple) and len(rebuilt) == 2
-            else self.template.cache
-        )
 
-        pair_spec, floating_tup, kept_tup = _extract_pair_spec(
-            component,
-            cache_view,
-            target_dtype=self.anchor.dtype,
-            snapshot_mutable=True,
-        )
-        new_template = CustomClassicalTemplate(
-            component=component,
-            cache=cache_view,
-            pair_spec=pair_spec,
-            primary_ids=tuple(id(t) for t in floating_tup),
-            secondary_ids=tuple(id(t) for t in kept_tup),
-            initial_dd={
-                "device": self.anchor.device,
-                "dtype": self.anchor.dtype,
-            },
-            mutation_snapshot=(
-                snapshot_component_state(component, cache_view)
-                if mutation_snapshot is None
-                else mutation_snapshot
-            ),
-        )
-        return CustomClassicalCoreSetup(
-            anchor=self.anchor,
-            floating_tensors=floating_tup,
-            kept_dtype_tensors=kept_tup,
-            template=new_template,
-        )
+def try_build_custom_classical_core_setup(
+    component: Component,
+    cache: Any,
+    dd: DD,
+    *,
+    mutation_snapshot: ComponentMutationSnapshot | None = None,
+) -> CustomClassicalCoreSetup | None:
+    """Build ``CustomClassicalCoreSetup`` when ``(component, cache)`` is tensor-only on ``dd['device']``."""
+    if not is_tensor_only_object((component, cache)):
+        return None
+    target_device = _resolve_dd_device(dd["device"])
+    pair_spec, floating_tup, kept_tup = _extract_pair_spec(
+        component,
+        cache,
+        target_dtype=dd["dtype"],
+        snapshot_mutable=True,
+    )
+    if not all(t.device == target_device for t in (*floating_tup, *kept_tup)):
+        return None
+    template = CustomClassicalTemplate(
+        component=component,
+        cache=cache,
+        pair_spec=pair_spec,
+        primary_ids=tuple(id(t) for t in floating_tup),
+        secondary_ids=tuple(id(t) for t in kept_tup),
+        initial_dd={"device": target_device, "dtype": dd["dtype"]},
+        mutation_snapshot=(
+            snapshot_component_state(component, cache)
+            if mutation_snapshot is None
+            else mutation_snapshot
+        ),
+    )
+    return CustomClassicalCoreSetup(
+        anchor=torch.empty(0, device=target_device, dtype=dd["dtype"]),
+        floating_tensors=floating_tup,
+        kept_dtype_tensors=kept_tup,
+        template=template,
+    )
 
 
 def can_build_custom_classical_core_setup(
@@ -1383,7 +1450,7 @@ def can_build_custom_classical_core_setup(
     dd: DD,
 ) -> bool:
     """Return ``True`` when ``(component, cache)`` is tensor-only on ``dd['device']``."""
-    if not (is_tensor_only_object(component) and is_tensor_only_object(cache)):
+    if not is_tensor_only_object((component, cache)):
         return False
     _, floating_tup, kept_tup = _extract_pair_spec(
         component,
