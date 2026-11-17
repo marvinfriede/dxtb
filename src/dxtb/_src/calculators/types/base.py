@@ -122,7 +122,7 @@ def _convert_system_dtype(
             )
         )
         core_h0 = h0_setup if isinstance(h0_setup, H0SetupNode) else None
-        core_index = (
+        exact_index = (
             system.ihelp
             if core_was_active
             and converted_core.index.has_uniform_device(system.numbers.device)
@@ -131,10 +131,10 @@ def _convert_system_dtype(
         if (
             integral_setup is not converted_core.integral
             or core_h0 is not converted_core.h0_setup
-            or core_index is not converted_core.index
+            or exact_index is not converted_core.index
         ):
             exact_core = converted_core.replace(
-                index=core_index,
+                index=exact_index,
                 integral=integral_setup,
                 h0_setup=core_h0,
             )

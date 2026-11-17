@@ -537,15 +537,15 @@ def prepare_system_fixed_trip(
         raise ValueError(
             "The Fixed-trip controller requires differentiation='unrolled'."
         )
+    _validate_scf_preamble(
+        numbers, ihelp, positions=positions, refocc=refocc, chrg=chrg, spin=spin
+    )
     route = resolve_scf_plan(config, interactions, ihelp, numbers, integrals)
     if route.kind != "scf":
         raise NotImplementedError(
             "The fixed-trip System API supports single-System " "SCF only."
         )
 
-    _validate_scf_preamble(
-        numbers, ihelp, positions=positions, refocc=refocc, chrg=chrg, spin=spin
-    )
     n0, occupation, nel = get_refocc(
         refocc, chrg, spin, ihelp, validate_spin=False
     )

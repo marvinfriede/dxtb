@@ -39,7 +39,7 @@ from dxtb._src.typing.exceptions import DeviceError, DtypeError
 from dxtb._src.wavefunction.filling import FermiStatus, _FermiCoreState
 from dxtb.config import ConfigSCF
 
-from .core import SCFInteractionSet
+from .core import SCFInteractionSet, tensor_leaves
 
 __all__ = [
     "ChargeLayout",
@@ -250,9 +250,19 @@ def _single_system_layout(
     return ChargeLayout(mono_shape, dipole_shape, quadrupole_shape)
 
 
+def _is_valid_spin_list(items: list[object]) -> bool:
+    """Return whether ``items`` is a list of real non-boolean numbers."""
+    return all(
+        _is_valid_spin_list(x)
+        if isinstance(x, list)
+        else (isinstance(x, (int, float)) and not isinstance(x, bool))
+        for x in items
+    )
+
+
 def _check_scf_tensor(
     name: str,
-    tensor: Any,
+    tensor: object,
     dev: torch.device,
     dtype: torch.dtype | None,
     expected_shape: tuple[int, ...] | None = None,
@@ -291,8 +301,8 @@ def _validate_scf_preamble(
     integrals: IntegralMatrices | None = None,
     positions: Tensor | None = None,
     refocc: Tensor | None = None,
-    chrg: Tensor | None = None,
-    spin: Tensor | None = None,
+    chrg: object = None,
+    spin: object = None,
 ) -> tuple[torch.device, torch.dtype, tuple[int, ...], int, int, int]:
     """Validate SCF numbers, IndexHelper, and explicit input tensors."""
     if (
@@ -351,10 +361,33 @@ def _validate_scf_preamble(
         nushell = ihelp.unique_angular.shape[-1]
         if tuple(refocc.shape) not in ((nushell,), (*b, nushell)):
             raise ValueError("SCFInputs 'refocc' shape is incompatible.")
-    tensors = [
+    for name, val, shapes in (
+        ("chrg", chrg, ((), (1,)) if not b else ((*b, 1),)),
+        ("spin", spin, ((*b, 1),)),
+    ):
+        if val is None or (
+            name == "spin" and isinstance(val, list) and _is_valid_spin_list(val)
+        ):
+            continue
+        if (
+            not isinstance(val, Tensor)
+            or val.is_complex()
+            or val.dtype is torch.bool
+        ):
+            raise TypeError(
+                f"SCFInputs '{name}' must be a real numeric Tensor."
+            )
+        if val.device != dev:
+            raise DeviceError(
+                f"Device mismatch: numbers is on '{dev}', but '{name}' is on "
+                f"'{val.device}'."
+            )
+        if tuple(val.shape) not in shapes:
+            raise ValueError(
+                f"SCFInputs '{name}' shape {tuple(val.shape)} is incompatible."
+            )
+    tensors: list[tuple[str, Tensor | None, tuple[int, ...] | None]] = [
         ("positions", positions, (*b, nat, 3)),
-        ("chrg", chrg, None),
-        ("spin", spin, None),
     ]
     if integrals is not None:
         tensors.extend(
@@ -404,7 +437,6 @@ def setup_scf_inputs(
     overlap = integrals.overlap + torch.diag_embed(padding_diagonal)
 
     inverse_cholesky = _symmetric_inverse_sqrt(overlap)
-    from .core import tensor_leaves
     from .interactions import prepare_scf_interactions
 
     core_interactions = prepare_scf_interactions(
@@ -419,6 +451,7 @@ def setup_scf_inputs(
             setup = entry.option("setup")
             rc6 = getattr(setup, "model_rc6", None)
             _check_scf_tensor("d4sc.setup.model_rc6", rc6, dev, fdtype)
+            assert isinstance(rc6, Tensor)
             if rc6.ndim != len(b) + 4 or rc6.shape[-2] != rc6.shape[-1]:
                 raise ValueError("SCFInputs 'd4sc.setup.model_rc6' invalid.")
             nref = int(rc6.shape[-1])

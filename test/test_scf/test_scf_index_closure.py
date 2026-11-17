@@ -40,6 +40,7 @@ from dxtb._src.calculators.batch_implicit import (
     prepare_converged_root_batch,
 )
 from dxtb._src.calculators.model import Model, System
+from dxtb._src.calculators.packed_result import evaluate_packed_systems
 from dxtb._src.calculators.singlepoint import (
     _interaction_data,
     _PreparedSinglepoint,
@@ -179,6 +180,55 @@ def test_single_index_identity_and_single_check_per_evaluation(
     assert captured_inputs[0].index is conv_sys.ihelp
     assert res_f32.energy.dtype is torch.float32
 
+    # Grouped-vmap & packed/conformer System + standalone scf.solve() identity
+    captured_inputs.clear()
+    grouped_res = evaluate_packed_systems((sys_oh2, sys_oh2), (pos, pos * 1.01))
+    assert captured_inputs and all(
+        inp.index is sys_oh2.ihelp for inp in captured_inputs
+    )
+    torch.testing.assert_close(
+        grouped_res.energy[0].sum(), e_ref, atol=1e-11, rtol=1e-11
+    )
+
+    sys_h2 = Model(par=par, config=sys_oh2.config).setup(
+        torch.tensor([1, 1], dtype=torch.int64)
+    )
+    captured_inputs.clear()
+    packed_res = evaluate_packed_systems((sys_oh2, sys_h2), (pos, pos[:2]))
+    assert [inp.index for inp in captured_inputs] == [
+        sys_oh2.ihelp,
+        sys_h2.ihelp,
+    ]
+    torch.testing.assert_close(
+        packed_res.energy[0].sum(), e_ref, atol=1e-11, rtol=1e-11
+    )
+
+    assert sys_oh2.integral_setup is not None
+    assert sys_oh2.h0_setup is not None
+    standalone_ih = IndexHelper.from_numbers(sys_oh2.numbers.clone(), par)
+    chrg0 = torch.tensor([0.0], dtype=torch.float64)
+    st_mats, st_refocc = build_integral_matrices(
+        sys_oh2.integral_setup, sys_oh2.h0_setup, standalone_ih, pos, chrg0
+    )
+    st_cache = sys_oh2.interactions.get_cache(
+        numbers=sys_oh2.numbers, positions=pos, ihelp=standalone_ih
+    )
+    captured_inputs.clear()
+    solve(
+        sys_oh2.numbers,
+        pos,
+        chrg0,
+        None,
+        sys_oh2.interactions,
+        st_cache,
+        standalone_ih,
+        sys_oh2.config.scf,
+        st_mats,
+        st_refocc,
+    )
+    assert len(captured_inputs) == 1
+    assert captured_inputs[0].index is standalone_ih
+
     # Implicit batch prep & evaluation -> scf_inputs.index is system.ihelp
     monkeypatch.undo()
     imp_cfg = Config.create(
@@ -308,6 +358,8 @@ def test_scf_dynamo_capture_and_post_compile_mutation_guard() -> None:
         int_driver=labels.INTDRIVER_PYTORCH,
         int_level=labels.INTLEVEL_HCORE,
         exclude=["disp", "rep", "hal"],
+        guess=labels.GUESS_SAD,
+        fermi_etemp=0.0,
         strategy="linear",
         mix_guess=False,
         maxiter=1,
@@ -363,9 +415,7 @@ def test_scf_dynamo_capture_and_post_compile_mutation_guard() -> None:
     torch._dynamo.reset()
     ref_mapped = scf_map(x0, base_inputs).mapped_x
     comp_map = torch.compile(pure_map_only, backend="eager", fullgraph=True)
-    torch.testing.assert_close(
-        comp_map(x0), ref_mapped, atol=1e-12, rtol=1e-12
-    )
+    torch.testing.assert_close(comp_map(x0), ref_mapped, atol=1e-12, rtol=1e-12)
     comp_step = torch.compile(setup_and_step, backend="eager")
     torch.testing.assert_close(
         comp_step(mats.hcore, x0), ref_mapped, atol=1e-12, rtol=1e-12
@@ -1078,3 +1128,411 @@ def test_batched_implicit_solve_and_all_interaction_metadata_guards(
             zero_orb_ih,
             cfg2,
         )
+
+
+def _standalone_h2o_bundle(method_label: int, dtype: torch.dtype) -> tuple[
+    Tensor,
+    Tensor,
+    InteractionList,
+    object,
+    IndexHelper,
+    ConfigSCF,
+    IntegralMatrices,
+    Tensor,
+]:
+    """Build standalone H2O numbers, geometry, integrals, cache, and config."""
+    from dxtb._src.basis.bas import Basis
+    from dxtb._src.integral.driver.pytorch import (
+        build_overlap,
+        evaluate_moments,
+        setup_integrals,
+    )
+    from dxtb._src.xtb.h0 import build_hcore, setup_h0
+
+    raw_par = {
+        labels.GFN0_XTB: GFN0_XTB,
+        labels.GFN1_XTB: GFN1_XTB,
+        labels.GFN2_XTB: GFN2_XTB,
+    }[method_label]
+    par = ParamModule(raw_par, dtype=dtype)
+    nums = torch.tensor([8, 1, 1], dtype=torch.int64)
+    pos = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.8], [0.0, 1.8, 0.0]], dtype=dtype
+    )
+    ihelp = IndexHelper.from_numbers(nums, par)
+    pt_setup = setup_integrals(Basis(nums, par, ihelp, dtype=dtype))
+    h0 = setup_h0(nums, par, ihelp, dtype=dtype)
+    chrg0 = torch.tensor([0.0], dtype=dtype)
+    if method_label == labels.GFN2_XTB:
+        ovlp, dip, quad = evaluate_moments(
+            pt_setup, pos, labels.INTLEVEL_QUADRUPOLE
+        )
+        hcore, _ = build_hcore(h0, pos, ovlp, charge=chrg0)
+        mats = IntegralMatrices(
+            hcore=hcore, overlap=ovlp, dipole=dip, quadrupole=quad
+        )
+    else:
+        ovlp = build_overlap(pt_setup, pos)
+        hcore, _ = build_hcore(h0, pos, ovlp, charge=chrg0)
+        mats = IntegralMatrices(hcore=hcore, overlap=ovlp)
+    if method_label == labels.GFN0_XTB:
+        ilist = InteractionList()
+        icache = ilist.get_cache(numbers=nums, positions=pos, ihelp=ihelp)
+        cfg = ConfigSCF(method=labels.GFN0_XTB)
+    else:
+        calc = Calculator(
+            nums, par, opts={"verbosity": 0, "maxiter": 40}, dtype=dtype
+        )
+        ilist = calc.interactions
+        icache = ilist.get_cache(numbers=nums, positions=pos, ihelp=ihelp)
+        cfg = ConfigSCF.create(method=method_label, maxiter=40)
+    cfg = replace(cfg, fermi=replace(cfg.fermi, etemp=300.0))
+    return nums, pos, ilist, icache, ihelp, cfg, mats, h0.refocc
+
+
+def test_standalone_solve_charge_spin_dtypes_and_autograd() -> None:
+    """Verify WP1.1/WP1.2 charge/spin dtypes, parity, and autograd on solve."""
+    combos = (
+        (torch.float64, torch.float64, torch.float64),
+        (torch.float64, torch.float64, torch.int64),
+        (torch.float64, torch.float64, torch.float32),
+        (torch.float64, torch.int64, torch.float64),
+        (torch.float64, torch.int64, torch.int64),
+        (torch.float64, torch.float32, torch.int64),
+        (torch.float32, torch.float32, torch.int64),
+        (torch.float32, torch.float64, torch.int64),
+    )
+    bundles = {
+        (m, dt): _standalone_h2o_bundle(m, dt)
+        for m in (labels.GFN0_XTB, labels.GFN1_XTB, labels.GFN2_XTB)
+        for dt in (torch.float64, torch.float32)
+    }
+
+    for m_lbl in (labels.GFN0_XTB, labels.GFN1_XTB, labels.GFN2_XTB):
+        guesses = (
+            (labels.GUESS_EEQ,)
+            if m_lbl == labels.GFN0_XTB
+            else (labels.GUESS_EEQ, labels.GUESS_SAD)
+        )
+        for guess in guesses:
+            ref_energies: dict[torch.dtype, Tensor] = {}
+            ref_chrg_grads: dict[torch.dtype, Tensor] = {}
+            for dt in (torch.float64, torch.float32):
+                nums, pos, ilist, icache, ihelp, cfg, mats, refocc = bundles[
+                    (m_lbl, dt)
+                ]
+                cfg_g = replace(cfg, guess=guess)
+                c_ref = torch.tensor([0.0], dtype=dt, requires_grad=True)
+                s_ref = torch.tensor([0.0], dtype=dt)
+                out_ref = solve(
+                    nums,
+                    pos,
+                    c_ref,
+                    s_ref,
+                    ilist,
+                    icache,
+                    ihelp,
+                    cfg_g,
+                    mats,
+                    refocc,
+                )
+                e_ref = (
+                    out_ref["energy"]
+                    if isinstance(out_ref, dict)
+                    else out_ref.energy
+                )
+                ref_energies[dt] = e_ref.detach()
+                ref_chrg_grads[dt] = torch.autograd.grad(e_ref.sum(), c_ref)[0]
+
+            for calc_dt, chrg_dt, spin_dt in combos:
+                nums, pos, ilist, icache, ihelp, cfg, mats, refocc = bundles[
+                    (m_lbl, calc_dt)
+                ]
+                cfg_g = replace(cfg, guess=guess)
+                pos_g = pos.clone().requires_grad_(True)
+                chrg = torch.tensor([0], dtype=chrg_dt)
+                if chrg.is_floating_point():
+                    chrg = chrg.clone().requires_grad_(True)
+                spin = torch.tensor([0], dtype=spin_dt)
+                out = solve(
+                    nums,
+                    pos_g,
+                    chrg,
+                    spin,
+                    ilist,
+                    icache,
+                    ihelp,
+                    cfg_g,
+                    mats,
+                    refocc,
+                )
+                energy = out["energy"] if isinstance(out, dict) else out.energy
+                assert energy.dtype is calc_dt
+                tol = 0.0 if chrg_dt == calc_dt else 1e-6
+                torch.testing.assert_close(
+                    energy.detach(), ref_energies[calc_dt], atol=tol, rtol=tol
+                )
+                if m_lbl != labels.GFN0_XTB and guess == labels.GUESS_EEQ:
+                    g_pos = torch.autograd.grad(
+                        energy.sum(), pos_g, retain_graph=chrg.requires_grad
+                    )[0]
+                    assert torch.isfinite(g_pos).all()
+                if chrg.requires_grad:
+                    g_c = torch.autograd.grad(energy.sum(), chrg)[0]
+                    assert g_c.dtype is chrg_dt
+                    gtol = (
+                        1e-5 if torch.float32 in (calc_dt, chrg_dt) else 1e-12
+                    )
+                    torch.testing.assert_close(
+                        g_c.to(calc_dt),
+                        ref_chrg_grads[calc_dt],
+                        atol=gtol,
+                        rtol=gtol,
+                    )
+
+    # Implicit SCF route also accepts integer/mixed spin and charge dtypes
+    nums, pos, ilist, icache, ihelp, cfg, mats, refocc = bundles[
+        (labels.GFN1_XTB, torch.float64)
+    ]
+    cfg_imp = replace(
+        cfg, differentiation=cfg.differentiation.__class__.IMPLICIT
+    )
+    c_imp = torch.tensor([0.0], dtype=torch.float32, requires_grad=True)
+    s_imp = torch.tensor([0], dtype=torch.int64)
+    res_imp = solve(
+        nums, pos, c_imp, s_imp, ilist, icache, ihelp, cfg_imp, mats, refocc
+    )
+    assert not isinstance(res_imp, dict)
+    assert res_imp.energy.dtype is torch.float64
+    (g_imp,) = torch.autograd.grad(res_imp.energy.sum(), c_imp)
+    assert g_imp.dtype is torch.float32 and torch.isfinite(g_imp).all()
+
+
+def test_standalone_charge_spin_shapes_and_transforms() -> None:
+    """Verify WP1.3/WP5 charge/spin shape contract, broadcasting guard, vmap."""
+    from tad_mctc.batch import pack
+
+    from dxtb._src.xtb.h0 import setup_h0
+
+    nums, pos, ilist, icache, ihelp, cfg, mats, refocc = _standalone_h2o_bundle(
+        labels.GFN1_XTB, torch.float64
+    )
+    e_ref = solve(
+        nums,
+        pos,
+        torch.tensor([0.0], dtype=torch.float64),
+        torch.tensor([0], dtype=torch.int64),
+        ilist,
+        icache,
+        ihelp,
+        cfg,
+        mats,
+        refocc,
+    )
+    assert not isinstance(e_ref, dict)
+    ref_sum = e_ref.energy.detach().sum()
+
+    # Accepted single-System scalar/1D/list forms
+    for c_ok, s_ok in (
+        (torch.tensor(0.0, dtype=torch.float64), None),
+        (
+            torch.tensor(0.0, dtype=torch.float64),
+            torch.tensor([0], dtype=torch.int64),
+        ),
+        (torch.tensor([0.0], dtype=torch.float64), [0]),
+    ):
+        r_ok = solve(
+            nums, pos, c_ok, s_ok, ilist, icache, ihelp, cfg, mats, refocc  # type: ignore[arg-type]
+        )
+        assert not isinstance(r_ok, dict)
+        torch.testing.assert_close(
+            r_ok.energy.sum(), ref_sum, atol=1e-12, rtol=1e-12
+        )
+
+    # Rejected single-System malformed shapes, devices, and dtypes
+    for exc_cls, c_bad, s_bad in (
+        (
+            ValueError,
+            torch.tensor(0.0, dtype=torch.float64),
+            torch.tensor(0, dtype=torch.int64),
+        ),
+        (ValueError, torch.zeros((2,), dtype=torch.float64), None),
+        (
+            ValueError,
+            torch.zeros((1,), dtype=torch.float64),
+            torch.zeros((2,), dtype=torch.int64),
+        ),
+        (ValueError, torch.zeros((1, 1), dtype=torch.float64), None),
+        (TypeError, 0.0, None),
+        (TypeError, torch.zeros((1,), dtype=torch.float64), 0),
+        (TypeError, torch.tensor([False]), None),
+        (
+            TypeError,
+            torch.zeros((1,), dtype=torch.float64),
+            torch.tensor([False]),
+        ),
+        (TypeError, torch.zeros((1,), dtype=torch.float64), [False]),
+        (TypeError, torch.zeros((1,), dtype=torch.float64), ["bad"]),
+        (TypeError, torch.tensor([0.0 + 0.0j]), None),
+        (
+            DeviceError,
+            torch.tensor([0.0], dtype=torch.float64, device="meta"),
+            None,
+        ),
+        (
+            DeviceError,
+            torch.tensor([0.0], dtype=torch.float64),
+            torch.tensor([0], dtype=torch.int64, device="meta"),
+        ),
+    ):
+        with pytest.raises(exc_cls):
+            solve(
+                nums,
+                pos,
+                c_bad,  # type: ignore[arg-type]
+                s_bad,  # type: ignore[arg-type]
+                ilist,
+                icache,
+                ihelp,
+                cfg,
+                mats,
+                refocc,
+            )
+
+    # Batched System: (nbatch, 1) accepted; (nbatch,) 1D broadcasting rejected
+    par0 = ParamModule(GFN0_XTB, dtype=torch.float64)
+    bnums = pack([torch.tensor([1, 1]), torch.tensor([8, 1, 1])])
+    bpos = pack([pos[:2], pos])
+    calc_b0 = Calculator(
+        bnums,
+        par0,
+        opts={"batch_mode": 1, "verbosity": 0},
+        dtype=torch.float64,
+    )
+    sp_b0 = calc_b0.singlepoint(bpos)
+    bmats0 = IntegralMatrices(hcore=sp_b0.hcore, overlap=sp_b0.overlap)
+    bh0_0 = setup_h0(bnums, par0, calc_b0.ihelp, dtype=torch.float64)
+    bcfg0 = ConfigSCF(method=labels.GFN0_XTB)
+    b_ilist = InteractionList()
+    b_icache = b_ilist.get_cache(
+        numbers=bnums, positions=bpos, ihelp=calc_b0.ihelp
+    )
+
+    out_b0 = solve(
+        bnums,
+        bpos,
+        torch.zeros((2, 1), dtype=torch.int64),
+        torch.zeros((2, 1), dtype=torch.int64),
+        b_ilist,
+        b_icache,
+        calc_b0.ihelp,
+        bcfg0,
+        bmats0,
+        bh0_0.refocc,
+    )
+    assert isinstance(out_b0, dict)
+    torch.testing.assert_close(
+        out_b0["energy"].sum(), sp_b0.scf.sum(), atol=1e-12, rtol=1e-12
+    )
+    with pytest.raises(ValueError, match="shape"):
+        solve(
+            bnums,
+            bpos,
+            torch.zeros((2,), dtype=torch.float64),
+            None,
+            b_ilist,
+            b_icache,
+            calc_b0.ihelp,
+            bcfg0,
+            bmats0,
+            bh0_0.refocc,
+        )
+    with pytest.raises(ValueError, match="incompatible"):
+        get_refocc(
+            bh0_0.refocc,
+            torch.zeros((2,), dtype=torch.float64),
+            None,
+            calc_b0.ihelp,
+        )
+    with pytest.raises(TypeError):
+        solve(
+            bnums,
+            bpos,
+            torch.zeros((2, 1), dtype=torch.float64),
+            [[False], [False]],  # type: ignore[arg-type]
+            b_ilist,
+            b_icache,
+            calc_b0.ihelp,
+            bcfg0,
+            bmats0,
+            bh0_0.refocc,
+        )
+
+    # Transform compatibility (vmap over 0D scalar chrg + int64 spin, jacrev/jvp)
+    nums0, pos0, ilist0, icache0, ihelp0, cfg0, mats0, refocc0 = (
+        _standalone_h2o_bundle(labels.GFN0_XTB, torch.float64)
+    )
+
+    def eval_gfn0_chrg(c_in: Tensor) -> Tensor:
+        cfg0_t0 = replace(cfg0, fermi=replace(cfg0.fermi, etemp=0.0))
+        res = solve(
+            nums0,
+            pos0,
+            c_in,
+            None,
+            ilist0,
+            icache0,
+            ihelp0,
+            cfg0_t0,
+            mats0,
+            refocc0,
+        )
+        assert isinstance(res, dict)
+        return res["energy"].sum()
+
+    def eval_gfn1_fixed_trip(c_in: Tensor, s_in: Tensor) -> Tensor:
+        cfg_sad = replace(cfg, guess=labels.GUESS_SAD, maxiter=15)
+        res_ft = scf_eager.run_system_fixed_trip(
+            nums, pos, c_in, s_in, ilist, icache, ihelp, cfg_sad, mats, refocc
+        )
+        assert not isinstance(res_ft, dict)
+        return res_ft.energy.sum()
+
+    chrg_vec = torch.tensor([0.0, 0.1], dtype=torch.float64)
+    spin_mat = torch.tensor([[0], [0]], dtype=torch.int64)
+    vmapped_e0 = vmap(eval_gfn0_chrg)(chrg_vec)
+    serial_e0 = torch.stack([eval_gfn0_chrg(chrg_vec[i]) for i in range(2)])
+    torch.testing.assert_close(vmapped_e0, serial_e0, atol=1e-12, rtol=1e-12)
+
+    vmapped_e1 = vmap(eval_gfn1_fixed_trip)(chrg_vec, spin_mat)
+    serial_e1 = torch.stack(
+        [eval_gfn1_fixed_trip(chrg_vec[i], spin_mat[i]) for i in range(2)]
+    )
+    torch.testing.assert_close(vmapped_e1, serial_e1, atol=1e-12, rtol=1e-12)
+
+    c0 = torch.tensor([0.0], dtype=torch.float64)
+    s0 = torch.tensor([0], dtype=torch.int64)
+
+    def eval_c(c_val: Tensor) -> Tensor:
+        res = solve(
+            nums0,
+            pos0,
+            c_val,
+            s0,
+            ilist0,
+            icache0,
+            ihelp0,
+            cfg0,
+            mats0,
+            refocc0,
+        )
+        assert isinstance(res, dict)
+        return res["energy"].sum()
+
+    g_rev = jacrev(eval_c)(c0)
+    g_fwd = jacfwd(eval_c)(c0)
+    _, g_jvp = jvp(eval_c, (c0,), (torch.ones_like(c0),))
+    torch.testing.assert_close(g_rev, g_fwd, atol=1e-12, rtol=1e-12)
+    torch.testing.assert_close(
+        g_rev, g_jvp.reshape_as(g_rev), atol=1e-12, rtol=1e-12
+    )

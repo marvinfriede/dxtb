@@ -28,7 +28,7 @@ those populations, i.e. the potential vector.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import torch
 from tad_mctc import storch
@@ -158,7 +158,7 @@ def solve(
         if eager_res.scf is not None:
             return eager_res.scf
         assert eager_res.non_scf is not None
-        return eager_res.non_scf
+        return cast("SCFResult", eager_res.non_scf)
 
     if config.differentiation.value != "implicit":
         raise ValueError(
@@ -276,7 +276,18 @@ def get_refocc(
         torch.tensor(0, device=refs.device, dtype=refs.dtype),
     )
 
-    nel = reference_electron_count(refs, ihelp) - chrg
+    ref_nel = reference_electron_count(refs, ihelp)
+    chrg_f = (
+        chrg.to(dtype=ref_nel.dtype)
+        if isinstance(chrg, Tensor) and chrg.dtype != ref_nel.dtype
+        else chrg
+    )
+    nel = ref_nel - chrg_f
+    if nel.shape != ref_nel.shape:
+        raise ValueError(
+            f"SCF 'chrg' shape {tuple(getattr(chrg, 'shape', ()))} is "
+            f"incompatible with electron count shape {tuple(ref_nel.shape)}."
+        )
 
     # get alpha and beta electrons and occupation
     nab = filling.get_alpha_beta_occupation(nel, spin, validate=validate_spin)
