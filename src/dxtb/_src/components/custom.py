@@ -50,7 +50,9 @@ from .base import (
     _iter_mro_slots,
     _raise_cycle_error,
     _uses_default_node_conversion,
+    _uses_default_tensorlike_conversion,
     _validate_component_object_graph,
+    _validate_node_contexts,
     _validate_opaque_object,
     _validate_supported_dataclass,
     component_mutation_epoch,
@@ -185,10 +187,18 @@ def _collect_component_state(
                     ),
                 )
             )
-            for key, val in obj.items():
+            for idx, (key, val) in enumerate(obj.items()):
+                _collect_component_state(
+                    key,
+                    f"{path}.keys[{idx}]",
+                    active,
+                    seen,
+                    tensor_records,
+                    static_records,
+                )
                 _collect_component_state(
                     val,
-                    f"{path}[{key!r}]",
+                    f"{path}.values[{idx}]",
                     active,
                     seen,
                     tensor_records,
@@ -431,6 +441,9 @@ def is_tensor_only_object(
                 ):
                     ok = False
         elif isinstance(obj, Node):
+            _validate_node_contexts(obj, active=active, tensor_memo=tensor_memo)
+            if not _uses_default_node_conversion(obj):
+                ok = False
             for f in dataclasses.fields(obj):
                 if not is_tensor_only_object(
                     getattr(obj, f.name),
@@ -452,6 +465,11 @@ def is_tensor_only_object(
                 ):
                     ok = False
         elif isinstance(obj, (Component, ComponentCache)):
+            if not (
+                _uses_default_tensorlike_conversion(obj, use_to=True)
+                and _uses_default_tensorlike_conversion(obj, use_to=False)
+            ):
+                ok = False
             slots = _iter_mro_slots(obj)
             for slot in slots:
                 if hasattr(obj, slot) and not is_tensor_only_object(
@@ -500,8 +518,8 @@ def is_tensor_only_object(
         active.discard(oid)
 
 
-def _spec_struct_key(spec: Any) -> Any:
-    """Return a hashable structural key for any spec node or static value."""
+def _spec_hash(spec: Any) -> int:
+    """Return an ``O(V + E)`` cached structural hash for any spec node or static value."""
     if isinstance(
         spec,
         (
@@ -513,8 +531,90 @@ def _spec_struct_key(spec: Any) -> Any:
             _ObjectSpec,
         ),
     ):
-        return spec._struct_key()
-    return _static_key(spec)
+        return hash(spec)
+    return hash(_static_key(spec))
+
+
+def _specs_equal(
+    a: Any, b: Any, seen: dict[tuple[int, int], bool] | None = None
+) -> bool:
+    """Return ``True`` when ``a`` and ``b`` have identical spec structure in ``O(V + E)``."""
+    if a is b:
+        return True
+    spec_types = (
+        _LeafRef,
+        _TupleSpec,
+        _ListSpec,
+        _DictSpec,
+        _DataclassSpec,
+        _ObjectSpec,
+    )
+    a_is_spec = isinstance(a, spec_types)
+    b_is_spec = isinstance(b, spec_types)
+    if not a_is_spec or not b_is_spec:
+        if a_is_spec or b_is_spec:
+            return False
+        return _static_key(a) == _static_key(b)
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, _LeafRef):
+        return a.bucket == b.bucket and a.index == b.index
+    if _spec_hash(a) != _spec_hash(b):
+        return False
+    pair_key = (id(a), id(b))
+    if seen is None:
+        seen = {}
+    cached_eq = seen.get(pair_key)
+    if cached_eq is not None:
+        return cached_eq
+    if isinstance(a, _TupleSpec):
+        eq = (
+            a.tuple_cls is b.tuple_cls
+            and len(a.items) == len(b.items)
+            and all(_specs_equal(x, y, seen) for x, y in zip(a.items, b.items))
+        )
+    elif isinstance(a, _ListSpec):
+        eq = (
+            a.list_cls is b.list_cls
+            and len(a.items) == len(b.items)
+            and all(_specs_equal(x, y, seen) for x, y in zip(a.items, b.items))
+        )
+    elif isinstance(a, _DictSpec):
+        eq = (
+            a.dict_cls is b.dict_cls
+            and len(a.entries) == len(b.entries)
+            and all(
+                _specs_equal(ka, kb, seen) and _specs_equal(va, vb, seen)
+                for (ka, va), (kb, vb) in zip(a.entries, b.entries)
+            )
+        )
+    elif isinstance(a, _DataclassSpec):
+        eq = (
+            type(a.orig) is type(b.orig)
+            and a.non_init_keys == b.non_init_keys
+            and len(a.fields) == len(b.fields)
+            and all(
+                na == nb and _specs_equal(sa, sb, seen)
+                for (na, sa), (nb, sb) in zip(a.fields, b.fields)
+            )
+        )
+    else:
+        assert isinstance(a, _ObjectSpec) and isinstance(b, _ObjectSpec)
+        eq = (
+            type(a.orig) is type(b.orig)
+            and len(a.slot_entries) == len(b.slot_entries)
+            and len(a.dict_entries) == len(b.dict_entries)
+            and all(
+                sa == sb and _specs_equal(va, vb, seen)
+                for (sa, va), (sb, vb) in zip(a.slot_entries, b.slot_entries)
+            )
+            and all(
+                ka == kb and _specs_equal(va, vb, seen)
+                for (ka, va), (kb, vb) in zip(a.dict_entries, b.dict_entries)
+            )
+        )
+    seen[pair_key] = eq
+    return eq
 
 
 class _LeafRef:
@@ -528,9 +628,6 @@ class _LeafRef:
     def __init__(self, bucket: int, index: int) -> None:
         self.bucket = bucket
         self.index = index
-
-    def _struct_key(self) -> tuple[Any, ...]:
-        return (_LeafRef, self.bucket, self.index)
 
     def __eq__(self, other: object) -> bool:
         return (
@@ -550,7 +647,6 @@ class _TupleSpec:
         "is_namedtuple",
         "items",
         "has_dynamic",
-        "_key_cache",
         "_hash_cache",
     )
 
@@ -567,26 +663,20 @@ class _TupleSpec:
         )
         self.items = items
         self.has_dynamic = has_dynamic
-        self._key_cache: Any = None
         self._hash_cache: int | None = None
 
-    def _struct_key(self) -> Any:
-        if self._key_cache is None:
-            self._key_cache = (
-                _TupleSpec,
-                self.tuple_cls,
-                tuple(_spec_struct_key(item) for item in self.items),
-            )
-        return self._key_cache
-
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, _TupleSpec) and (
-            self is other or self._struct_key() == other._struct_key()
-        )
+        return isinstance(other, _TupleSpec) and _specs_equal(self, other)
 
     def __hash__(self) -> int:
         if self._hash_cache is None:
-            self._hash_cache = hash(self._struct_key())
+            self._hash_cache = hash(
+                (
+                    _TupleSpec,
+                    self.tuple_cls,
+                    tuple(_spec_hash(item) for item in self.items),
+                )
+            )
         return self._hash_cache
 
 
@@ -596,7 +686,6 @@ class _ListSpec:
         "list_cls",
         "items",
         "has_dynamic",
-        "_key_cache",
         "_hash_cache",
     )
 
@@ -610,26 +699,20 @@ class _ListSpec:
         self.list_cls = type(orig)
         self.items = items
         self.has_dynamic = has_dynamic
-        self._key_cache: Any = None
         self._hash_cache: int | None = None
 
-    def _struct_key(self) -> Any:
-        if self._key_cache is None:
-            self._key_cache = (
-                _ListSpec,
-                self.list_cls,
-                tuple(_spec_struct_key(item) for item in self.items),
-            )
-        return self._key_cache
-
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, _ListSpec) and (
-            self is other or self._struct_key() == other._struct_key()
-        )
+        return isinstance(other, _ListSpec) and _specs_equal(self, other)
 
     def __hash__(self) -> int:
         if self._hash_cache is None:
-            self._hash_cache = hash(self._struct_key())
+            self._hash_cache = hash(
+                (
+                    _ListSpec,
+                    self.list_cls,
+                    tuple(_spec_hash(item) for item in self.items),
+                )
+            )
         return self._hash_cache
 
 
@@ -639,7 +722,6 @@ class _DictSpec:
         "dict_cls",
         "entries",
         "has_dynamic",
-        "_key_cache",
         "_hash_cache",
     )
 
@@ -653,29 +735,22 @@ class _DictSpec:
         self.dict_cls = type(orig)
         self.entries = entries
         self.has_dynamic = has_dynamic
-        self._key_cache: Any = None
         self._hash_cache: int | None = None
 
-    def _struct_key(self) -> Any:
-        if self._key_cache is None:
-            self._key_cache = (
-                _DictSpec,
-                self.dict_cls,
-                tuple(
-                    (_spec_struct_key(k), _spec_struct_key(v))
-                    for k, v in self.entries
-                ),
-            )
-        return self._key_cache
-
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, _DictSpec) and (
-            self is other or self._struct_key() == other._struct_key()
-        )
+        return isinstance(other, _DictSpec) and _specs_equal(self, other)
 
     def __hash__(self) -> int:
         if self._hash_cache is None:
-            self._hash_cache = hash(self._struct_key())
+            self._hash_cache = hash(
+                (
+                    _DictSpec,
+                    self.dict_cls,
+                    tuple(
+                        (_spec_hash(k), _spec_hash(v)) for k, v in self.entries
+                    ),
+                )
+            )
         return self._hash_cache
 
 
@@ -687,7 +762,6 @@ class _DataclassSpec:
         "fields",
         "non_init_keys",
         "has_dynamic",
-        "_key_cache",
         "_hash_cache",
     )
 
@@ -706,27 +780,21 @@ class _DataclassSpec:
         self.fields = fields
         self.non_init_keys = non_init_keys
         self.has_dynamic = has_dynamic
-        self._key_cache: Any = None
         self._hash_cache: int | None = None
 
-    def _struct_key(self) -> Any:
-        if self._key_cache is None:
-            self._key_cache = (
-                _DataclassSpec,
-                type(self.orig),
-                tuple((name, _spec_struct_key(s)) for name, s in self.fields),
-                self.non_init_keys,
-            )
-        return self._key_cache
-
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, _DataclassSpec) and (
-            self is other or self._struct_key() == other._struct_key()
-        )
+        return isinstance(other, _DataclassSpec) and _specs_equal(self, other)
 
     def __hash__(self) -> int:
         if self._hash_cache is None:
-            self._hash_cache = hash(self._struct_key())
+            self._hash_cache = hash(
+                (
+                    _DataclassSpec,
+                    type(self.orig),
+                    tuple((name, _spec_hash(s)) for name, s in self.fields),
+                    self.non_init_keys,
+                )
+            )
         return self._hash_cache
 
 
@@ -736,7 +804,6 @@ class _ObjectSpec:
         "slot_entries",
         "dict_entries",
         "has_dynamic",
-        "_key_cache",
         "_hash_cache",
     )
 
@@ -751,27 +818,21 @@ class _ObjectSpec:
         self.slot_entries = slot_entries
         self.dict_entries = dict_entries
         self.has_dynamic = has_dynamic
-        self._key_cache: Any = None
         self._hash_cache: int | None = None
 
-    def _struct_key(self) -> Any:
-        if self._key_cache is None:
-            self._key_cache = (
-                _ObjectSpec,
-                type(self.orig),
-                tuple((s, _spec_struct_key(v)) for s, v in self.slot_entries),
-                tuple((k, _spec_struct_key(v)) for k, v in self.dict_entries),
-            )
-        return self._key_cache
-
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, _ObjectSpec) and (
-            self is other or self._struct_key() == other._struct_key()
-        )
+        return isinstance(other, _ObjectSpec) and _specs_equal(self, other)
 
     def __hash__(self) -> int:
         if self._hash_cache is None:
-            self._hash_cache = hash(self._struct_key())
+            self._hash_cache = hash(
+                (
+                    _ObjectSpec,
+                    type(self.orig),
+                    tuple((s, _spec_hash(v)) for s, v in self.slot_entries),
+                    tuple((k, _spec_hash(v)) for k, v in self.dict_entries),
+                )
+            )
         return self._hash_cache
 
 
@@ -797,6 +858,7 @@ def _extract_spec(
     memo_specs: dict[tuple[int, bool], Any],
     snapshot_mutable: bool = False,
     keep_dtype: bool = False,
+    match_target_dtype: bool = True,
     tensor_memo: dict[int, bool] | None = None,
 ) -> Any:
     """Build a tensor-free structural spec and populate ``floating_list``/``kept_list``."""
@@ -808,7 +870,11 @@ def _extract_spec(
         use_primary = (
             not keep_dtype
             and obj.is_floating_point()
-            and (target_dtype is None or obj.dtype == target_dtype)
+            and (
+                not match_target_dtype
+                or target_dtype is None
+                or obj.dtype == target_dtype
+            )
         )
         tkey = (tid, use_primary)
         existing = tensor_refs_by_id.get(tkey)
@@ -856,6 +922,7 @@ def _extract_spec(
                     memo_specs=memo_specs,
                     snapshot_mutable=snapshot_mutable,
                     keep_dtype=keep_dtype,
+                    match_target_dtype=match_target_dtype,
                     tensor_memo=tensor_memo,
                 )
                 for item in obj
@@ -877,6 +944,7 @@ def _extract_spec(
                     memo_specs=memo_specs,
                     snapshot_mutable=snapshot_mutable,
                     keep_dtype=keep_dtype,
+                    match_target_dtype=match_target_dtype,
                     tensor_memo=tensor_memo,
                 )
                 for item in obj
@@ -900,6 +968,7 @@ def _extract_spec(
                         memo_specs=memo_specs,
                         snapshot_mutable=snapshot_mutable,
                         keep_dtype=keep_dtype,
+                        match_target_dtype=match_target_dtype,
                         tensor_memo=tensor_memo,
                     ),
                     _extract_spec(
@@ -912,6 +981,7 @@ def _extract_spec(
                         memo_specs=memo_specs,
                         snapshot_mutable=snapshot_mutable,
                         keep_dtype=keep_dtype,
+                        match_target_dtype=match_target_dtype,
                         tensor_memo=tensor_memo,
                     ),
                 )
@@ -929,32 +999,58 @@ def _extract_spec(
         if isinstance(obj, Node) or (
             dataclasses.is_dataclass(obj) and not isinstance(obj, type)
         ):
-            _validate_supported_dataclass(
-                obj, active=active_obj_ids, tensor_memo=tensor_memo
-            )
             is_node = isinstance(obj, Node)
-            kept_field_names: frozenset[str] = (
-                obj._keep_dtype_names
-                if (
-                    isinstance(obj, Node)
-                    and target_dtype is not None
-                    and _uses_default_node_conversion(obj)
-                )
-                else frozenset()
-            )
             params = getattr(obj, "__dataclass_params__", None)
             is_frozen = is_node or bool(params is not None and params.frozen)
             field_specs: list[tuple[str, Any]] = []
             non_init_keys: list[tuple[str, Any]] = []
-            for f in dataclasses.fields(obj):
-                f_val = getattr(obj, f.name)
-                if not is_node and is_frozen and not f.init:
-                    non_init_keys.append((f.name, _static_key(f_val)))
-                    continue
-                field_keep = keep_dtype or (f.name in kept_field_names)
+            node_force_keep = False
+            if isinstance(obj, Node):
+                _validate_node_contexts(
+                    obj, active=active_obj_ids, tensor_memo=tensor_memo
+                )
+                default_node_conv = _uses_default_node_conversion(obj)
+                node_force_keep = (
+                    not match_target_dtype and not default_node_conv
+                )
+                kept_field_names: frozenset[str] = (
+                    obj._keep_dtype_names
+                    if (
+                        not match_target_dtype
+                        or (target_dtype is not None and default_node_conv)
+                    )
+                    else frozenset()
+                )
+                for ctx_name in obj._context_names:
+                    non_init_keys.append(
+                        (ctx_name, _static_key(getattr(obj, ctx_name)))
+                    )
+                iter_names = tuple(obj._child_names)
+            else:
+                _validate_supported_dataclass(
+                    obj, active=active_obj_ids, tensor_memo=tensor_memo
+                )
+                kept_field_names = frozenset()
+                iter_names = tuple(
+                    f.name
+                    for f in dataclasses.fields(obj)
+                    if not (is_frozen and not f.init)
+                )
+                for f in dataclasses.fields(obj):
+                    if is_frozen and not f.init:
+                        non_init_keys.append(
+                            (f.name, _static_key(getattr(obj, f.name)))
+                        )
+            for f_name in iter_names:
+                f_val = getattr(obj, f_name)
+                field_keep = (
+                    keep_dtype
+                    or node_force_keep
+                    or (f_name in kept_field_names)
+                )
                 field_specs.append(
                     (
-                        f.name,
+                        f_name,
                         _extract_spec(
                             f_val,
                             floating_list=floating_list,
@@ -965,6 +1061,7 @@ def _extract_spec(
                             memo_specs=memo_specs,
                             snapshot_mutable=snapshot_mutable,
                             keep_dtype=field_keep,
+                            match_target_dtype=match_target_dtype,
                             tensor_memo=tensor_memo,
                         ),
                     )
@@ -986,10 +1083,18 @@ def _extract_spec(
 
         assert isinstance(obj, TensorLike)
         allowed_tl = getattr(obj, "allowed_dtypes", None)
-        child_keep = keep_dtype or (
-            target_dtype is not None
-            and allowed_tl is not None
-            and target_dtype not in allowed_tl
+        has_custom_tl_conv = not (
+            _uses_default_tensorlike_conversion(obj, use_to=True)
+            and _uses_default_tensorlike_conversion(obj, use_to=False)
+        )
+        child_keep = (
+            keep_dtype
+            or (not match_target_dtype and has_custom_tl_conv)
+            or (
+                target_dtype is not None
+                and allowed_tl is not None
+                and target_dtype not in allowed_tl
+            )
         )
         child_snapshot = snapshot_mutable and isinstance(
             obj, (Component, ComponentCache)
@@ -1012,6 +1117,7 @@ def _extract_spec(
                         memo_specs=memo_specs,
                         snapshot_mutable=child_snapshot,
                         keep_dtype=child_keep,
+                        match_target_dtype=match_target_dtype,
                         tensor_memo=tensor_memo,
                     ),
                 )
@@ -1036,6 +1142,7 @@ def _extract_spec(
                             memo_specs=memo_specs,
                             snapshot_mutable=child_snapshot,
                             keep_dtype=child_keep,
+                            match_target_dtype=match_target_dtype,
                             tensor_memo=tensor_memo,
                         ),
                     )
@@ -1238,6 +1345,7 @@ def _extract_pair_spec(
     *,
     target_dtype: torch.dtype | None,
     snapshot_mutable: bool,
+    match_target_dtype: bool = True,
 ) -> tuple[Any, tuple[Tensor, ...], tuple[Tensor, ...]]:
     """Extract ``(pair_spec, floating_tensors, kept_dtype_tensors)`` from ``(component, cache)``."""
     floating_list: list[Tensor] = []
@@ -1251,6 +1359,7 @@ def _extract_pair_spec(
         active_obj_ids=set(),
         memo_specs={},
         snapshot_mutable=snapshot_mutable,
+        match_target_dtype=match_target_dtype,
     )
     return pair_spec, tuple(floating_list), tuple(kept_list)
 
@@ -1326,7 +1435,7 @@ class CustomClassicalTemplate:
         return (
             self.initial_dtype == other.initial_dtype
             and self.initial_device == other.initial_device
-            and self.pair_spec == other.pair_spec
+            and _specs_equal(self.pair_spec, other.pair_spec)
         )
 
     def __hash__(self) -> int:
@@ -1336,7 +1445,7 @@ class CustomClassicalTemplate:
                     CustomClassicalTemplate,
                     self.initial_device,
                     self.initial_dtype,
-                    _spec_struct_key(self.pair_spec),
+                    _spec_hash(self.pair_spec),
                 )
             )
         return self._hash_cache
@@ -1537,13 +1646,16 @@ class CustomInteractionTemplate:
 def prepare_custom_interaction_entry(
     component: Component,
     cache: Any,
+    *,
+    target_dtype: torch.dtype | None = None,
 ) -> SCFInteractionEntry:
     """Extract all tensors from ``(component, cache)`` into an ``SCFInteractionEntry``."""
     pair_spec, floating_tup, kept_tup = _extract_pair_spec(
         component,
         cache,
-        target_dtype=None,
+        target_dtype=target_dtype,
         snapshot_mutable=False,
+        match_target_dtype=False,
     )
     template = CustomInteractionTemplate(
         component=component,

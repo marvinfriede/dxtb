@@ -3705,3 +3705,425 @@ def test_mutation_and_reconstruction_boundaries_preserve_unrelated_builtins() ->
                 config=Config.create(int_driver="pytorch", exclude="scf"),
                 classical=(cyc_comp,),
             ).setup(numbers)
+
+
+@dataclass(frozen=True)
+class _FrozenTensorBox:
+    """Hashable frozen dataclass carrying a Tensor leaf."""
+
+    weight: Tensor
+
+
+class _KeepPairNode(Node):
+    """Diamond-testable Node with two keep_dtype=True children."""
+
+    a: Any = child(keep_dtype=True)
+    b: Any = child(keep_dtype=True)
+
+
+class _TypeOnlyNode(Node):
+    """Node overriding only ``type(dtype)`` without ``to`` or ``_convert_child``."""
+
+    val: Tensor = child()
+    calls: int = context(default=0)
+
+    @override
+    def type(self, dtype: torch.dtype) -> _TypeOnlyNode:
+        return _TypeOnlyNode(val=self.val.to(dtype=dtype), calls=self.calls + 1)
+
+
+def test_h2_review_hardening_and_custom_scf_rebase_contracts() -> None:
+    """Cover Node context tensors, diamond DAGs, dict-key mutations, module refs, and custom SCF."""
+    import time
+    import warnings
+
+    from dxtb._src.components.interactions import InteractionList
+
+    numbers = torch.tensor([3, 1], dtype=torch.int64, device=DEVICE)
+    pos = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 3.0]], **DD64)
+    par = ParamModule(GFN1_XTB, **DD64)
+    t_leaf = torch.tensor(0.05, **DD64)
+
+    # 1. Node context() holding Tensor via frozen dataclass or ClassicalCache is rejected
+    class _SimpleCache(ClassicalCache):
+        __slots__ = ["w"]
+
+        def __init__(self, w: Tensor) -> None:
+            super().__init__(device=w.device, dtype=w.dtype)
+            self.w = w
+
+    class _PayloadClassical(Classical):
+        def __init__(self, payload: Any) -> None:
+            super().__init__(**DD64)
+            self.payload = payload
+
+        @override
+        def get_cache(
+            self, numbers: Tensor, ihelp: IndexHelper | None = None
+        ) -> Any:
+            _ = (numbers, ihelp)
+            return self.payload
+
+        @override
+        def get_energy(self, positions: Tensor, cache: Any, **_: Any) -> Tensor:
+            _ = cache
+            return positions.sum(-1)
+
+    for ctx_holder in (_FrozenTensorBox(t_leaf), _SimpleCache(t_leaf)):
+        bad_ctx = _PayloadClassical(
+            _ContextMetaNode(primary=t_leaf, meta=ctx_holder)
+        )
+        with pytest.raises(TypeError, match=r"context\(\)"):
+            bad_ctx.to(device=torch.device("meta"))
+        with pytest.raises(TypeError, match=r"context\(\)"):
+            bad_ctx.type(torch.float32)
+        with pytest.raises(TypeError, match=r"context\(\)"):
+            Model(
+                par=par,
+                config=Config.create(int_driver="pytorch", exclude="scf"),
+                classical=(bad_ctx,),
+            ).setup(numbers)
+
+    # 2. O(V + E) traversal, template hashing, and spec equality on deep diamond DAGs
+    dag: Any = [torch.tensor(1.0, **DD64)]
+    dag_other: Any = [torch.tensor(1.0, **DD64)]
+    for _ in range(25):
+        dag = [dag, dag]
+        dag_other = [dag_other, dag_other]
+    dag_comp = _PayloadClassical(dag)
+    t0 = time.perf_counter()
+    dag_f32 = dag_comp.type(torch.float32)
+    assert (time.perf_counter() - t0) < 1.0
+    assert dag_f32.payload[0] is dag_f32.payload[1]
+
+    from tad_mctc.exceptions import DtypeError
+
+    from dxtb._src.calculators.types.base import _convert_eval_system_dtype
+    from dxtb._src.components.custom import (
+        is_tensor_only_object,
+        try_build_custom_classical_core_setup,
+    )
+
+    t1 = time.perf_counter()
+    s_dag1 = try_build_custom_classical_core_setup(dag_comp, dag, DD64)
+    s_dag2 = try_build_custom_classical_core_setup(
+        _PayloadClassical(dag_other), dag_other, DD64
+    )
+    assert s_dag1 is not None and s_dag2 is not None
+    assert hash(s_dag1.template) == hash(s_dag2.template)
+    assert s_dag1.template == s_dag2.template
+    assert (time.perf_counter() - t1) < 1.0
+
+    keep_dag: Any = torch.tensor(1.0, **DD64)
+    for _ in range(22):
+        keep_dag = _KeepPairNode(a=keep_dag, b=keep_dag)
+
+    class _KeepDiamondClassical(Classical):
+        def __init__(self, payload: Any, trigger: Tensor) -> None:
+            super().__init__(device=trigger.device, dtype=trigger.dtype)
+            self.payload = payload
+            self.trigger = trigger
+
+        @override
+        def get_cache(
+            self, numbers: Tensor, ihelp: IndexHelper | None = None
+        ) -> Any:
+            _ = (numbers, ihelp)
+            return self.payload
+
+        @override
+        def get_energy(self, positions: Tensor, cache: Any, **_: Any) -> Tensor:
+            _ = cache
+            return positions.sum(-1)
+
+    t2 = time.perf_counter()
+    kd_conv = _KeepDiamondClassical(keep_dag, torch.tensor(2.0, **DD64)).type(
+        torch.float32
+    )
+    assert (time.perf_counter() - t2) < 1.0
+    assert kd_conv.trigger.dtype == torch.float32
+    assert kd_conv.payload is keep_dag
+
+    # Node overriding only .type(dtype) is respected and excluded from tensor-only fast path
+    tn = _TypeOnlyNode(val=torch.tensor(1.0, **DD64))
+    assert not is_tensor_only_object(tn)
+    tn_owner32 = _PayloadClassical(tn).type(torch.float32)
+    assert tn_owner32.payload.calls == 1
+    assert tn_owner32.payload.val.dtype == torch.float32
+
+    # 3. In-place mutation of large Tensor dict keys invalidates captured setup
+    class _DictKeyClassical(Classical):
+        def __init__(self, kt: Tensor) -> None:
+            super().__init__(**DD64)
+            self.table = {kt: 2.0}
+            self.calls = 0
+
+        @override
+        def get_cache(
+            self, numbers: Tensor, ihelp: IndexHelper | None = None
+        ) -> Tensor:
+            _ = ihelp
+            self.calls += 1
+            k, v = next(iter(self.table.items()))
+            return k[500] * v * numbers.to(k.dtype)
+
+        @override
+        def get_energy(
+            self, positions: Tensor, cache: Tensor, **_: Any
+        ) -> Tensor:
+            return 0.5 * cache * positions.square().sum(dim=-1)
+
+    big_key = torch.zeros(1005, **DD64)
+    dk_comp = _DictKeyClassical(big_key)
+    sys_dk = Model(
+        par=par,
+        config=Config.create(int_driver="pytorch", exclude="all"),
+        classical=(dk_comp,),
+    ).setup(numbers)
+    assert float(sys_dk.singlepoint(pos).energy.sum()) == 0.0
+    assert dk_comp.calls == 1
+    big_key[500] = 1.0
+    assert sys_dk._active_exact_core() is None
+    assert float(sys_dk.singlepoint(pos).energy.sum()) > 0.0
+    assert dk_comp.calls == 2
+
+    # 4. ModuleType reference on custom component is not crawled in batch_implicit
+    class _ModuleClassical(Classical):
+        def __init__(self, w: Tensor) -> None:
+            super().__init__(**DD64)
+            self.w = w
+            self.mod = torch
+
+        @override
+        def get_cache(
+            self, numbers: Tensor, ihelp: IndexHelper | None = None
+        ) -> Tensor:
+            _ = ihelp
+            return self.w * numbers.to(self.w.dtype)
+
+        @override
+        def get_energy(
+            self, positions: Tensor, cache: Tensor, **_: Any
+        ) -> Tensor:
+            return 0.5 * cache * self.mod.sum(positions.square(), dim=-1)
+
+    nums_w = torch.tensor([8, 1, 1], dtype=torch.int64, device=DEVICE)
+    pos_w = torch.tensor(
+        [
+            [[0.0, 0.0, 0.0], [0.0, 0.0, 1.8], [0.0, 1.7, -0.4]],
+            [[0.0, 0.0, 0.0], [0.0, 0.0, 1.85], [0.0, 1.75, -0.42]],
+        ],
+        **DD64,
+    )
+    sys_plain = Model(
+        par=par,
+        config=Config.create(int_driver="pytorch", differentiation="implicit"),
+    ).setup(nums_w)
+    sys_mod = Model(
+        par=par,
+        config=Config.create(int_driver="pytorch", differentiation="implicit"),
+        classical=(_ModuleClassical(torch.tensor(0.01, **DD64)),),
+    ).setup(nums_w)
+    prep_plain = prepare_converged_root_batch(sys_plain, pos_w)
+    with warnings.catch_warnings(record=True) as w_rec:
+        warnings.simplefilter("always")
+        prep_mod = prepare_converged_root_batch(sys_mod, pos_w)
+    assert (
+        len(prep_mod.system_tensor_refs)
+        <= len(prep_plain.system_tensor_refs) + 4
+    )
+    assert not any("reduce_op" in str(w.message) for w in w_rec)
+
+    # 5. Custom Interaction with keep_dtype=True + int64/bool leaves & duplicate-label / ihelp guards
+    class _KeptSCFInteraction(Interaction):
+        def __init__(self, kn: _KeepDtypeFloatNode) -> None:
+            super().__init__(device=DEVICE, dtype=kn.primary.dtype)
+            self.kn = kn
+            self.mask = torch.tensor([True, True], device=DEVICE)
+            self.idx = torch.tensor([0, 1], dtype=torch.int64, device=DEVICE)
+
+        @override
+        def get_cache(
+            self,
+            *,
+            numbers: Tensor | None = None,
+            positions: Tensor | None = None,
+            ihelp: IndexHelper | None = None,
+        ) -> tuple[_KeepDtypeFloatNode, Tensor, Tensor]:
+            _ = (numbers, positions, ihelp)
+            return (self.kn, self.mask, self.idx)
+
+        @override
+        def get_monopole_atom_potential(
+            self,
+            cache: tuple[_KeepDtypeFloatNode, Tensor, Tensor],
+            qat: Tensor,
+            **_: Any,
+        ) -> Tensor:
+            node_c, mask_c, idx_c = cache
+            scale = node_c.primary + node_c.ref_fp64.to(qat.dtype)
+            return torch.where(
+                mask_c, scale * qat[idx_c], torch.zeros_like(qat)
+            )
+
+        @override
+        def get_monopole_atom_energy(
+            self,
+            cache: tuple[_KeepDtypeFloatNode, Tensor, Tensor],
+            qat: Tensor,
+            **_: Any,
+        ) -> Tensor:
+            return 0.5 * qat * self.get_monopole_atom_potential(cache, qat)
+
+    kn64 = _KeepDtypeFloatNode(
+        primary=torch.tensor(0.04, **DD64),
+        ref_fp64=torch.tensor(0.02, **DD64),
+    )
+    with pytest.raises(ValueError, match="Distinct interactions"):
+        InteractionList(_KeptSCFInteraction(kn64), _KeptSCFInteraction(kn64))
+
+    calc_ki = Calculator(
+        numbers,
+        GFN1_XTB,
+        interaction=(_KeptSCFInteraction(kn64),),
+        opts={"verbosity": 0, "int_driver": "pytorch"},
+        **DD64,
+    )
+    e64 = calc_ki.singlepoint(pos).energy.sum()
+    calc_ki32 = calc_ki.type(torch.float32)
+    conv_inter = calc_ki32.interactions.components[-1]
+    assert isinstance(conv_inter, _KeptSCFInteraction)
+    assert conv_inter.kn.ref_fp64.dtype == torch.float64
+    e32 = calc_ki32.singlepoint(pos.to(torch.float32)).energy.sum()
+    assert e32.dtype == torch.float32
+    torch.testing.assert_close(e32.to(torch.float64), e64, rtol=1e-4, atol=1e-4)
+
+    class _TamperIhelpInteraction(Interaction):
+        def __init__(self) -> None:
+            super().__init__(**DD64)
+
+        @override
+        def get_cache(
+            self,
+            *,
+            numbers: Tensor | None = None,
+            positions: Tensor | None = None,
+            ihelp: IndexHelper | None = None,
+        ) -> Tensor:
+            _ = (numbers, positions)
+            assert ihelp is not None
+            ihelp.shell_index[0] = 99
+            return torch.zeros(1, **DD64)
+
+    sys_tamper = Model(
+        par=par,
+        config=Config.create(int_driver="pytorch"),
+        interaction=(_TamperIhelpInteraction(),),
+    ).setup(numbers)
+    with pytest.raises(ValueError, match="IndexHelper is incompatible"):
+        sys_tamper.singlepoint(pos)
+
+    # 6. Custom Classical.get_cache mutating ihelp in Model.setup or fallback is rejected
+    class _TamperSetupClassical(Classical):
+        def __init__(self) -> None:
+            super().__init__(**DD64)
+
+        @override
+        def get_cache(
+            self, numbers: Tensor, ihelp: IndexHelper | None = None
+        ) -> Tensor:
+            _ = numbers
+            assert ihelp is not None
+            ihelp.shells_to_atom[0] = 1
+            return torch.zeros(1, **DD64)
+
+        @override
+        def get_energy(
+            self, positions: Tensor, cache: Tensor, **_: Any
+        ) -> Tensor:
+            _ = cache
+            return positions.new_zeros(positions.shape[:-1])
+
+    with pytest.raises(ValueError, match="IndexHelper is incompatible"):
+        Model(
+            par=par,
+            config=Config.create(int_driver="pytorch"),
+            classical=(_TamperSetupClassical(),),
+        ).setup(numbers.clone())
+
+    class _TamperFallbackClassical(Classical):
+        def __init__(self) -> None:
+            super().__init__(**DD64)
+            self.arm = False
+
+        @override
+        def get_cache(
+            self, numbers: Tensor, ihelp: IndexHelper | None = None
+        ) -> Tensor:
+            _ = numbers
+            if self.arm:
+                assert ihelp is not None
+                ihelp.shells_to_atom[0] = 1
+            return torch.zeros(1, **DD64)
+
+        @override
+        def get_energy(
+            self, positions: Tensor, cache: Tensor, **_: Any
+        ) -> Tensor:
+            _ = cache
+            return positions.new_zeros(positions.shape[:-1])
+
+    tf_cls = _TamperFallbackClassical()
+    sys_tf = Model(
+        par=par,
+        config=Config.create(int_driver="pytorch"),
+        classical=(tf_cls,),
+    ).setup(numbers.clone())
+    tf_cls.arm = True
+    with pytest.raises(ValueError, match="IndexHelper is incompatible"):
+        sys_tf.singlepoint(pos)
+
+    # 7. Wrong-dtype non-keep_dtype floating leaf on custom Interaction raises DtypeError
+    class _WrongDtypeInteraction(Interaction):
+        def __init__(self) -> None:
+            super().__init__(**DD64)
+            self.w = torch.tensor([0.05, 0.05], **DD64)
+
+        @override
+        def get_cache(
+            self,
+            *,
+            numbers: Tensor | None = None,
+            positions: Tensor | None = None,
+            ihelp: IndexHelper | None = None,
+        ) -> Tensor:
+            _ = (numbers, positions, ihelp)
+            return self.w
+
+        @override
+        def get_monopole_atom_potential(
+            self, cache: Tensor, qat: Tensor, **_: Any
+        ) -> Tensor:
+            return cache * qat
+
+        @override
+        def get_monopole_atom_energy(
+            self, cache: Tensor, qat: Tensor, **_: Any
+        ) -> Tensor:
+            return 0.5 * cache * qat.square()
+
+    sys_wrong_dt = Model(
+        par=ParamModule(GFN1_XTB, device=DEVICE, dtype=torch.float32),
+        config=Config.create(int_driver="pytorch"),
+        interaction=(_WrongDtypeInteraction(),),
+    ).setup(numbers.clone())
+    with pytest.raises(DtypeError):
+        sys_wrong_dt.singlepoint(pos.to(torch.float32))
+
+    # 8. _convert_eval_system_dtype with exact_core=None remaps owners without mutating input
+    nocore64 = replace(sys_plain, exact_core=None)
+    nocore32 = _convert_eval_system_dtype(nocore64, torch.float32)
+    assert nocore64.classicals.dtype == torch.float64
+    assert nocore32.repulsion_classical in nocore32.classicals.components
+    res_nocore32 = nocore32.singlepoint(pos_w[0].to(torch.float32))
+    assert res_nocore32.energy.dtype == torch.float32

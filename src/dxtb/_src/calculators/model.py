@@ -602,6 +602,51 @@ def _snapshot_tensor_states(
     return tuple(states)
 
 
+def _structural_leaves_unchanged(
+    current_leaves: Sequence[Tensor],
+    expected_states: Sequence[
+        tuple[Tensor, int | None, torch.Size, torch.dtype, torch.device]
+    ],
+    expected_snapshots: Sequence[tuple[Tensor, Tensor | None]],
+) -> bool:
+    """Return whether ``current_leaves`` still match their pre-hook states and values."""
+    if len(current_leaves) != len(expected_snapshots):
+        return False
+    state_by_id = {
+        id(leaf): (leaf, ver, shape, dtype, dev)
+        for leaf, ver, shape, dtype, dev in expected_states
+    }
+    is_wrapped = _IS_FUNCTORCH_WRAPPED
+    for cur_leaf, (orig_leaf, snap) in zip(current_leaves, expected_snapshots):
+        if cur_leaf is not orig_leaf:
+            return False
+        orig_state = state_by_id.get(id(orig_leaf))
+        if orig_state is None:
+            return False
+        _, ver, shape, dtype, dev = orig_state
+        if (
+            cur_leaf.shape != shape
+            or cur_leaf.dtype is not dtype
+            or cur_leaf.device != dev
+        ):
+            return False
+        if (
+            ver is not None
+            and type(cur_leaf) is Tensor
+            and dev.type != "meta"
+            and not cur_leaf.is_inference()
+            and (is_wrapped is None or not is_wrapped(cur_leaf))
+        ):
+            if cur_leaf._version != ver:
+                return False
+            continue
+        if snap is not None:
+            raw_cur = _unwrap_concrete_structural_tensor(cur_leaf)
+            if raw_cur is None or not torch.equal(raw_cur, snap):
+                return False
+    return True
+
+
 def _build_setup_index_token(
     numbers: Tensor,
     ihelp: IndexHelper,
@@ -2839,6 +2884,32 @@ class Model:
         )
         halogen_setup = None
 
+        pre_custom_states: (
+            tuple[
+                tuple[
+                    Tensor, int | None, torch.Size, torch.dtype, torch.device
+                ],
+                ...,
+            ]
+            | None
+        ) = None
+        pre_custom_snapshots: (
+            tuple[tuple[Tensor, Tensor | None], ...] | None
+        ) = None
+        if any(
+            type(c) not in BUILTIN_CLASSICAL_TYPES
+            for c in classicals.components
+        ):
+            structural_leaves = (
+                numbers,
+                *(getattr(ihelp, name) for name in ihelp._child_names),
+            )
+            pre_custom_states = _snapshot_tensor_states(structural_leaves)
+            pre_custom_snapshots = tuple(
+                (leaf, _clone_detached_concrete(leaf))
+                for leaf in structural_leaves
+            )
+
         classical_terms: list[ClassicalTermDescriptor] = []
         if batch_mode == 0:
             for position, component in enumerate(classicals.components):
@@ -2878,6 +2949,24 @@ class Model:
                     setup = core_halogen_setup(component_setup)
                     halogen_setup = setup
                 else:
+                    assert (
+                        pre_custom_states is not None
+                        and pre_custom_snapshots is not None
+                    )
+                    if not _structural_leaves_unchanged(
+                        (
+                            numbers,
+                            *(
+                                getattr(ihelp, name)
+                                for name in ihelp._child_names
+                            ),
+                        ),
+                        pre_custom_states,
+                        pre_custom_snapshots,
+                    ):
+                        raise ValueError(
+                            "System IndexHelper is incompatible with the captured System setup."
+                        )
                     validate_custom_component_graph(
                         (component, component_setup)
                     )
@@ -2931,6 +3020,24 @@ class Model:
                 else:
                     packed_classical_setups[component.label] = batched_setup
                     if type(component) not in BUILTIN_CLASSICAL_TYPES:
+                        assert (
+                            pre_custom_states is not None
+                            and pre_custom_snapshots is not None
+                        )
+                        if not _structural_leaves_unchanged(
+                            (
+                                numbers,
+                                *(
+                                    getattr(ihelp, name)
+                                    for name in ihelp._child_names
+                                ),
+                            ),
+                            pre_custom_states,
+                            pre_custom_snapshots,
+                        ):
+                            raise ValueError(
+                                "System IndexHelper is incompatible with the captured System setup."
+                            )
                         validate_custom_component_graph(
                             (component, batched_setup)
                         )

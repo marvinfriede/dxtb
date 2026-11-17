@@ -297,21 +297,58 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
     conversion_memo: ConversionMemo = {}
     token_intact = system._has_intact_setup_token()
     orig_core = system._active_exact_core()
+    sys_device = normalize_device(system.dd["device"])
+    old_cls_comps = tuple(system.classicals.components)
+    old_int_comps = tuple(system.interactions.components)
+    old_cls_ids = [id(c) for c in old_cls_comps]
+    old_int_ids = [id(i) for i in old_int_comps]
 
     if orig_core is None:
-        old_cls_ids = [id(c) for c in system.classicals.components]
-        old_int_ids = [id(i) for i in system.interactions.components]
-        new_classicals = system.classicals._type_with_memo(
-            dtype, conversion_memo
-        )
-        new_interactions = system.interactions._type_with_memo(
-            dtype, conversion_memo
-        )
         c_pairs = tuple(
-            zip(system.classicals.components, new_classicals.components)
+            (
+                old_c,
+                (
+                    old_c.type(dtype)
+                    if dtype not in old_c.allowed_dtypes
+                    else _convert_component_value(
+                        old_c,
+                        device=sys_device,
+                        dtype=dtype,
+                        memo=conversion_memo,
+                        use_to=False,
+                        explicit_device=False,
+                    )
+                ),
+            )
+            for old_c in old_cls_comps
         )
         i_pairs = tuple(
-            zip(system.interactions.components, new_interactions.components)
+            (
+                old_i,
+                (
+                    old_i.type(dtype)
+                    if dtype not in old_i.allowed_dtypes
+                    else _convert_component_value(
+                        old_i,
+                        device=sys_device,
+                        dtype=dtype,
+                        memo=conversion_memo,
+                        use_to=False,
+                        explicit_device=False,
+                    )
+                ),
+            )
+            for old_i in old_int_comps
+        )
+        new_classicals = ClassicalList(
+            *(new_c for _, new_c in c_pairs),
+            device=system.classicals.device,
+            dtype=dtype,
+        )
+        new_interactions = InteractionList(
+            *(new_i for _, new_i in i_pairs),
+            device=system.interactions.device,
+            dtype=dtype,
         )
         base = _convert_system_dtype(
             system,
@@ -392,12 +429,8 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
             _setup_index_token=eval_token,
         )
 
-    sys_device = normalize_device(system.dd["device"])
-    old_cls_ids = [id(c) for c in system.classicals.components]
-    old_int_ids = [id(i) for i in system.interactions.components]
     has_custom_cls = any(
-        type(c) not in BUILTIN_CLASSICAL_TYPES
-        for c in system.classicals.components
+        type(c) not in BUILTIN_CLASSICAL_TYPES for c in old_cls_comps
     )
     new_classicals = (
         ClassicalList(
@@ -414,7 +447,7 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
                         explicit_device=False,
                     )
                 )
-                for c in system.classicals.components
+                for c in old_cls_comps
             ),
             device=system.dd["device"],
             dtype=dtype,
@@ -423,8 +456,7 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
         else system.classicals
     )
     has_custom_int = any(
-        type(i) not in BUILTIN_INTERACTION_TYPES
-        for i in system.interactions.components
+        type(i) not in BUILTIN_INTERACTION_TYPES for i in old_int_comps
     )
     new_interactions = (
         InteractionList(
@@ -441,7 +473,7 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
                         explicit_device=False,
                     )
                 )
-                for i in system.interactions.components
+                for i in old_int_comps
             ),
             device=system.dd["device"],
             dtype=dtype,

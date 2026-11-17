@@ -497,6 +497,12 @@ def evaluate_lane_group(
     try:
         mapped = mapped_kernel(*args)
     except Exception as exc:
+        if not group.system._ihelp_compatible():
+            ihelp_err = ValueError(
+                "System IndexHelper is incompatible with the captured System setup."
+            )
+            _attach_source_id(ihelp_err, ids[0])
+            raise ihelp_err from exc
         if pre_vmap_snapshots and _is_torch_vmap_limitation(exc):
             mutated_labels = [
                 repr(comp.label)

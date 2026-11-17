@@ -199,7 +199,15 @@ def _evaluate_custom_classical_fallback(
         validate_custom_component_graph(component)
         setup = component.get_cache(system.numbers, system.ihelp)
         validate_custom_component_graph((component, setup))
+        if not system._ihelp_compatible():
+            raise ValueError(
+                "System IndexHelper is incompatible with the captured System setup."
+            )
     energy: Tensor = component.get_energy(positions, setup, charge=charge)
+    if not system._ihelp_compatible():
+        raise ValueError(
+            "System IndexHelper is incompatible with the captured System setup."
+        )
     return energy
 
 
@@ -388,6 +396,11 @@ def _interaction_data(
                 ihelp=system.ihelp,
             )
             validate_custom_component_graph((interaction, cache))
+            if not system._ihelp_compatible():
+                raise ValueError(
+                    "System IndexHelper is incompatible with the captured "
+                    "System setup."
+                )
             data[interaction.label] = cache
     return data
 
@@ -689,6 +702,7 @@ def _prepare_singlepoint(
     # component state behind this boundary.
     if system.classicals.components:
         classical: list[tuple[str, Tensor]] = []
+        has_custom_classical_term = False
         classical_terms = (
             {term.position: term for term in core.classical_terms}
             if core is not None
@@ -697,6 +711,8 @@ def _prepare_singlepoint(
         for position, component in enumerate(system.classicals.components):
             term = classical_terms.get(position)
             if term is not None:
+                if term.kind == "custom":
+                    has_custom_classical_term = True
                 timer.start(term.label, parent_uid="Classicals")
                 energy = _evaluate_classical_descriptor(term, positions, charge)
                 classical.append((term.label, energy))
@@ -814,6 +830,10 @@ def _prepare_singlepoint(
                     )
                 )
             timer.stop(component.label)
+        if has_custom_classical_term and not system._ihelp_compatible():
+            raise ValueError(
+                "System IndexHelper is incompatible with the captured System setup."
+            )
         classical_energy = torch.stack(
             tuple(value for _, value in classical)
         ).sum(0)

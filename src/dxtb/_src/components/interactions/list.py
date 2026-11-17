@@ -33,7 +33,7 @@ from dxtb._src.typing import (
 )
 
 from ..list import ComponentList, ComponentListCache
-from .base import Interaction
+from .base import Interaction, validate_unique_interaction_labels
 from .container import Charges, Potential
 from .coulomb.multipole import AES2
 from .coulomb.secondorder import ES2
@@ -95,6 +95,9 @@ class InteractionList(ComponentList[Interaction]):
                     f"Multiple interactions use the label '{label}'. "
                     "Duplicate migrated interaction labels are ambiguous."
                 )
+        validate_unique_interaction_labels(
+            [c for c in components if c is not None]
+        )
         super().__init__(*components, device=device, dtype=dtype)
 
     def update(self, name: str, **kwargs: Any) -> Interaction:

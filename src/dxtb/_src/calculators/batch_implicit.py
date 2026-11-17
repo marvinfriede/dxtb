@@ -30,7 +30,7 @@ import warnings
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
-from enum import IntEnum
+from enum import Enum, IntEnum
 from types import SimpleNamespace
 
 import torch
@@ -54,7 +54,7 @@ from dxtb._src.calculators.singlepoint import (
     _floating_setup_tensor,
     _interaction_data,
 )
-from dxtb._src.components.base import _iter_mro_slots
+from dxtb._src.components.base import _NON_TRAVERSABLE_TYPES, _iter_mro_slots
 from dxtb._src.components.classicals.dispersion.d3 import (
     DispersionD3,
     DispersionD3CoreSetup,
@@ -557,7 +557,7 @@ def _collect_object_tensors(
         seen_objs = {}
     if found is None:
         found = {}
-    if obj is None or isinstance(obj, (bool, int, float, str, bytes, type)):
+    if obj is None or isinstance(obj, (*_NON_TRAVERSABLE_TYPES, Enum)):
         return found
     if isinstance(obj, torch.Tensor):
         if id(obj) not in excluded_ids:
@@ -605,7 +605,7 @@ def _collect_system_and_model_tensors(
             "h0_setup",
             "integral_setup",
             "interactions",
-            "_exact_core",
+            "exact_core",
             "classicals",
         ):
             _collect_object_tensors(

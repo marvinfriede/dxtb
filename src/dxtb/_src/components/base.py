@@ -236,6 +236,33 @@ def _validate_opaque_object(
         )
 
 
+def _validate_node_contexts(
+    node: Node,
+    *,
+    active: set[int] | None = None,
+    visited: set[int] | None = None,
+    tensor_memo: dict[int, bool] | None = None,
+) -> None:
+    """Ensure ``Node`` context fields contain neither cycles nor ``Tensor``s."""
+    for ctx_name in node._context_names:
+        ctx_val = getattr(node, ctx_name)
+        _validate_component_object_graph(
+            ctx_val,
+            active=active,
+            visited=visited,
+            tensor_memo=tensor_memo,
+        )
+        if _contains_tensor_value(
+            ctx_val, active=active, tensor_memo=tensor_memo
+        ):
+            raise TypeError(
+                f"Node '{type(node).__qualname__}' stores a Tensor inside "
+                f"context() field '{ctx_name}', which cannot be converted or "
+                "differentiated safely. Declare tensor-bearing fields with "
+                "child() instead of context()."
+            )
+
+
 def _validate_component_object_graph(
     obj: Any,
     *,
@@ -289,9 +316,18 @@ def _validate_component_object_graph(
                     visited=visited,
                     tensor_memo=tensor_memo,
                 )
-        elif isinstance(obj, Node) or (
-            dataclasses.is_dataclass(obj) and not isinstance(obj, type)
-        ):
+        elif isinstance(obj, Node):
+            _validate_node_contexts(
+                obj, active=active, visited=visited, tensor_memo=tensor_memo
+            )
+            for child_name in obj._child_names:
+                _validate_component_object_graph(
+                    getattr(obj, child_name),
+                    active=active,
+                    visited=visited,
+                    tensor_memo=tensor_memo,
+                )
+        elif dataclasses.is_dataclass(obj) and not isinstance(obj, type):
             _validate_supported_dataclass(
                 obj, active=active, tensor_memo=tensor_memo
             )
@@ -370,10 +406,18 @@ def _uses_default_tensorlike_conversion(
     )
 
 
-def _uses_default_node_conversion(node: Node) -> bool:
-    """Return ``True`` when ``node`` uses unmodified ``Node._convert_child`` and ``Node.to``."""
+def _uses_default_node_conversion(
+    node: Node, *, use_to: bool | None = None
+) -> bool:
+    """Return ``True`` when ``node`` uses unmodified ``Node`` conversion hooks."""
     cls = type(node)
-    return cls._convert_child is Node._convert_child and cls.to is Node.to
+    if use_to is True:
+        return cls._convert_child is Node._convert_child and cls.to is Node.to
+    return (
+        cls._convert_child is Node._convert_child
+        and cls.to is Node.to
+        and cls.type is Node.type
+    )
 
 
 def _convert_component_value(
@@ -477,24 +521,28 @@ def _convert_component_value(
         cached = memo.get(mkey)
         if cached is not None:
             return cached[1]
-        if not _uses_default_node_conversion(value):
+        if not _uses_default_node_conversion(value, use_to=via_to):
             _validate_component_object_graph(
                 value, active=active, tensor_memo=tensor_memo
             )
             active.add(oid)
             try:
-                converted_node = value.to(device=device, dtype=dtype)
+                if not via_to:
+                    converted_node = (
+                        value if dtype is None else value.type(dtype)
+                    )
+                else:
+                    converted_node = value.to(
+                        device=device if has_dev else None, dtype=dtype
+                    )
             finally:
                 active.discard(oid)
         else:
             active.add(oid)
             try:
-                for ctx_name in value._context_names:
-                    _validate_component_object_graph(
-                        getattr(value, ctx_name),
-                        active=active,
-                        tensor_memo=tensor_memo,
-                    )
+                _validate_node_contexts(
+                    value, active=active, tensor_memo=tensor_memo
+                )
                 node_changes: dict[str, Any] = {}
                 for name in value._child_names:
                     old_child = getattr(value, name)
@@ -514,9 +562,7 @@ def _convert_component_value(
                     if new_child is not old_child:
                         node_changes[name] = new_child
                 converted_node = (
-                    value.replace(**node_changes)
-                    if node_changes
-                    else value.to(device=device, dtype=dtype)
+                    value.replace(**node_changes) if node_changes else value
                 )
             finally:
                 active.discard(oid)
@@ -693,7 +739,7 @@ def _value_needs_conversion(
     device: torch.device | None,
     dtype: torch.dtype | None,
     active: set[int] | None = None,
-    visited: set[tuple[int, Any, Any]] | None = None,
+    visited: dict[tuple[int, Any, Any], bool] | None = None,
     tensor_memo: dict[int, bool] | None = None,
     use_to: bool | None = None,
     explicit_device: bool | None = None,
@@ -714,7 +760,7 @@ def _value_needs_conversion(
     if active is None:
         active = set()
     if visited is None:
-        visited = set()
+        visited = {}
     if tensor_memo is None:
         tensor_memo = {}
     via_to = (device is not None) if use_to is None else use_to
@@ -726,7 +772,7 @@ def _value_needs_conversion(
         _raise_cycle_error(value)
     vkey: tuple[int, Any, Any] = (oid, device, dtype)
     if vkey in visited:
-        return False
+        return visited[vkey]
 
     if isinstance(value, TensorLike):
         allowed = getattr(value, "allowed_dtypes", None)
@@ -737,7 +783,7 @@ def _value_needs_conversion(
             else dtype
         )
         if _uses_default_tensorlike_conversion(value, use_to=via_to):
-            return _component_like_needs_conversion(
+            needs = _component_like_needs_conversion(
                 value,
                 device=target_dev,
                 dtype=target_dt,
@@ -747,36 +793,45 @@ def _value_needs_conversion(
                 use_to=via_to,
                 explicit_device=has_dev,
             )
+            visited[vkey] = needs
+            return needs
         _validate_component_object_graph(
             value, active=active, tensor_memo=tensor_memo
         )
         needs = bool(value.device != target_dev or value.dtype != target_dt)
-        if not needs:
-            visited.add(vkey)
+        visited[vkey] = needs
         return needs
 
     if isinstance(value, Node):
-        if not _uses_default_node_conversion(value):
+        if not _uses_default_node_conversion(value, use_to=via_to):
             _validate_component_object_graph(
                 value, active=active, tensor_memo=tensor_memo
             )
             active.add(oid)
             try:
-                needs = value.to(device=device, dtype=dtype) is not value
+                if not via_to:
+                    needs = (
+                        False
+                        if dtype is None
+                        else (value.type(dtype) is not value)
+                    )
+                else:
+                    needs = (
+                        value.to(
+                            device=device if has_dev else None, dtype=dtype
+                        )
+                        is not value
+                    )
             finally:
                 active.discard(oid)
-            if not needs:
-                visited.add(vkey)
+            visited[vkey] = needs
             return needs
 
         active.add(oid)
         try:
-            for ctx_name in value._context_names:
-                _validate_component_object_graph(
-                    getattr(value, ctx_name),
-                    active=active,
-                    tensor_memo=tensor_memo,
-                )
+            _validate_node_contexts(
+                value, active=active, tensor_memo=tensor_memo
+            )
             needs = False
             for name in value._child_names:
                 if _value_needs_conversion(
@@ -790,8 +845,7 @@ def _value_needs_conversion(
                     explicit_device=has_dev,
                 ):
                     needs = True
-            if not needs:
-                visited.add(vkey)
+            visited[vkey] = needs
             return needs
         finally:
             active.discard(oid)
@@ -819,8 +873,7 @@ def _value_needs_conversion(
                     explicit_device=has_dev,
                 ):
                     needs = True
-            if not needs:
-                visited.add(vkey)
+            visited[vkey] = needs
             return needs
         finally:
             active.discard(oid)
@@ -852,8 +905,7 @@ def _value_needs_conversion(
                     explicit_device=has_dev,
                 ):
                     needs = True
-            if not needs:
-                visited.add(vkey)
+            visited[vkey] = needs
             return needs
         finally:
             active.discard(oid)
@@ -874,14 +926,13 @@ def _value_needs_conversion(
                     explicit_device=has_dev,
                 ):
                     needs = True
-            if not needs:
-                visited.add(vkey)
+            visited[vkey] = needs
             return needs
         finally:
             active.discard(oid)
 
     _validate_opaque_object(value, active=active, tensor_memo=tensor_memo)
-    visited.add(vkey)
+    visited[vkey] = False
     return False
 
 
@@ -891,7 +942,7 @@ def _component_like_needs_conversion(
     device: torch.device,
     dtype: torch.dtype,
     active: set[int] | None = None,
-    visited: set[tuple[int, Any, Any]] | None = None,
+    visited: dict[tuple[int, Any, Any], bool] | None = None,
     tensor_memo: dict[int, bool] | None = None,
     use_to: bool | None = None,
     explicit_device: bool | None = None,
@@ -901,7 +952,7 @@ def _component_like_needs_conversion(
     if active is None:
         active = set()
     if visited is None:
-        visited = set()
+        visited = {}
     if tensor_memo is None:
         tensor_memo = {}
     via_to = True if use_to is None else use_to
@@ -911,7 +962,7 @@ def _component_like_needs_conversion(
         _raise_cycle_error(obj)
     vkey: tuple[int, Any, Any] = (oid, device, dtype)
     if vkey in visited:
-        return False
+        return visited[vkey]
     active.add(oid)
     try:
         needs = obj.device != device or obj.dtype != dtype
@@ -944,8 +995,7 @@ def _component_like_needs_conversion(
                     explicit_device=has_dev,
                 ):
                     needs = True
-        if not needs:
-            visited.add(vkey)
+        visited[vkey] = needs
         return needs
     finally:
         active.discard(oid)

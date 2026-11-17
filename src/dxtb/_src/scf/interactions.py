@@ -66,6 +66,7 @@ def prepare_scf_interactions(
     *,
     d4sc_setup: D4SCCoreSetup | None = None,
     kind_by_label: dict[str, str] | None = None,
+    target_dtype: torch.dtype | None = None,
 ) -> SCFInteractionSet:
     """Convert supported components/caches to frozen core entries.
 
@@ -161,7 +162,11 @@ def prepare_scf_interactions(
                 )
             )
         elif isinstance(component, Interaction):
-            entries.append(prepare_custom_interaction_entry(component, cache))
+            entries.append(
+                prepare_custom_interaction_entry(
+                    component, cache, target_dtype=target_dtype
+                )
+            )
         else:
             raise TypeError(f"Unsupported interaction {type(component)!r}.")
     return SCFInteractionSet(tuple(entries))
