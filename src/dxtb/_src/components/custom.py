@@ -64,6 +64,7 @@ __all__ = [
     "CustomClassicalTemplate",
     "CustomInteractionTemplate",
     "build_custom_classical_core_setup",
+    "build_invalidated_custom_classical_core_setup",
     "can_build_custom_classical_core_setup",
     "is_tensor_only_object",
     "prepare_custom_interaction_entry",
@@ -1433,7 +1434,9 @@ class CustomClassicalTemplate:
         if not isinstance(other, CustomClassicalTemplate):
             return False
         return (
-            self.initial_dtype == other.initial_dtype
+            (self.mutation_snapshot.component_id >= 0)
+            == (other.mutation_snapshot.component_id >= 0)
+            and self.initial_dtype == other.initial_dtype
             and self.initial_device == other.initial_device
             and _specs_equal(self.pair_spec, other.pair_spec)
         )
@@ -1443,6 +1446,7 @@ class CustomClassicalTemplate:
             self._hash_cache = hash(
                 (
                     CustomClassicalTemplate,
+                    self.mutation_snapshot.component_id >= 0,
                     self.initial_device,
                     self.initial_dtype,
                     _spec_hash(self.pair_spec),
@@ -1465,6 +1469,11 @@ class CustomClassicalCoreSetup(Node):
 
     def reconstruct(self) -> tuple[Any, Any]:
         """Materialize ``(component_view, cache_view)`` for the current leaf tensors."""
+        if self.template.mutation_snapshot.component_id < 0:
+            raise RuntimeError(
+                "Cannot reconstruct an invalidated CustomClassicalCoreSetup; "
+                "recompute the component cache first."
+            )
         target_device = self.anchor.device
         target_dd: DD = {
             "device": target_device,
@@ -1603,6 +1612,36 @@ def build_custom_classical_core_setup(
         anchor=torch.empty(0, device=target_device, dtype=dd["dtype"]),
         floating_tensors=floating_tup,
         kept_dtype_tensors=kept_tup,
+        template=template,
+    )
+
+
+def build_invalidated_custom_classical_core_setup(
+    dd: DD,
+) -> CustomClassicalCoreSetup:
+    """Build an invalidated ``CustomClassicalCoreSetup`` retaining no stale cache."""
+    target_device = _resolve_dd_device(dd["device"])
+    invalid_snapshot = ComponentMutationSnapshot(
+        component_id=-1,
+        epoch=-1,
+        has_cache=False,
+        bound_cache=None,
+        tensor_records=(),
+        static_records=(),
+    )
+    template = CustomClassicalTemplate(
+        component=None,
+        cache=None,
+        pair_spec=None,
+        primary_ids=(),
+        secondary_ids=(),
+        initial_dd={"device": target_device, "dtype": dd["dtype"]},
+        mutation_snapshot=invalid_snapshot,
+    )
+    return CustomClassicalCoreSetup(
+        anchor=torch.empty(0, device=target_device, dtype=dd["dtype"]),
+        floating_tensors=(),
+        kept_dtype_tensors=(),
         template=template,
     )
 

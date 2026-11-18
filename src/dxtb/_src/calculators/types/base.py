@@ -29,7 +29,7 @@ from __future__ import annotations
 import contextlib
 import copy
 from abc import abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 import torch
@@ -58,6 +58,7 @@ from dxtb._src.components.classicals import (
 from dxtb._src.components.custom import (
     CustomClassicalCoreSetup,
     build_custom_classical_core_setup,
+    build_invalidated_custom_classical_core_setup,
     snapshot_component_state,
 )
 from dxtb._src.components.interactions import Interaction, InteractionList
@@ -80,31 +81,31 @@ def _convert_setup_node(setup: Any, dtype: torch.dtype) -> Any:
     return setup.to(dtype=dtype) if isinstance(setup, Node) else setup
 
 
-def _convert_packed_classical_setups(
-    packed_setups: Any,
-    dtype: torch.dtype,
-    *,
-    device: torch.device | None = None,
-    memo: ConversionMemo | None = None,
-) -> Any:
-    """Convert all entries in ``_packed_classical_setups`` to ``dtype``."""
-    if not packed_setups:
-        return packed_setups
-    from dxtb._src.components.classicals.list import ClassicalListCache
-
-    if memo is None:
-        memo = {}
-    converted = ClassicalListCache()
-    for key, value in packed_setups.items():
-        converted[key] = _convert_component_value(
-            value,
-            device=device,
-            dtype=dtype,
-            memo=memo,
-            use_to=False,
-            explicit_device=False,
-        )
-    return converted
+def _valid_custom_classical_setups(system: System) -> dict[int, Any]:
+    """Return ``id(owner) -> setup`` for custom classicals whose snapshot is intact."""
+    pos_by_cid = {
+        id(comp): pos for pos, comp in enumerate(system.classicals.components)
+    }
+    core = system.exact_core
+    valid: dict[int, Any] = {}
+    for owner, snap, old_setup in system._custom_classical_snapshots:
+        cid = id(owner)
+        pos = pos_by_cid.get(cid)
+        if pos is None or not snap.matches(owner):
+            continue
+        if core is not None:
+            term = core.classical_term_at(pos)
+            if (
+                term is not None
+                and isinstance(term.setup, CustomClassicalCoreSetup)
+                and (
+                    not term.setup.matches_component_state(owner)
+                    or term.setup.template.cache is not old_setup
+                )
+            ):
+                continue
+        valid[cid] = old_setup
+    return valid
 
 
 def _convert_system_dtype(
@@ -114,14 +115,22 @@ def _convert_system_dtype(
     classicals: ClassicalList | None = None,
     interactions: InteractionList | None = None,
     old_cls_ids: Sequence[int] | None = None,
+    old_cls_labels: Sequence[str] | None = None,
     old_int_ids: Sequence[int] | None = None,
+    valid_custom_setups: Mapping[int, Any] | None = None,
     memo: ConversionMemo | None = None,
     _refresh_token: bool = True,
+    _core_was_active: bool | None = None,
 ) -> System:
     """Convert System setup snapshots to ``dtype`` per ``Calculator.type``."""
     if memo is None:
         memo = {}
     token_intact = _refresh_token and system._has_intact_setup_token()
+    resolved_valid_setups = (
+        _valid_custom_classical_setups(system)
+        if valid_custom_setups is None
+        else valid_custom_setups
+    )
     resolved_classicals = (
         system.classicals if classicals is None else classicals
     )
@@ -133,6 +142,11 @@ def _convert_system_dtype(
         if old_cls_ids is None
         else list(old_cls_ids)
     )
+    src_cls_labels = (
+        [c.label for c in system.classicals.components]
+        if old_cls_labels is None
+        else list(old_cls_labels)
+    )
     src_int_ids = (
         [id(i) for i in system.interactions.components]
         if old_int_ids is None
@@ -140,7 +154,9 @@ def _convert_system_dtype(
     )
     exact_core = system.exact_core
     core_was_active = (
-        exact_core is not None and system._active_exact_core() is exact_core
+        (exact_core is not None and system._active_exact_core() is exact_core)
+        if _core_was_active is None
+        else _core_was_active
     )
     if exact_core is not None:
         converted_core = exact_core.to(dtype=dtype)
@@ -201,12 +217,6 @@ def _convert_system_dtype(
         else None
     )
     sys_device = normalize_device(system.dd["device"])
-    packed_setups = _convert_packed_classical_setups(
-        system._packed_classical_setups,
-        dtype,
-        device=sys_device,
-        memo=memo,
-    )
     old_to_new_cls = {
         old_cid: id(new_c)
         for old_cid, new_c in zip(src_cls_ids, resolved_classicals.components)
@@ -223,21 +233,17 @@ def _convert_system_dtype(
         old_to_new_int.get(iid, iid): token
         for iid, token in system._auto_interaction_ids.items()
     }
-    old_setup_by_cid = {
-        id(owner): old_setup
-        for owner, _, old_setup in system._custom_classical_snapshots
-    }
     custom_snapshots_list: list[tuple[Classical, Any, Any]] = []
     snap_by_pos: dict[int, tuple[Classical, Any, Any]] = {}
-    for pos, (old_cid, new_c) in enumerate(
-        zip(src_cls_ids, resolved_classicals.components)
+    invalid_custom_labels: set[str] = set()
+    for pos, (old_cid, old_lbl, new_c) in enumerate(
+        zip(src_cls_ids, src_cls_labels, resolved_classicals.components)
     ):
-        if (
-            type(new_c) not in BUILTIN_CLASSICAL_TYPES
-            and old_cid in old_setup_by_cid
-        ):
+        if type(new_c) in BUILTIN_CLASSICAL_TYPES:
+            continue
+        if old_cid in resolved_valid_setups:
             conv_setup = _convert_component_value(
-                old_setup_by_cid[old_cid],
+                resolved_valid_setups[old_cid],
                 device=sys_device,
                 dtype=dtype,
                 memo=memo,
@@ -251,6 +257,36 @@ def _convert_system_dtype(
             )
             custom_snapshots_list.append(snap_entry)
             snap_by_pos[pos] = snap_entry
+        else:
+            invalid_custom_labels.add(old_lbl)
+            invalid_custom_labels.add(new_c.label)
+
+    if system._packed_classical_setups or snap_by_pos:
+        from dxtb._src.components.classicals.list import ClassicalListCache
+
+        packed_setups = ClassicalListCache()
+        if system._packed_classical_setups:
+            for old_lbl, new_c in zip(
+                src_cls_labels, resolved_classicals.components
+            ):
+                if (
+                    type(new_c) in BUILTIN_CLASSICAL_TYPES
+                    and old_lbl in system._packed_classical_setups
+                ):
+                    packed_setups[new_c.label] = _convert_component_value(
+                        system._packed_classical_setups[old_lbl],
+                        device=sys_device,
+                        dtype=dtype,
+                        memo=memo,
+                        use_to=False,
+                        explicit_device=False,
+                    )
+        for new_c, _, conv_setup in snap_by_pos.values():
+            if new_c.label not in invalid_custom_labels:
+                packed_setups[new_c.label] = conv_setup
+    else:
+        packed_setups = system._packed_classical_setups
+
     if exact_core is not None and any(
         isinstance(term.setup, CustomClassicalCoreSetup)
         for term in exact_core.classical_terms
@@ -259,18 +295,31 @@ def _convert_system_dtype(
             (
                 replace(
                     term,
-                    setup=build_custom_classical_core_setup(
-                        snap_by_pos[term.position][0],
-                        snap_by_pos[term.position][2],
-                        {
-                            "device": term.setup.anchor.device,
-                            "dtype": dtype,
-                        },
-                        mutation_snapshot=snap_by_pos[term.position][1],
+                    label=(
+                        resolved_classicals.components[term.position].label
+                        if term.position < len(resolved_classicals.components)
+                        else term.label
+                    ),
+                    setup=(
+                        build_custom_classical_core_setup(
+                            snap_by_pos[term.position][0],
+                            snap_by_pos[term.position][2],
+                            {
+                                "device": term.setup.anchor.device,
+                                "dtype": dtype,
+                            },
+                            mutation_snapshot=snap_by_pos[term.position][1],
+                        )
+                        if term.position in snap_by_pos
+                        else build_invalidated_custom_classical_core_setup(
+                            {
+                                "device": term.setup.anchor.device,
+                                "dtype": dtype,
+                            }
+                        )
                     ),
                 )
                 if isinstance(term.setup, CustomClassicalCoreSetup)
-                and term.position in snap_by_pos
                 else term
             )
             for term in exact_core.classical_terms
@@ -297,10 +346,12 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
     conversion_memo: ConversionMemo = {}
     token_intact = system._has_intact_setup_token()
     orig_core = system._active_exact_core()
+    valid_custom_setups = _valid_custom_classical_setups(system)
     sys_device = normalize_device(system.dd["device"])
     old_cls_comps = tuple(system.classicals.components)
     old_int_comps = tuple(system.interactions.components)
     old_cls_ids = [id(c) for c in old_cls_comps]
+    old_cls_labels = [c.label for c in old_cls_comps]
     old_int_ids = [id(i) for i in old_int_comps]
 
     if orig_core is None:
@@ -356,9 +407,12 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
             classicals=new_classicals,
             interactions=new_interactions,
             old_cls_ids=old_cls_ids,
+            old_cls_labels=old_cls_labels,
             old_int_ids=old_int_ids,
+            valid_custom_setups=valid_custom_setups,
             memo=conversion_memo,
             _refresh_token=False,
+            _core_was_active=False,
         )
 
         def _remap_c(comp: Any) -> Any:
@@ -488,9 +542,12 @@ def _convert_eval_system_dtype(system: System, dtype: torch.dtype) -> System:
         classicals=new_classicals,
         interactions=new_interactions,
         old_cls_ids=old_cls_ids,
+        old_cls_labels=old_cls_labels,
         old_int_ids=old_int_ids,
+        valid_custom_setups=valid_custom_setups,
         memo=conversion_memo,
         _refresh_token=False,
+        _core_was_active=True,
     )
     exact_core = base.exact_core
     assert exact_core is not None
@@ -1083,7 +1140,13 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             )
 
         conversion_memo: ConversionMemo = {}
+        valid_custom_setups = _valid_custom_classical_setups(self.system)
+        core_was_active = (
+            self.system.exact_core is not None
+            and self.system._active_exact_core() is self.system.exact_core
+        )
         old_cls_ids = [id(c) for c in self.classicals.components]
+        old_cls_labels = [c.label for c in self.classicals.components]
         old_int_ids = [id(i) for i in self.interactions.components]
         self.classicals = self.classicals._type_with_memo(
             dtype, conversion_memo
@@ -1145,8 +1208,11 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             classicals=self.classicals,
             interactions=self.interactions,
             old_cls_ids=old_cls_ids,
+            old_cls_labels=old_cls_labels,
             old_int_ids=old_int_ids,
+            valid_custom_setups=valid_custom_setups,
             memo=conversion_memo,
+            _core_was_active=core_was_active,
         )
         # hard override of the dtype in TensorLike
         self.override_dtype(dtype)

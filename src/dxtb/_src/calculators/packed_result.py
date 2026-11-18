@@ -54,11 +54,13 @@ from dxtb._src.calculators.singlepoint import _call_tensor
 from dxtb._src.calculators.types.base import (
     _convert_eval_system_dtype,
     _convert_system_dtype,
+    _valid_custom_classical_setups,
 )
 from dxtb._src.calculators.types.energy import check_singlepoint_options
 from dxtb._src.components.custom import (
     CustomClassicalCoreSetup,
     build_custom_classical_core_setup,
+    build_invalidated_custom_classical_core_setup,
     snapshot_component_state,
 )
 from dxtb._src.components.interactions.base import (
@@ -1139,6 +1141,7 @@ def _sync_lane_system_labels(
     interaction_changed = False
     old_classical_comps = list(lane_sys.classicals.components)
     old_classical_labels = [c.label for c in old_classical_comps]
+    valid_old_setups = _valid_custom_classical_setups(lane_sys)
     if len(old_classical_comps) == len(source_classicals):
         new_classicals = list(old_classical_comps)
         for idx, (lane_comp, orig_comp) in enumerate(
@@ -1192,29 +1195,19 @@ def _sync_lane_system_labels(
             old_to_new_cls.get(cid, cid): tok
             for cid, tok in auto_classical_ids.items()
         }
-        if packed_setups:
-            from dxtb._src.components.classicals.list import ClassicalListCache
-
-            remapped = ClassicalListCache()
-            for old_lbl, comp in zip(
-                old_classical_labels, lane_sys.classicals.components
-            ):
-                if old_lbl in packed_setups:
-                    remapped[comp.label] = packed_setups[old_lbl]
-            packed_setups = remapped
-        old_setup_by_cid = {
-            id(owner): captured_setup
-            for owner, _, captured_setup in custom_snapshots
-        }
         rebound_snapshots: list[tuple[Any, Any, Any]] = []
-        for pos, (old_c, new_c) in enumerate(
-            zip(old_classical_comps, lane_sys.classicals.components)
+        invalid_custom_labels: set[str] = set()
+        for pos, (old_c, old_lbl, new_c) in enumerate(
+            zip(
+                old_classical_comps,
+                old_classical_labels,
+                lane_sys.classicals.components,
+            )
         ):
-            if (
-                type(new_c) not in BUILTIN_CLASSICAL_TYPES
-                and id(old_c) in old_setup_by_cid
-            ):
-                cap_setup = old_setup_by_cid[id(old_c)]
+            if type(new_c) in BUILTIN_CLASSICAL_TYPES:
+                continue
+            if id(old_c) in valid_old_setups:
+                cap_setup = valid_old_setups[id(old_c)]
                 snap_entry = (
                     new_c,
                     snapshot_component_state(new_c, cap_setup),
@@ -1222,27 +1215,60 @@ def _sync_lane_system_labels(
                 )
                 rebound_snapshots.append(snap_entry)
                 snap_by_pos[pos] = snap_entry
+            else:
+                invalid_custom_labels.add(old_lbl)
+                invalid_custom_labels.add(new_c.label)
         custom_snapshots = tuple(rebound_snapshots)
+
+        if packed_setups or snap_by_pos:
+            from dxtb._src.components.classicals.list import ClassicalListCache
+
+            remapped = ClassicalListCache()
+            if packed_setups:
+                for old_lbl, comp in zip(
+                    old_classical_labels, lane_sys.classicals.components
+                ):
+                    if (
+                        type(comp) in BUILTIN_CLASSICAL_TYPES
+                        and old_lbl in packed_setups
+                    ):
+                        remapped[comp.label] = packed_setups[old_lbl]
+            for new_c, _, cap_setup in snap_by_pos.values():
+                if new_c.label not in invalid_custom_labels:
+                    remapped[new_c.label] = cap_setup
+            packed_setups = remapped
 
     exact_core = lane_sys.exact_core
     if exact_core is not None:
         new_c_terms = tuple(
             replace(
                 term,
-                label=lane_sys.classicals.components[term.position].label,
+                label=(
+                    lane_sys.classicals.components[term.position].label
+                    if term.position < len(lane_sys.classicals.components)
+                    else term.label
+                ),
                 setup=(
-                    build_custom_classical_core_setup(
-                        snap_by_pos[term.position][0],
-                        snap_by_pos[term.position][2],
-                        {
-                            "device": term.setup.anchor.device,
-                            "dtype": term.setup.anchor.dtype,
-                        },
-                        mutation_snapshot=snap_by_pos[term.position][1],
+                    (
+                        build_custom_classical_core_setup(
+                            snap_by_pos[term.position][0],
+                            snap_by_pos[term.position][2],
+                            {
+                                "device": term.setup.anchor.device,
+                                "dtype": term.setup.anchor.dtype,
+                            },
+                            mutation_snapshot=snap_by_pos[term.position][1],
+                        )
+                        if term.position in snap_by_pos
+                        else build_invalidated_custom_classical_core_setup(
+                            {
+                                "device": term.setup.anchor.device,
+                                "dtype": term.setup.anchor.dtype,
+                            }
+                        )
                     )
                     if classical_changed
                     and isinstance(term.setup, CustomClassicalCoreSetup)
-                    and term.position in snap_by_pos
                     else term.setup
                 ),
             )

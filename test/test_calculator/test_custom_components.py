@@ -4127,3 +4127,489 @@ def test_h2_review_hardening_and_custom_scf_rebase_contracts() -> None:
     assert nocore32.repulsion_classical in nocore32.classicals.components
     res_nocore32 = nocore32.singlepoint(pos_w[0].to(torch.float32))
     assert res_nocore32.energy.dtype == torch.float32
+
+
+def test_custom_classical_cache_invalidation_preserved_across_dtype_conversion() -> (
+    None
+):
+    """Mutated custom Classical state stays invalidated across Calculator.type and _convert_eval_system_dtype."""
+    from dxtb._src.calculators.types.base import (
+        _convert_eval_system_dtype,
+        _convert_system_dtype,
+    )
+
+    class _OpaqueTag:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    class _ScaledAliasCache(ClassicalCache):
+        __slots__ = ["shared", "buf"]
+
+        def __init__(self, shared: Tensor, buf: Tensor) -> None:
+            super().__init__(device=shared.device, dtype=shared.dtype)
+            self.shared = shared
+            self.buf = buf
+            self.note = "clean"
+
+    class ScaledClassical(Classical):
+        """Tensor-only Classical matching the WP-CC-H3 reproduction."""
+
+        def __init__(
+            self,
+            factor: float,
+            weight: Tensor,
+            *,
+            label: str = "ScaledClassical",
+        ) -> None:
+            super().__init__(device=weight.device, dtype=weight.dtype)
+            self.label = label
+            self.factor = factor
+            self.left = weight
+            self.right = weight
+            self.cache_calls = 0
+
+        @override
+        def get_cache(
+            self, numbers: Tensor, ihelp: IndexHelper | None = None
+        ) -> _ScaledAliasCache:
+            _ = ihelp
+            self.cache_calls += 1
+            active = (numbers > 0).to(device=self.device, dtype=self.dtype)
+            buf = active * torch.full(
+                numbers.shape,
+                self.factor,
+                dtype=self.dtype,
+                device=self.device,
+            )
+            return _ScaledAliasCache(self.left, buf)
+
+        @override
+        def get_energy(
+            self, positions: Tensor, cache: _ScaledAliasCache, **_: Any
+        ) -> Tensor:
+            return (
+                0.25
+                * (self.left + self.right + cache.shared)
+                * cache.buf
+                * positions.square().sum(dim=-1)
+            )
+
+    class OpaqueScaledClassical(Classical):
+        """Opaque Classical always evaluated through _evaluate_custom_classical_fallback."""
+
+        def __init__(
+            self,
+            factor: float,
+            weight: Tensor,
+            *,
+            label: str = "OpaqueScaled",
+        ) -> None:
+            super().__init__(device=weight.device, dtype=weight.dtype)
+            self.label = label
+            self.factor = factor
+            self.weight = weight
+            self.tag = _OpaqueTag(label)
+            self.cache_calls = 0
+
+        @override
+        def get_cache(
+            self, numbers: Tensor, ihelp: IndexHelper | None = None
+        ) -> Tensor:
+            _ = ihelp
+            self.cache_calls += 1
+            active = (numbers > 0).to(device=self.device, dtype=self.dtype)
+            return (
+                active
+                * self.weight
+                * torch.full(
+                    numbers.shape,
+                    self.factor,
+                    dtype=self.dtype,
+                    device=self.device,
+                )
+            )
+
+        @override
+        def get_energy(
+            self, positions: Tensor, cache: Tensor, **_: Any
+        ) -> Tensor:
+            return 0.75 * cache * positions.square().sum(dim=-1)
+
+    numbers = torch.tensor([8, 1, 17], dtype=torch.int64, device=DEVICE)
+    pos64 = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 1.8], [2.4, 0.3, -0.2]], **DD64
+    )
+    pos32 = pos64.to(dtype=torch.float32)
+    par64 = ParamModule(GFN1_XTB, **DD64)
+    par32 = ParamModule(GFN1_XTB, device=DEVICE, dtype=torch.float32)
+
+    # 1. Exact WP-CC-H3 reproduction across SCF-enabled and exclude={"scf"},
+    #    covering scalar mutation, tensor replacement, and in-place tensor mutation
+    #    for both tensor-only and opaque custom classicals, with energy + first derivatives.
+    for exclude_scf in (False, True):
+        cfg = (
+            Config.create(int_driver="pytorch", exclude="scf")
+            if exclude_scf
+            else Config.create(int_driver="pytorch")
+        )
+        opts: dict[str, Any] = {"verbosity": 0, "int_driver": "pytorch"}
+        if exclude_scf:
+            opts["exclude"] = ["scf"]
+
+        for cls_factory, is_core in (
+            (ScaledClassical, True),
+            (OpaqueScaledClassical, False),
+        ):
+            for mut_kind in ("scalar", "replace_tensor", "inplace_tensor"):
+                w64 = torch.tensor(0.06, **DD64, requires_grad=True)
+                comp = cls_factory(1.0, w64)
+                sys64 = Model(par=par64, config=cfg, classical=(comp,)).setup(
+                    numbers
+                )
+                assert sys64._active_exact_core() is not None
+
+                expected_factor = 1.0
+                expected_w_val = 0.06
+                if mut_kind == "scalar":
+                    comp.factor = 2.0
+                    expected_factor = 2.0
+                    grad_source = w64
+                elif mut_kind == "replace_tensor":
+                    w64_new = torch.tensor(0.11, **DD64, requires_grad=True)
+                    if isinstance(comp, ScaledClassical):
+                        comp.left = w64_new
+                        comp.right = w64_new
+                    else:
+                        comp.weight = w64_new
+                    expected_w_val = 0.11
+                    grad_source = w64_new
+                else:
+                    w64_mut = w64.detach().clone()
+                    with torch.no_grad():
+                        w64_mut.mul_(2.25)
+                    w64_mut.requires_grad_(True)
+                    if isinstance(comp, ScaledClassical):
+                        comp.left = w64_mut
+                        comp.right = w64_mut
+                    else:
+                        comp.weight = w64_mut
+                    # Also verify genuine in-place _version bump on an existing leaf:
+                    sys64_ip = Model(
+                        par=par64, config=cfg, classical=(comp,)
+                    ).setup(numbers)
+                    with torch.no_grad():
+                        w64_mut.add_(0.03)
+                    expected_w_val = 0.06 * 2.25 + 0.03
+                    sys64 = sys64_ip
+                    grad_source = w64_mut
+
+                if is_core:
+                    assert sys64._active_exact_core() is None
+
+                sys32 = _convert_eval_system_dtype(sys64, torch.float32)
+                if is_core:
+                    assert sys32._active_exact_core() is None
+                    assert sys32.exact_core is not None
+                    inv_term = sys32.exact_core.classical_terms[-1]
+                    assert isinstance(inv_term.setup, CustomClassicalCoreSetup)
+                    assert inv_term.setup.template.cache is None
+                    with pytest.raises(RuntimeError, match="invalidated"):
+                        inv_term.setup.reconstruct()
+                assert comp.label not in sys32._packed_classical_setups
+                assert comp.label not in sys32.classical_cache
+                assert sys32._custom_classical_snapshots == ()
+
+                comp32 = sys32.classicals.components[-1]
+                param32 = (
+                    comp32.left
+                    if isinstance(comp32, ScaledClassical)
+                    else comp32.weight
+                )
+                p_eval = pos32.clone().requires_grad_(True)
+                res_conv = sys32.singlepoint(p_eval)
+
+                w_ref32 = torch.tensor(
+                    expected_w_val,
+                    device=DEVICE,
+                    dtype=torch.float32,
+                    requires_grad=True,
+                )
+                ref_comp32 = cls_factory(expected_factor, w_ref32)
+                p_ref = pos32.clone().requires_grad_(True)
+                res_ref = (
+                    Model(par=par32, config=cfg, classical=(ref_comp32,))
+                    .setup(numbers)
+                    .singlepoint(p_ref)
+                )
+
+                rtol = 1e-5 if not exclude_scf else 1e-6
+                atol = 1e-5 if not exclude_scf else 1e-6
+                torch.testing.assert_close(
+                    res_conv.energy, res_ref.energy, rtol=rtol, atol=atol
+                )
+                g_pos, g_p32, g_src64 = torch.autograd.grad(
+                    res_conv.energy.sum(),
+                    (p_eval, param32, grad_source),
+                )
+                g_pos_ref, g_w_ref = torch.autograd.grad(
+                    res_ref.energy.sum(), (p_ref, w_ref32)
+                )
+                torch.testing.assert_close(
+                    g_pos, g_pos_ref, rtol=rtol, atol=atol
+                )
+                torch.testing.assert_close(g_p32, g_w_ref, rtol=rtol, atol=atol)
+                torch.testing.assert_close(
+                    g_src64.to(dtype=torch.float32),
+                    g_w_ref,
+                    rtol=rtol,
+                    atol=atol,
+                )
+
+        # Calculator.type(torch.float32) after pre-conversion mutation (1D)
+        w_calc64 = torch.tensor(0.08, **DD64, requires_grad=True)
+        c_calc = ScaledClassical(1.0, w_calc64)
+        calc64 = Calculator(
+            numbers,
+            GFN1_XTB,
+            classical=(c_calc,),
+            opts=dict(opts),
+            **DD64,
+        )
+        c_calc.factor = 2.25
+        assert calc64.system._active_exact_core() is None
+        calc32 = calc64.type(torch.float32)
+        assert calc32.system._active_exact_core() is None
+        assert c_calc.label not in calc32.system._packed_classical_setups
+        assert c_calc.label not in calc32.system.classical_cache
+        assert calc32.system._custom_classical_snapshots == ()
+        assert calc32.system.exact_core is not None
+        assert (
+            calc32.system.exact_core.classical_terms[-1].setup.template.cache  # type: ignore[union-attr]
+            is None
+        )
+
+        p_calc = pos32.clone().requires_grad_(True)
+        e_calc = calc32.singlepoint(p_calc).energy
+        w_calc_ref = torch.tensor(
+            0.08, device=DEVICE, dtype=torch.float32, requires_grad=True
+        )
+        p_calc_ref = pos32.clone().requires_grad_(True)
+        calc_ref32 = Calculator(
+            numbers,
+            par32,
+            classical=(ScaledClassical(2.25, w_calc_ref),),
+            opts=dict(opts),
+            device=DEVICE,
+            dtype=torch.float32,
+        )
+        e_calc_ref = calc_ref32.singlepoint(p_calc_ref).energy
+        torch.testing.assert_close(e_calc, e_calc_ref, rtol=1e-5, atol=1e-5)
+        c_calc32 = calc32.classicals.components[-1]
+        assert isinstance(c_calc32, ScaledClassical)
+        gc_pos, gc_p32, gc_src64 = torch.autograd.grad(
+            e_calc.sum(), (p_calc, c_calc32.left, w_calc64)
+        )
+        gc_pos_ref, gc_w_ref = torch.autograd.grad(
+            e_calc_ref.sum(), (p_calc_ref, w_calc_ref)
+        )
+        torch.testing.assert_close(gc_pos, gc_pos_ref, rtol=1e-5, atol=1e-5)
+        torch.testing.assert_close(gc_p32, gc_w_ref, rtol=1e-5, atol=1e-5)
+        torch.testing.assert_close(
+            gc_src64.to(torch.float32), gc_w_ref, rtol=1e-5, atol=1e-5
+        )
+
+    # 2. Direct calc32.system evaluation when exclude="all" AND direct _convert_system_dtype
+    c_excl = ScaledClassical(1.0, torch.tensor(0.5, **DD64))
+    calc_excl = Calculator(
+        numbers,
+        par64,
+        classical=(c_excl,),
+        opts={"verbosity": 0, "int_driver": "pytorch", "exclude": ["all"]},
+        **DD64,
+    )
+    c_excl.factor = 2.0
+    assert calc_excl.system._active_exact_core() is None
+    calc_excl32 = calc_excl.type(torch.float32)
+    assert calc_excl32.system._active_exact_core() is None
+    torch.testing.assert_close(
+        calc_excl32.system.singlepoint(pos32).energy,
+        calc_excl32.singlepoint(pos32).energy,
+    )
+    sys_direct_conv = _convert_system_dtype(calc_excl.system, torch.float32)
+    assert sys_direct_conv._active_exact_core() is None
+    assert c_excl.label not in sys_direct_conv.classical_cache
+
+    # 3. Batched Calculator.type(torch.float32) (batch_mode=1 padded and batch_mode=2 conformer)
+    nums_pad = torch.tensor([[3, 1, 0], [8, 1, 17]], device=DEVICE)
+    pos_pad32 = torch.stack(
+        [
+            torch.tensor(
+                [[0.0, 0.0, 0.0], [0.0, 0.0, 3.0], [0.0, 0.0, 0.0]],
+                device=DEVICE,
+                dtype=torch.float32,
+            ),
+            pos32,
+        ]
+    )
+    nums_conf = torch.stack([numbers, numbers])
+    pos_conf32 = torch.stack([pos32, pos32 * 1.03])
+    for batch_mode, b_nums, b_pos in (
+        (1, nums_pad, pos_pad32),
+        (2, nums_conf, pos_conf32),
+    ):
+        cb = ScaledClassical(1.0, torch.tensor(0.05, **DD64))
+        bcalc = Calculator(
+            b_nums,
+            par64,
+            classical=(cb,),
+            opts={
+                "verbosity": 0,
+                "int_driver": "pytorch",
+                "batch_mode": batch_mode,
+            },
+            **DD64,
+        )
+        cb.factor = 1.75
+        bcalc32 = bcalc.type(torch.float32)
+        assert cb.label not in bcalc32.system._packed_classical_setups
+        assert cb.label not in bcalc32.system.classical_cache
+        assert bcalc32.system._custom_classical_snapshots == ()
+        bref32 = Calculator(
+            b_nums,
+            par32,
+            classical=(
+                ScaledClassical(
+                    1.75,
+                    torch.tensor(0.05, device=DEVICE, dtype=torch.float32),
+                ),
+            ),
+            opts={
+                "verbosity": 0,
+                "int_driver": "pytorch",
+                "batch_mode": batch_mode,
+            },
+            device=DEVICE,
+            dtype=torch.float32,
+        )
+        torch.testing.assert_close(
+            bcalc32.singlepoint(b_pos).energy,
+            bref32.singlepoint(b_pos).energy,
+            rtol=1e-5,
+            atol=1e-5,
+        )
+
+    # 4. Multiple custom classicals when only one was invalidated, plus pre-conversion
+    #    cache mutation and preservation of unrelated built-ins & valid H2 shared-cache identity.
+    pure_w = torch.tensor(0.04, **DD64, requires_grad=True)
+    mut_w = torch.tensor(0.07, **DD64, requires_grad=True)
+    pure_cls = ScaledClassical(1.25, pure_w, label="PureCustom")
+    mut_cls = ScaledClassical(1.0, mut_w, label="MutCustom")
+    cfg_full = Config.create(int_driver="pytorch")
+    sys_multi64 = Model(
+        par=par64, config=cfg_full, classical=(pure_cls, mut_cls)
+    ).setup(numbers)
+    assert (pure_cls.cache_calls, mut_cls.cache_calls) == (1, 1)
+
+    mut_cls.factor = 2.5
+    assert sys_multi64._active_exact_core() is None
+    sys_multi32 = _convert_eval_system_dtype(sys_multi64, torch.float32)
+    assert sys_multi32._active_exact_core() is None
+
+    # Built-in setups were converted without discarding any built-in term
+    assert sys_multi32.repulsion_setup is not None
+    assert sys_multi32.halogen_setup is not None
+    assert len(sys_multi32.d3_setups) == 1
+    assert sys_multi32.es2_setup is not None
+    assert sys_multi32.es3_setup is not None
+    assert sys_multi32.h0_setup is not None
+    assert sys_multi32.integral_setup is not None
+
+    # Valid PureCustom keeps H2 shared-cache & alias identity; MutCustom is purged
+    assert "PureCustom" in sys_multi32.classical_cache
+    assert "MutCustom" not in sys_multi32.classical_cache
+    assert "MutCustom" not in sys_multi32._packed_classical_setups
+    assert len(sys_multi32._custom_classical_snapshots) == 1
+    pure_cls32 = sys_multi32.classicals.components[-2]
+    mut_cls32 = sys_multi32.classicals.components[-1]
+    assert isinstance(pure_cls32, ScaledClassical)
+    assert isinstance(mut_cls32, ScaledClassical)
+    assert sys_multi32._custom_classical_snapshots[0][0] is pure_cls32
+    pure_cache32 = sys_multi32.classical_cache["PureCustom"]
+    assert pure_cache32 is sys_multi32._packed_classical_setups["PureCustom"]
+    assert pure_cache32 is sys_multi32._custom_classical_snapshots[0][2]
+    assert sys_multi32.exact_core is not None
+    pure_core_term = sys_multi32.exact_core.classical_terms[-2]
+    mut_core_term = sys_multi32.exact_core.classical_terms[-1]
+    assert isinstance(pure_core_term.setup, CustomClassicalCoreSetup)
+    assert isinstance(mut_core_term.setup, CustomClassicalCoreSetup)
+    assert pure_core_term.setup.template.cache is pure_cache32
+    assert mut_core_term.setup.template.cache is None
+    assert pure_cls32.left is pure_cls32.right
+    assert pure_cls32.left is pure_cache32.shared
+
+    # Evaluate twice: PureCustom reuses its converted setup (cache_calls stays 1),
+    # while MutCustom recomputes fresh on each fallback call.
+    out_m1 = sys_multi32.singlepoint(pos32)
+    out_m2 = sys_multi32.singlepoint(pos32)
+    assert pure_cls32.cache_calls == 1
+    assert mut_cls32.cache_calls == 3
+    torch.testing.assert_close(out_m1.energy, out_m2.energy)
+    ref_multi32 = (
+        Model(
+            par=par32,
+            config=cfg_full,
+            classical=(
+                ScaledClassical(
+                    1.25,
+                    torch.tensor(0.04, device=DEVICE, dtype=torch.float32),
+                    label="PureCustom",
+                ),
+                ScaledClassical(
+                    2.5,
+                    torch.tensor(0.07, device=DEVICE, dtype=torch.float32),
+                    label="MutCustom",
+                ),
+            ),
+        )
+        .setup(numbers)
+        .singlepoint(pos32)
+    )
+    torch.testing.assert_close(
+        out_m1.energy, ref_multi32.energy, rtol=1e-5, atol=1e-5
+    )
+
+    # 5. Originally valid snapshot preserves active exact core and H2 shared-cache invalidation,
+    #    and mutating the captured cache BEFORE conversion also preserves invalidation.
+    valid_comp = ScaledClassical(
+        1.5, torch.tensor(0.05, **DD64), label="ValidCustom"
+    )
+    valid_sys64 = Model(
+        par=par64,
+        config=Config.create(int_driver="pytorch", exclude="scf"),
+        classical=(valid_comp,),
+    ).setup(numbers)
+    valid_sys32 = _convert_eval_system_dtype(valid_sys64, torch.float32)
+    assert valid_sys32._active_exact_core() is valid_sys32.exact_core
+    v_cache32 = valid_sys32.classical_cache["ValidCustom"]
+    assert valid_sys32.exact_core is not None
+    assert (
+        valid_sys32.exact_core.classical_terms[-1].setup.template.cache  # type: ignore[union-attr]
+        is v_cache32
+    )
+    v_cache32.note = "post_conv_dirty"
+    assert valid_sys32._active_exact_core() is None
+
+    pre_dirty_comp = ScaledClassical(
+        1.5, torch.tensor(0.05, **DD64), label="PreDirtyCache"
+    )
+    pre_dirty_sys64 = Model(
+        par=par64,
+        config=Config.create(int_driver="pytorch", exclude="scf"),
+        classical=(pre_dirty_comp,),
+    ).setup(numbers)
+    pre_dirty_sys64.classical_cache["PreDirtyCache"].note = "pre_conv_dirty"
+    assert pre_dirty_sys64._active_exact_core() is None
+    pre_dirty_sys32 = _convert_eval_system_dtype(pre_dirty_sys64, torch.float32)
+    assert pre_dirty_sys32._active_exact_core() is None
+    assert "PreDirtyCache" not in pre_dirty_sys32.classical_cache
+    assert pre_dirty_sys32._custom_classical_snapshots == ()
