@@ -370,8 +370,16 @@ class _ModelSetupAdapter(nn.Module):
         *,
         batch_mode: int | None = None,
         dd: DD | None = None,
+        _allow_duplicate_custom_classical_labels: bool = False,
     ) -> System:
-        return self._model.setup(numbers, batch_mode=batch_mode, dd=dd)
+        return self._model.setup(
+            numbers,
+            batch_mode=batch_mode,
+            dd=dd,
+            _allow_duplicate_custom_classical_labels=(
+                _allow_duplicate_custom_classical_labels
+            ),
+        )
 
 
 def _classical_term_kind(
@@ -2521,6 +2529,7 @@ class Model:
         *,
         batch_mode: int | None = None,
         dd: DD | None = None,
+        _allow_duplicate_custom_classical_labels: bool = False,
     ) -> System:
         """
         Set up the System for the atomic numbers.
@@ -2575,7 +2584,13 @@ class Model:
                 _ModelSetupAdapter(self),
                 state,
                 (numbers,),
-                {"batch_mode": batch_mode, "dd": dd},
+                {
+                    "batch_mode": batch_mode,
+                    "dd": dd,
+                    "_allow_duplicate_custom_classical_labels": (
+                        _allow_duplicate_custom_classical_labels
+                    ),
+                },
                 strict=True,
             )
 
@@ -2822,11 +2837,20 @@ class Model:
             for component in classicals.components:
                 previous = labels_by_name.get(component.label)
                 if previous is not None and previous is not component:
-                    raise ValueError(
-                        "Distinct classical contributions in a single System "
-                        f"share the label '{component.label}'."
-                    )
-                labels_by_name[component.label] = component
+                    if not (
+                        _allow_duplicate_custom_classical_labels
+                        and type(previous) not in BUILTIN_CLASSICAL_TYPES
+                        and type(component) not in BUILTIN_CLASSICAL_TYPES
+                    ):
+                        raise ValueError(
+                            "Distinct classical contributions in a single System "
+                            f"share the label '{component.label}'."
+                        )
+                if (
+                    type(component) in BUILTIN_CLASSICAL_TYPES
+                    or component.label not in labels_by_name
+                ):
+                    labels_by_name[component.label] = component
 
             # These family-owned System fields intentionally represent one
             # setup per family. D3 is the exception: it has an identity-keyed

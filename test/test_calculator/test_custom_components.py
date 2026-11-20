@@ -48,7 +48,11 @@ from dxtb._src.calculators.lane_evaluation import (
     evaluate_lane_group,
 )
 from dxtb._src.calculators.model import Model, ModelParameterNode, System
-from dxtb._src.calculators.packed_result import evaluate_packed_systems
+from dxtb._src.calculators.packed_result import (
+    _sync_lane_system_labels,
+    build_calculator_lane_systems,
+    evaluate_packed_systems,
+)
 from dxtb._src.components.custom import (
     CustomClassicalCoreSetup,
     prepare_custom_interaction_entry,
@@ -4613,3 +4617,305 @@ def test_custom_classical_cache_invalidation_preserved_across_dtype_conversion()
     assert pre_dirty_sys32._active_exact_core() is None
     assert "PreDirtyCache" not in pre_dirty_sys32.classical_cache
     assert pre_dirty_sys32._custom_classical_snapshots == ()
+
+
+def test_duplicate_custom_classical_labels_preserve_label_in_get_cache() -> (
+    None
+):
+    """Same-label custom Classicals see their real self.label in get_cache across Model.setup and Calculator."""
+    seen_labels: list[str] = []
+    call_counts: dict[int, int] = {}
+    label_factors = {
+        "SharedCustomLabel": 1.5,
+        "InitialB": 0.25,
+        "TempSynthetic": 100.0,
+    }
+
+    class LabelDependentClassical(Classical):
+        __slots__ = ["weight"]
+
+        def __init__(
+            self,
+            weight: Tensor,
+            label: str = "SharedCustomLabel",
+        ) -> None:
+            super().__init__(device=weight.device, dtype=weight.dtype)
+            self.weight = weight
+            self.label = label
+
+        @override
+        def get_cache(
+            self, numbers: Tensor, ihelp: IndexHelper | None = None
+        ) -> Tensor:
+            _ = ihelp
+            seen_labels.append(self.label)
+            call_counts[id(self)] = call_counts.get(id(self), 0) + 1
+            factor = label_factors[self.label]
+            mask = (numbers > 0).to(dtype=self.dtype)
+            return factor * self.weight * mask
+
+        @override
+        def get_energy(
+            self, positions: Tensor, cache: Tensor, **_: Any
+        ) -> Tensor:
+            return cache * positions.square().sum(dim=-1)
+
+    numbers, pos_a = _lih_inputs()
+    pos_b = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 3.2]], **DD64)
+    nums_bm2 = torch.stack([numbers, numbers], dim=0)
+    pos_bm2 = torch.stack([pos_a, pos_b], dim=0).requires_grad_(True)
+    par64 = ParamModule(GFN1_XTB, **DD64)
+    par32 = ParamModule(GFN1_XTB, device=DEVICE, dtype=torch.float32)
+    cfg_excl = Config.create(exclude="all")
+
+    # 1. Direct single-System Model.setup(batch_mode=0) still rejects duplicate labels,
+    #    while Model.setup(batch_mode=2) preserves real labels for each instance.
+    m_a = LabelDependentClassical(torch.tensor(0.05, **DD64))
+    m_b = LabelDependentClassical(torch.tensor(0.12, **DD64))
+    with pytest.raises(ValueError, match="SharedCustomLabel"):
+        Model(par=par64, config=cfg_excl, classical=(m_a, m_b)).setup(numbers)
+    sys_bm2 = Model(
+        par=par64,
+        config=cfg_excl,
+        classical=(m_a, m_b),
+    ).setup(nums_bm2, batch_mode=2)
+    assert len(sys_bm2._custom_classical_snapshots) == 2
+    model_bm2_slots = [
+        owner.get_energy(pos_bm2.detach(), captured_setup)
+        for owner, _, captured_setup in sys_bm2._custom_classical_snapshots
+    ]
+    model_bm2_energy = model_bm2_slots[0] + model_bm2_slots[1]
+
+    ref_sys_a = Model(
+        par=par64,
+        config=cfg_excl,
+        classical=(LabelDependentClassical(torch.tensor(0.05, **DD64)),),
+    ).setup(numbers)
+    ref_sys_b = Model(
+        par=par64,
+        config=cfg_excl,
+        classical=(LabelDependentClassical(torch.tensor(0.12, **DD64)),),
+    ).setup(numbers)
+    ref_bm2_energy = torch.stack(
+        [
+            ref_sys_a.singlepoint(pos_a).energy
+            + ref_sys_b.singlepoint(pos_a).energy,
+            ref_sys_a.singlepoint(pos_b).energy
+            + ref_sys_b.singlepoint(pos_b).energy,
+        ],
+        dim=0,
+    )
+    torch.testing.assert_close(model_bm2_energy, ref_bm2_energy)
+
+    # 2. Calculator.singlepoint() in batch_mode=2 preserves real labels, vmap core, and gradients
+    seen_labels.clear()
+    w_a = torch.tensor(0.05, **DD64, requires_grad=True)
+    w_b = torch.tensor(0.12, **DD64, requires_grad=True)
+    c_a = LabelDependentClassical(w_a)
+    c_b = LabelDependentClassical(w_b)
+    calc_bm2 = Calculator(
+        nums_bm2,
+        par64,
+        classical=(c_a, c_b),
+        opts={
+            "verbosity": 0,
+            "int_driver": "pytorch",
+            "exclude": ["all"],
+            "batch_mode": 2,
+        },
+        **DD64,
+    )
+    lanes_bm2 = build_calculator_lane_systems(calc_bm2)
+    assert lanes_bm2[0] is lanes_bm2[1]
+    assert lanes_bm2[0]._active_exact_core() is lanes_bm2[0].exact_core
+    assert len(lanes_bm2[0].exact_core.classical_terms) == 2  # type: ignore[union-attr]
+
+    res_bm2 = calc_bm2.singlepoint(pos_bm2)
+    assert set(seen_labels) == {"SharedCustomLabel"}
+    assert [lbl for lbl, _ in res_bm2.classical] == [
+        "SharedCustomLabel",
+        "SharedCustomLabel",
+    ]
+    torch.testing.assert_close(res_bm2.classical[0][1], model_bm2_slots[0])
+    torch.testing.assert_close(res_bm2.classical[1][1], model_bm2_slots[1])
+    torch.testing.assert_close(res_bm2.energy, model_bm2_energy)
+
+    g_pos, g_wa, g_wb = torch.autograd.grad(
+        res_bm2.energy.sum(), (pos_bm2, w_a, w_b)
+    )
+    expected_pos_grad = 2.0 * 1.5 * (0.05 + 0.12) * pos_bm2.detach()
+    expected_w_grad = 1.5 * pos_bm2.detach().square().sum()
+    torch.testing.assert_close(g_pos, expected_pos_grad)
+    torch.testing.assert_close(g_wa, expected_w_grad)
+    torch.testing.assert_close(g_wb, expected_w_grad)
+
+    # 3. Calculator.type(torch.float32) on batch_mode=2 preserves label-dependent behavior
+    seen_labels.clear()
+    calc_bm2_32 = calc_bm2.type(torch.float32)
+    res_bm2_32 = calc_bm2_32.singlepoint(pos_bm2.detach().to(torch.float32))
+    assert set(seen_labels) == {"SharedCustomLabel"}
+    torch.testing.assert_close(
+        res_bm2_32.energy,
+        model_bm2_energy.to(torch.float32),
+        rtol=1e-5,
+        atol=1e-6,
+    )
+
+    # 4. Padded batch (batch_mode=1) and 1D post-init collision with SCF active
+    nums_w = torch.tensor([8, 1, 1], device=DEVICE)
+    pos_w = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.4, 0.0, 0.9], [-1.4, 0.0, 0.9]], **DD64
+    )
+    padded_nums = torch.tensor([[8, 1, 1], [3, 1, 0]], device=DEVICE)
+    padded_pos = torch.stack(
+        [pos_w, torch.cat([pos_a, torch.zeros((1, 3), **DD64)], dim=0)],
+        dim=0,
+    )
+    seen_labels.clear()
+    calc_bm1 = Calculator(
+        padded_nums,
+        par64,
+        classical=(
+            LabelDependentClassical(torch.tensor(0.03, **DD64)),
+            LabelDependentClassical(torch.tensor(0.07, **DD64)),
+        ),
+        opts={"verbosity": 0, "int_driver": "pytorch", "batch_mode": 1},
+        **DD64,
+    )
+    lanes_bm1 = build_calculator_lane_systems(calc_bm1)
+    assert all(can_vmap_system(lane) for lane in lanes_bm1)
+    res_bm1 = calc_bm1.singlepoint(padded_pos)
+    assert set(seen_labels) == {"SharedCustomLabel"}
+    ref_bm1_w = (
+        Model(
+            par=par64,
+            config=Config.create(int_driver="pytorch"),
+            classical=(LabelDependentClassical(torch.tensor(0.10, **DD64)),),
+        )
+        .setup(nums_w)
+        .singlepoint(pos_w)
+    )
+    ref_bm1_lih = (
+        Model(
+            par=par64,
+            config=Config.create(int_driver="pytorch"),
+            classical=(LabelDependentClassical(torch.tensor(0.10, **DD64)),),
+        )
+        .setup(numbers)
+        .singlepoint(pos_a)
+    )
+    torch.testing.assert_close(res_bm1.energy[0], ref_bm1_w.energy)
+    torch.testing.assert_close(res_bm1.energy[1, :2], ref_bm1_lih.energy)
+
+    d1_a = LabelDependentClassical(torch.tensor(0.03, **DD64))
+    d1_b = LabelDependentClassical(torch.tensor(0.07, **DD64), label="InitialB")
+    calc_1d = Calculator(
+        numbers,
+        par64,
+        classical=(d1_a, d1_b),
+        opts={"verbosity": 0, "int_driver": "pytorch"},
+        **DD64,
+    )
+    seen_labels.clear()
+    d1_b.label = "SharedCustomLabel"
+    res_1d = calc_1d.singlepoint(pos_a)
+    assert seen_labels == ["SharedCustomLabel", "SharedCustomLabel"]
+    torch.testing.assert_close(res_1d.energy, ref_bm1_lih.energy)
+
+    # Also verify Calculator.type(torch.float32) after 1D post-init label collision
+    calc_1d_32 = calc_1d.type(torch.float32)
+    ref_1d_32 = (
+        Model(
+            par=par32,
+            config=Config.create(int_driver="pytorch"),
+            classical=(
+                LabelDependentClassical(
+                    torch.tensor(0.10, device=DEVICE, dtype=torch.float32)
+                ),
+            ),
+        )
+        .setup(numbers)
+        .singlepoint(pos_a.to(torch.float32))
+    )
+    torch.testing.assert_close(
+        calc_1d_32.singlepoint(pos_a.to(torch.float32)).energy,
+        ref_1d_32.energy,
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+    # 5. Direct _sync_lane_system_labels invalidates a cache built under a different label
+    temp_comp = LabelDependentClassical(
+        torch.tensor(0.05, **DD64), label="TempSynthetic"
+    )
+    lane_sys = Model(par=par64, config=cfg_excl, classical=(temp_comp,)).setup(
+        numbers
+    )
+    assert lane_sys._active_exact_core() is lane_sys.exact_core
+    restored_source = LabelDependentClassical(
+        torch.tensor(0.05, **DD64), label="SharedCustomLabel"
+    )
+    synced_sys = _sync_lane_system_labels(
+        lane_sys,
+        (restored_source,),
+        (),
+        {id(temp_comp)},
+    )
+    assert synced_sys._active_exact_core() is None
+    assert synced_sys._custom_classical_snapshots == ()
+    assert "TempSynthetic" not in synced_sys._packed_classical_setups
+    assert "SharedCustomLabel" not in synced_sys._packed_classical_setups
+    torch.testing.assert_close(
+        synced_sys.singlepoint(pos_a).energy,
+        ref_sys_a.singlepoint(pos_a).energy,
+    )
+
+    # 6. Built-in + invalidated custom Classical sharing a non-reserved label does not
+    #    leak the invalidated custom cache into _packed_classical_setups across .type()
+    from dxtb.components.dispersion import new_dispersion
+
+    d3_shared = new_dispersion(nums_bm2, par64, **DD64)
+    assert d3_shared is not None
+    d3_shared.label = "SharedCustomLabel"
+    c_shared = LabelDependentClassical(torch.tensor(0.05, **DD64))
+    calc_mixed = Calculator(
+        nums_bm2,
+        par64,
+        classical=(d3_shared, c_shared),
+        opts={
+            "verbosity": 0,
+            "int_driver": "pytorch",
+            "exclude": ["disp", "scf"],
+            "batch_mode": 2,
+        },
+        **DD64,
+    )
+    c_shared.weight = torch.tensor(0.20, **DD64)
+    calc_mixed32 = calc_mixed.type(torch.float32)
+    assert (
+        "SharedCustomLabel" not in calc_mixed32.system._packed_classical_setups
+    )
+    ref_mixed32 = Calculator(
+        nums_bm2,
+        par32,
+        classical=(
+            d3_shared.type(torch.float32),
+            LabelDependentClassical(
+                torch.tensor(0.20, device=DEVICE, dtype=torch.float32)
+            ),
+        ),
+        opts={
+            "verbosity": 0,
+            "int_driver": "pytorch",
+            "exclude": ["disp", "scf"],
+            "batch_mode": 2,
+        },
+        device=DEVICE,
+        dtype=torch.float32,
+    )
+    torch.testing.assert_close(
+        calc_mixed32.singlepoint(pos_bm2.detach().to(torch.float32)).energy,
+        ref_mixed32.singlepoint(pos_bm2.detach().to(torch.float32)).energy,
+        rtol=1e-5,
+        atol=1e-5,
+    )

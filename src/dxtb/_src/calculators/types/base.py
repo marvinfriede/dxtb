@@ -264,6 +264,11 @@ def _convert_system_dtype(
     if system._packed_classical_setups or snap_by_pos:
         from dxtb._src.components.classicals.list import ClassicalListCache
 
+        custom_setup_ids = {
+            id(s)
+            for _, _, s in system._custom_classical_snapshots
+            if s is not None
+        }
         packed_setups = ClassicalListCache()
         if system._packed_classical_setups:
             for old_lbl, new_c in zip(
@@ -272,6 +277,10 @@ def _convert_system_dtype(
                 if (
                     type(new_c) in BUILTIN_CLASSICAL_TYPES
                     and old_lbl in system._packed_classical_setups
+                    and old_lbl not in invalid_custom_labels
+                    and new_c.label not in invalid_custom_labels
+                    and id(system._packed_classical_setups[old_lbl])
+                    not in custom_setup_ids
                 ):
                     packed_setups[new_c.label] = _convert_component_value(
                         system._packed_classical_setups[old_lbl],
@@ -908,12 +917,11 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         )
         eval_classicals = []
         for idx, comp in enumerate(explicit_classicals):
-            if type(comp) in BUILTIN_CLASSICAL_TYPES or has_label_collision:
+            if type(comp) in BUILTIN_CLASSICAL_TYPES:
                 # Caller-owned Components are never mutated in place.
                 c_copy = (
                     comp.type(setup_dd["dtype"])
-                    if type(comp) in BUILTIN_CLASSICAL_TYPES
-                    and comp.dtype != setup_dd["dtype"]
+                    if comp.dtype != setup_dd["dtype"]
                     else copy.copy(comp)
                 )
                 if has_label_collision:
@@ -945,6 +953,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             self.numbers,
             batch_mode=self.ihelp.batch_mode,
             dd=setup_dd,
+            _allow_duplicate_custom_classical_labels=True,
         )
         eval_sys = _sync_lane_system_labels(
             eval_sys,

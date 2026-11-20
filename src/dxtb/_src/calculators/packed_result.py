@@ -1206,7 +1206,7 @@ def _sync_lane_system_labels(
         ):
             if type(new_c) in BUILTIN_CLASSICAL_TYPES:
                 continue
-            if id(old_c) in valid_old_setups:
+            if id(old_c) in valid_old_setups and old_lbl == new_c.label:
                 cap_setup = valid_old_setups[id(old_c)]
                 snap_entry = (
                     new_c,
@@ -1223,6 +1223,11 @@ def _sync_lane_system_labels(
         if packed_setups or snap_by_pos:
             from dxtb._src.components.classicals.list import ClassicalListCache
 
+            old_custom_setup_ids = {
+                id(s)
+                for _, _, s in lane_sys._custom_classical_snapshots
+                if s is not None
+            }
             remapped = ClassicalListCache()
             if packed_setups:
                 for old_lbl, comp in zip(
@@ -1231,6 +1236,10 @@ def _sync_lane_system_labels(
                     if (
                         type(comp) in BUILTIN_CLASSICAL_TYPES
                         and old_lbl in packed_setups
+                        and old_lbl not in invalid_custom_labels
+                        and comp.label not in invalid_custom_labels
+                        and id(packed_setups[old_lbl])
+                        not in old_custom_setup_ids
                     ):
                         remapped[comp.label] = packed_setups[old_lbl]
             for new_c, _, cap_setup in snap_by_pos.values():
@@ -1402,11 +1411,7 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                     and isinstance(comp.numbers, Tensor)
                     and comp.numbers.ndim == 2
                 )
-                if (
-                    has_2d_nums
-                    or has_label_collision
-                    or type(comp) in BUILTIN_CLASSICAL_TYPES
-                ):
+                if has_2d_nums or type(comp) in BUILTIN_CLASSICAL_TYPES:
                     # Caller-owned Components are never mutated in place.
                     c_copy = (
                         comp.type(setup_dd["dtype"])
@@ -1418,7 +1423,10 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                         c_copy.numbers = comp.numbers[idx].index_select(
                             0, slots.to(comp.numbers.device)
                         )
-                    if has_label_collision:
+                    if (
+                        has_label_collision
+                        and type(comp) in BUILTIN_CLASSICAL_TYPES
+                    ):
                         c_copy.label = f"__dxtb_lane_setup_{c_idx}_{comp.label}"
                     lane_classical_list.append(c_copy)
                 else:
@@ -1456,7 +1464,12 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                 interaction=tuple(lane_interaction_list),
                 auto_int_level=calc.model.auto_int_level,
             )
-            lane_sys = lane_model.setup(row_nums, batch_mode=0, dd=setup_dd)
+            lane_sys = lane_model.setup(
+                row_nums,
+                batch_mode=0,
+                dd=setup_dd,
+                _allow_duplicate_custom_classical_labels=True,
+            )
             lane_sys = _sync_lane_system_labels(
                 lane_sys,
                 source_classicals,
