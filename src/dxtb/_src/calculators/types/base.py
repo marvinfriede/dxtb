@@ -66,7 +66,7 @@ from dxtb._src.components.interactions.base import (
     validate_unique_interaction_labels,
 )
 from dxtb._src.constants import defaults
-from dxtb._src.param import Param, ParamModule
+from dxtb._src.param import Param, ParamModule, as_param_module
 from dxtb._src.timing import timer
 from dxtb._src.typing import DD, Any, Self, Tensor, TensorLike, override
 from dxtb._src.utils.tensors import normalize_device
@@ -786,18 +786,12 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                 numbers = numbers.clone()
             self.numbers = numbers
 
-            resolved_dtype = (
-                par.dtype
-                if dtype is None and isinstance(par, ParamModule)
-                else dtype
-            )
-            # "cpu" or "cuda" would not compare equal to `tensor.device`
-            super().__init__(normalize_device(device), resolved_dtype)
-            dd = {"device": self.device, "dtype": self.dtype}
-
             # Internally, we will always use the differentiable parameter model.
-            if not isinstance(par, ParamModule):
-                par = ParamModule(par, **self.dd)
+            # "cpu" or "cuda" would not compare equal to `tensor.device`
+            device = normalize_device(device)
+            par = as_param_module(par, device=device, dtype=dtype)
+            super().__init__(device, dtype or par.dtype)
+            dd = {"device": self.device, "dtype": self.dtype}
 
             # If method not explicitly set in options, we try to get it from the
             # parametrization.

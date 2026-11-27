@@ -82,7 +82,7 @@ from tad_mctc.batch import pack
 
 from dxtb import IndexHelper
 from dxtb._src.constants import labels
-from dxtb._src.param import Param, ParamModule
+from dxtb._src.param import Param, ParamModule, as_param_module
 from dxtb._src.typing import DD, Callable, Literal, Tensor
 
 from .driver import libcint, pytorch
@@ -212,7 +212,7 @@ def hcore(
     charge = 0 if structure.charge is None else structure.charge
 
     dd: DD = {"device": positions.device, "dtype": positions.dtype}
-    pm = par if isinstance(par, ParamModule) else ParamModule(par, **dd)
+    pm = as_param_module(par, **dd)
     ihelp = IndexHelper.from_numbers(numbers, pm)
     # set up H0 first: it validates the method name of the parametrization
     setup = setup_h0(numbers, pm, ihelp, **dd).to(**dd)
@@ -292,7 +292,7 @@ def _integral(
     numbers, positions = structure.numbers, structure.positions
 
     dd: DD = {"device": positions.device, "dtype": positions.dtype}
-    pm = par if isinstance(par, ParamModule) else ParamModule(par, **dd)
+    pm = as_param_module(par, **dd)
 
     if numbers.ndim == 1:
         n_active, p_active = _extract_active_atoms(numbers, positions)

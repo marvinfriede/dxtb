@@ -43,13 +43,12 @@ from tad_mctc.typing import (
     CountingFunction,
     Tensor,
     TensorLike,
-    get_default_dtype,
     override,
 )
 
 from dxtb import IndexHelper
 from dxtb._src.components.classicals.dispersion import _d4_adapter as d4
-from dxtb._src.param import Param, ParamModule
+from dxtb._src.param import Param, ParamModule, as_param_module
 from dxtb._src.utils.tensors import normalize_device
 
 from ..base import Interaction, InteractionCache
@@ -696,41 +695,24 @@ def new_d4sc(
         Instance of the :class:`.DispersionD4SC` class or ``None`` if
         no :class:`.DispersionD4SC` is used.
     """
-    if isinstance(par, ParamModule):
-        if (
-            "dispersion" not in par
-            or par.is_none("dispersion")
-            or par.is_none("dispersion.d4")
-            or par.is_false("dispersion.d4.sc")
-        ):
-            return None
-    elif (
-        not hasattr(par, "dispersion")
-        or par.dispersion is None
-        or par.dispersion.d4 is None
-        or par.dispersion.d4.sc is False
-    ):
-        return None
-
     target_device = (
         numbers.device if device is None else normalize_device(device)
     )
+    par = as_param_module(par, device=target_device, dtype=dtype)
+    if (
+        "dispersion" not in par
+        or par.is_none("dispersion")
+        or par.is_none("dispersion.d4")
+        or par.is_false("dispersion.d4.sc")
+    ):
+        return None
+
     if device is not None and target_device != numbers.device:
         raise DeviceError(
             f"Passed device ({device}) and device of `numbers` tensor "
             f"({numbers.device}) do not match."
         )
-
-    resolved_dtype = (
-        par.dtype
-        if dtype is None and isinstance(par, ParamModule)
-        else (dtype if dtype is not None else get_default_dtype())
-    )
-    dd: DD = {"device": target_device, "dtype": resolved_dtype}
-
-    # also accept a plain `Param` (wrapped into a `ParamModule`)
-    if not isinstance(par, ParamModule):
-        par = ParamModule(par, **dd)
+    dd: DD = {"device": target_device, "dtype": dtype or par.dtype}
 
     param = d4.Param(
         **{

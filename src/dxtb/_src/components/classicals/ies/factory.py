@@ -27,8 +27,8 @@ from __future__ import annotations
 import torch
 from tad_mctc.data import radii
 
-from dxtb._src.param import Param, ParamModule
-from dxtb._src.typing import DD, Tensor, get_default_dtype
+from dxtb._src.param import Param, ParamModule, as_param_module
+from dxtb._src.typing import DD, Tensor
 
 from .ies import IES
 
@@ -62,13 +62,8 @@ def new_ies(
     ValueError
         If the tight-binding Method does not contain an isotropic electrostatics component.
     """
-    dd: DD = {
-        "device": device,
-        "dtype": dtype if dtype is not None else get_default_dtype(),
-    }
-
-    if not isinstance(par, ParamModule):
-        par = ParamModule(par, **dd)
+    par = as_param_module(par, device=device, dtype=dtype)
+    dd: DD = {"device": device, "dtype": dtype or par.dtype}
 
     if "eeq" not in par or par.is_none("eeq"):
         return None

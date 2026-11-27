@@ -31,7 +31,7 @@ from tad_mctc.ncoord import CNModel
 from tad_mctc.typing import PathLike, Tensor, TensorLike
 
 from dxtb import IndexHelper
-from dxtb._src.param import Param, ParamModule
+from dxtb._src.param import Param, ParamModule, as_param_module
 from dxtb._src.typing import Any, Callable, Self, override
 from dxtb._src.utils.tensors import normalize_device
 from dxtb._src.xtb.h0 import (
@@ -124,19 +124,12 @@ class BaseHamiltonian(HamiltonianABC, TensorLike):
         resolved_device = (
             numbers.device if device is None else normalize_device(device)
         )
-        resolved_dtype = (
-            par.dtype
-            if dtype is None and isinstance(par, ParamModule)
-            else dtype
-        )
-        super().__init__(resolved_device, resolved_dtype)
+        par = as_param_module(par, device=resolved_device, dtype=dtype)
+        super().__init__(resolved_device, dtype or par.dtype)
 
         # check device of input tensors
         if any(tensor.device != self.device for tensor in (numbers, ihelp)):
             raise ValueError("All input tensors must be on the same device")
-
-        if not isinstance(par, ParamModule):
-            par = ParamModule(par, **self.dd)
 
         if par.is_none("hamiltonian"):
             raise RuntimeError("Parametrization does not specify Hamiltonian.")

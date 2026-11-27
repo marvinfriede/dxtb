@@ -28,8 +28,8 @@ import torch
 from tad_mctc.convert import any_to_tensor
 
 from dxtb._src.constants import xtb
-from dxtb._src.param import Param, ParamModule
-from dxtb._src.typing import DD, Tensor, get_default_dtype
+from dxtb._src.param import Param, ParamModule, as_param_module
+from dxtb._src.typing import DD, Tensor
 
 from .hal import Halogen
 
@@ -66,14 +66,8 @@ def new_halogen(
     ValueError
         If parametrization does not contain a halogen bond correction.
     """
-    dd: DD = {
-        "device": device,
-        "dtype": dtype if dtype is not None else get_default_dtype(),
-    }
-
-    # also accept a plain `Param` (wrapped into a `ParamModule`)
-    if not isinstance(par, ParamModule):
-        par = ParamModule(par, **dd)
+    par = as_param_module(par, device=device, dtype=dtype)
+    dd: DD = {"device": device, "dtype": dtype or par.dtype}
 
     if "halogen" not in par or par.is_none("halogen"):
         return None

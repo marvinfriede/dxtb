@@ -58,13 +58,12 @@ from tad_mctc.exceptions import DeviceError
 from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
-from dxtb._src.param import Param, ParamModule
+from dxtb._src.param import Param, ParamModule, as_param_module
 from dxtb._src.typing import (
     DD,
     Any,
     Tensor,
     TensorLike,
-    get_default_dtype,
     override,
 )
 from dxtb._src.utils.tensors import normalize_device
@@ -386,14 +385,8 @@ def new_es3(
         Instance of the :class:`.ES3` class or ``None`` if no :class:`.ES3` is
         used.
     """
-    dd: DD = {
-        "device": device,
-        "dtype": dtype if dtype is not None else get_default_dtype(),
-    }
-
-    # also accept a plain `Param` (wrapped into a `ParamModule`)
-    if not isinstance(par, ParamModule):
-        par = ParamModule(par, **dd)
+    par = as_param_module(par, device=device, dtype=dtype)
+    dd: DD = {"device": device, "dtype": dtype or par.dtype}
 
     if "thirdorder" not in par or par.is_none("thirdorder"):
         return None

@@ -27,8 +27,8 @@ import warnings
 
 import torch
 
-from dxtb._src.param import Param, ParamModule
-from dxtb._src.typing import DD, Literal, Tensor, get_default_dtype
+from dxtb._src.param import Param, ParamModule, as_param_module
+from dxtb._src.typing import DD, Literal, Tensor
 from dxtb._src.typing.exceptions import DeviceError, ParameterWarning
 from dxtb._src.utils.tensors import normalize_device
 
@@ -81,21 +81,10 @@ def new_dispersion(
     target_device = (
         numbers.device if device is None else normalize_device(device)
     )
-    resolved_dtype = (
-        par.dtype
-        if dtype is None and isinstance(par, ParamModule)
-        else (dtype if dtype is not None else get_default_dtype())
-    )
-    dd: DD = {
-        "device": target_device,
-        "dtype": resolved_dtype,
-    }
+    par = as_param_module(par, device=target_device, dtype=dtype)
+    dd: DD = {"device": target_device, "dtype": dtype or par.dtype}
 
-    if isinstance(par, ParamModule):
-        if "dispersion" not in par or par.is_none("dispersion"):
-            warnings.warn("No dispersion scheme found.", ParameterWarning)
-            return None
-    elif not hasattr(par, "dispersion") or par.dispersion is None:
+    if "dispersion" not in par or par.is_none("dispersion"):
         warnings.warn("No dispersion scheme found.", ParameterWarning)
         return None
 
@@ -104,10 +93,6 @@ def new_dispersion(
             f"Passed device ({device}) and device of `numbers` tensor "
             f"({numbers.device}) do not match."
         )
-
-    # also accept a plain `Param` (wrapped into a `ParamModule`)
-    if not isinstance(par, ParamModule):
-        par = ParamModule(par, **dd)
 
     if not par.is_none("dispersion.d3") and par.is_none("dispersion.d4"):
         param = {

@@ -36,7 +36,7 @@ from tad_mctc.units import EV2AU
 from tad_multicharge.model.eeq import EEQModel
 
 from dxtb import IndexHelper
-from dxtb._src.param import Param, ParamModule
+from dxtb._src.param import ParamModule
 from dxtb._src.utils.tensors import normalize_device, structure_charge
 
 PAD = -1
@@ -433,7 +433,7 @@ def gather_hscale(
 
 def setup_h0(
     numbers: Tensor,
-    par: Param | ParamModule,
+    par: ParamModule,
     ihelp: IndexHelper,
     *,
     device: torch.device | None = None,
@@ -447,7 +447,9 @@ def setup_h0(
     if numbers.device != target_device or ihelp.device != target_device:
         raise ValueError("All input tensors must be on the same device")
     if not isinstance(par, ParamModule):
-        par = ParamModule(par, device=target_device, dtype=dtype)
+        raise TypeError(
+            f"setup_h0 requires a ParamModule instance, got {type(par).__name__}."
+        )
     if par.is_none("meta.name"):
         raise ValueError("The parametrization must specify a method name.")
     assert par.meta is not None

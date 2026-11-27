@@ -38,7 +38,53 @@ from ..base import Param
 from .types import NonNumericValue, ParameterModule
 from .utils import ParamElementsPairsMixin
 
-__all__ = ["NonNumericValue", "ParamModule", "ParameterModule"]
+__all__ = [
+    "NonNumericValue",
+    "ParamModule",
+    "ParameterModule",
+    "as_param_module",
+]
+
+
+def as_param_module(
+    par: Param | ParamModule,
+    *,
+    device: torch.device | None = None,
+    dtype: torch.dtype | None = None,
+) -> ParamModule:
+    """
+    Return ``par`` as a :class:`ParamModule`.
+
+    Public entry points accept both a plain :class:`~dxtb.Param` and a
+    :class:`ParamModule`, and convert once with this function; internal code
+    takes a :class:`ParamModule` only.
+
+    A :class:`ParamModule` is returned unchanged. It is never moved or cast,
+    because :meth:`torch.nn.Module.to` would change it in place for the
+    caller who owns it; cast the tensors gathered from it instead. A plain
+    :class:`~dxtb.Param` is wrapped on ``device`` with ``dtype`` (torch's
+    default dtype if ``None``).
+
+    The dtype to build with is then ``dtype`` if given, else the returned
+    module's dtype: ``dtype or as_param_module(par).dtype``.
+
+    Parameters
+    ----------
+    par : Param | ParamModule
+        Parametrization of an extended tight-binding (xTB) Method.
+    device : torch.device | None, optional
+        Device for wrapping a plain :class:`~dxtb.Param`.
+    dtype : torch.dtype | None, optional
+        Floating point dtype for wrapping a plain :class:`~dxtb.Param`.
+
+    Returns
+    -------
+    ParamModule
+        ``par`` itself, or ``par`` wrapped into a new :class:`ParamModule`.
+    """
+    if isinstance(par, ParamModule):
+        return par
+    return ParamModule(par, device=device, dtype=dtype)
 
 
 class ParamModule(nn.Module, ParamElementsPairsMixin):
