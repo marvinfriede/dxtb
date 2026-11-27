@@ -1,4 +1,4 @@
-<h1 align="center"><img src="assets/logo.png" width="300"></h3>
+<h1 align="center"><img src="assets/logo.png" width="300"></h1>
 
 <h3 align="center">Fully Differentiable Extended Tight-Binding</h3>
 <p align="center">- Combining semi-empirical quantum chemistry with machine learning in PyTorch -</p>
@@ -16,7 +16,7 @@
   <a href="https://github.com/grimme-lab/dxtb/actions/workflows/ubuntu.yaml">
     <img src="https://github.com/grimme-lab/dxtb/actions/workflows/ubuntu.yaml/badge.svg" alt="Test Status Ubuntu"/>
   </a>
-  <a href="https://github.com/tgrimme-lab/dxtb/actions/workflows/macos-arm.yaml">
+  <a href="https://github.com/grimme-lab/dxtb/actions/workflows/macos-arm.yaml">
     <img src="https://github.com/grimme-lab/dxtb/actions/workflows/macos-arm.yaml/badge.svg" alt="Test Status macOS (ARM)"/>
   </a>
   <a href="https://github.com/grimme-lab/dxtb/actions/workflows/windows.yaml">
@@ -40,11 +40,11 @@
   <!---->
   <br>
   <!---->
-  <a href="https://img.shields.io/badge/Python-3.8%20|%203.9%20|%203.10%20|%203.11%20|%203.12|%203.13|%203.14-blue.svg">
-    <img src="https://img.shields.io/badge/Python-3.8%20|%203.9%20|%203.10%20|%203.11%20|%203.12|%203.13|%203.14-blue.svg" alt="Python Versions"/>
+  <a href="https://img.shields.io/badge/Python-3.10%20|%203.11%20|%203.12%20|%203.13%20|%203.14-blue.svg">
+    <img src="https://img.shields.io/badge/Python-3.10%20|%203.11%20|%203.12%20|%203.13%20|%203.14-blue.svg" alt="Python Versions"/>
   </a>
-  <a href="https://img.shields.io/badge/PyTorch-%3E=2.5.0-blue.svg">
-    <img src="https://img.shields.io/badge/PyTorch-%3E=2.5.0-blue.svg" alt="PyTorch Versions"/>
+  <a href="https://img.shields.io/badge/PyTorch-%3E=2.7.0-blue.svg">
+    <img src="https://img.shields.io/badge/PyTorch-%3E=2.7.0-blue.svg" alt="PyTorch Versions"/>
   </a>
 </p>
 
@@ -67,9 +67,8 @@ With *dxtb*, we provide a re-implementation of the xTB methods in PyTorch, which
 pip install dxtb[libcint]
 ```
 
-Installing the libcint interface is recommended, as it is faster than the pure PyTorch implementation on the CPU.
-The pure PyTorch integral driver provides the overlap, dipole and quadrupole integrals (and thereby GFN2-xTB) with derivatives of any order, on CPU and CUDA.
-However, the interface is currently only available on Linux.
+Installing the ``libcint`` interface (``tad-libcint``) is recommended on Linux, as it is faster than the pure PyTorch implementation on CPU; ``tad-libcint`` is currently only available on Linux.
+The pure PyTorch integral driver works on all platforms across CPU and CUDA and provides overlap, dipole, and quadrupole integrals (supporting GFN0-xTB, GFN1-xTB, and GFN2-xTB) with derivatives of any order.
 
 ### conda <a href="https://anaconda.org/conda-forge/dxtb"><img src="https://img.shields.io/conda/vn/conda-forge/dxtb.svg" alt="Conda Version"></a> <a href="https://anaconda.org/conda-forge/dxtb"><img src="https://img.shields.io/conda/dn/conda-forge/dxtb?style=flat&color=orange" alt="Conda Downloads"></a>
 
@@ -114,8 +113,6 @@ energy = calc.get_energy(pos)
 (g,) = torch.autograd.grad(energy, pos)
 
 # Alternatively, forces can directly be requested from the calculator.
-# (Don't forget to manually reset the calculator when the inputs are identical.)
-calc.reset()
 pos = positions.clone().requires_grad_(True)
 forces = calc.get_forces(pos)
 
@@ -130,8 +127,6 @@ For more examples and details, check out [the documentation](https://dxtb.readth
 
 | PyTorch \ Python | 3.10               | 3.11               | 3.12               | 3.13               | 3.14               |
 | ---------------- | ------------------ | ------------------ | ------------------ | ------------------ | ------------------ |
-| 2.5.1            | :heavy_check_mark: | :heavy_check_mark: | :white_check_mark: | :x:                | :x:                |
-| 2.6.0            | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :white_check_mark: | :x:                |
 | 2.7.1            | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :white_check_mark: | :x:                |
 | 2.8.0            | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :white_check_mark: | :x:                |
 | 2.9.1            | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :heavy_check_mark: | :white_check_mark: |
@@ -144,7 +139,7 @@ For more examples and details, check out [the documentation](https://dxtb.readth
 :white_check_mark: tested in CI &nbsp;&nbsp; :heavy_check_mark: supported, but not tested in CI (should still work) &nbsp;&nbsp; :x: not supported
 
 Note that only the latest bug fix version is listed, but all preceding bug fix minor versions are supported.
-For example, although only version 2.5.1 is listed, version 2.5.0 is also supported.
+For example, although only version 2.7.1 is listed, version 2.7.0 is also supported.
 
 The libcint interface is **not** available for macOS and Windows.
 Correspondingly, the pure PyTorch integral driver is used there, which is slower than libcint on the CPU for large systems (see the documentation for the available integral algorithms).
@@ -175,7 +170,7 @@ For details on the xTB methods, see
 
 ## Contributing
 
-This is a volunteer open source projects and contributions are always welcome.
+This is a volunteer open source project and contributions are always welcome.
 Please, take a moment to read the [contributing guidelines](CONTRIBUTING.md).
 
 ## License

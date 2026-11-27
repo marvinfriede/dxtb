@@ -26,7 +26,7 @@ Example
 .. code-block:: python
 
     import torch
-    from dxtb.solvation import born
+    from dxtb._src.components.interactions.solvation import born
 
     # Define atomic numbers and positions of the atoms
     numbers = torch.tensor([14, 1, 1, 1, 1])

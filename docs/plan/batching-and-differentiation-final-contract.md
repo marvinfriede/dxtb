@@ -2,7 +2,7 @@
 
 ## 1. Executive Summary
 
-This document defines the final architectural contract for batching, differentiation, and `Calculator` lifecycle management in `dxtb` on `claude/tender-dijkstra-cda42s`, completing the post-S13.1 `Calculator` refactoring:
+This document defines the final architectural contract for batching, differentiation, and `Calculator` lifecycle management in `dxtb` on `refactor` (formerly `claude/tender-dijkstra-cda42s`), completing the post-S13.1 `Calculator` refactoring:
 
 1. **Coexisting Batching Interfaces**:
    - Single-system functional evaluation (`Model.setup(numbers)` -> `System.singlepoint`, `System.energy`, `System.forces`, etc.).
@@ -18,9 +18,9 @@ This document defines the final architectural contract for batching, differentia
 4. **Stateless Call-Local Setup Lifecycle**:
    - Persistent setup-graph bookkeeping and memoization (`_param_state_signature`, `_register_param_backward_hooks`, `_clear_param_backward_hooks`, `_system_graph_consumed`, `_model_param_sig`, `_ensure_system_current`, and `_lane_systems_memo`) are removed from `BaseCalculator` and `build_calculator_lane_systems`.
    - Call-local single-`System` (`_prepare_eval_system`) and per-lane (`build_calculator_lane_systems`, with intra-call composition deduplication) setups are constructed cleanly from `self.model.par` and `self.dtype`, supporting all 13 grad/no-grad/inference-mode, repeated differentiation, parameter mutation/replacement, `type(dtype)`, and `reset()` transitions.
-5. **Component Ownership Isolation and Lazy `Integrals` Adapter**:
-   - Caller-owned `Classical` and `Interaction` instances passed to `Calculator` are shallow-copied when building call-local or per-lane setups so user objects are never mutated in place (`numbers`, `label`) while preserving `exact_core` eligibility.
-   - `BaseCalculator.integrals` is a lazy compatibility property (`_integrals: Integrals | None = None`) that does not instantiate `DriverManager` or `Integrals` unless `calc.integrals` or `write_integrals_to_store=True` is explicitly accessed.
+5. **Component Ownership Isolation and Retired `Calculator.integrals`**:
+   - Caller-owned `Classical` and `Interaction` instances passed to `Calculator` are isolated when building call-local or per-lane setups so user objects are never mutated in place (`numbers`, `label`) while preserving real custom `Classical` labels during `get_cache()` and `exact_core` eligibility.
+   - `Calculator.integrals` (alongside `DriverManager` and `Integrals`) is retired; integral matrices are returned on `Result` (`overlap`, `hcore`, `dipole_integrals`, `quadrupole_integrals`) or computed via `dxtb.integrals.wrappers`.
 
 ---
 
@@ -97,7 +97,7 @@ Key invariants:
 | Parameter / Option | Scope | Status | Rationale |
 |---|---|---|---|
 | `grad_mode` | `Calculator.forces`, `get_forces`, `hessian` | **REMOVED** | Redundant and error-prone (`"backward"` mutated `.grad` and failed on batches; `"row"` / `"functorch"` duplicated AD). |
-| `scf_mode` (`UNROLLED` vs `IMPLICIT` / `"full"` vs `"implicit"`) | `ConfigSCF` / S13 SCF core | **RETAINED (Authoritative S13)** | Controls physical SCF fixed-point differentiation strategy (unrolled trajectory vs implicit response equation). |
+| `differentiation` (`SCFDifferentiation.UNROLLED` vs `IMPLICIT` / `"unrolled"` vs `"implicit"`) | `ConfigSCF` / S13 SCF core | **RETAINED (Authoritative S13)** | Controls physical SCF fixed-point differentiation strategy (unrolled trajectory vs implicit CPSCF solve; replaces retired `scf_mode`). |
 | `use_functorch` | `AutogradCalculator` higher-order properties (`hessian`, `dipole_deriv`, `polarizability`, `pol_deriv`, `hyperpolarizability`) | **RETAINED (`AutogradCalculator` only)** | Selects between `tad_mctc.autograd.jacrev` (`torch.func`) and loop-based `torch.autograd.grad` Jacobian assembly on `Calculator` (needed when `libcint` or custom legacy extensions are incompatible with `vmap`-backed `jacrev`). Functional `System` property methods (`dxtb._src.calculators.properties.functional`) have a single pure `torch.func` implementation and do not expose `use_functorch`. |
 | `derived_quantity` | `AutogradCalculator.hessian` (`"energy"` vs `"forces"`), `AutogradCalculator.polarizability` (`"energy"` vs `"dipole"`) | **RETAINED (`AutogradCalculator` only)** | Selects whether the 2nd derivative is assembled as `jacrev(jacrev(energy))` or `-jacrev(forces)` / `jacrev(dipole)` on `Calculator`. Functional `System` property methods use one canonical `torch.func` formulation. |
 

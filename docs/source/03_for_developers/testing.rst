@@ -6,33 +6,33 @@ Testing
 pytest
 ------
 
-For rapid testing, simply run `pytest`, but exclude large tests.
+For rapid parallel testing, run ``pytest`` with ``pytest-xdist`` and exclude large and slow tests (setting ``OMP_NUM_THREADS=1`` per worker):
 
 .. code-block:: shell
 
-    pytest -vv -m "not large"
+    OMP_NUM_THREADS=1 pytest -vv -n logical --dist worksteal -m "not large and not slow"
 
 
 tox
 ---
 
-For testing all Python environments, use `tox`.
+For testing across Python and PyTorch environments, use ``tox``.
 
 .. code-block:: shell
 
     tox
 
-Note that this randomizes the order of tests but skips "large" tests. To modify this behavior, `tox` has to skip the optional *posargs*.
+By default, ``tox`` runs tests in parallel with randomized order and skips ``large``, ``slow``, and ``baseline`` markers. Pass arguments after ``--`` to override the default ``pytest`` invocation:
 
 .. code-block:: shell
 
     tox -- test
 
-To test specific environments, use the `-e` flag.
+To test specific environments, use the ``-e`` flag (including the ``-libcint`` or ``-nolibcint`` factor):
 
 .. code-block:: shell
 
-     tox -e py310-torch2141
+    tox -e py310-torch2141-libcint
 
 Development dependency setup
 ----------------------------

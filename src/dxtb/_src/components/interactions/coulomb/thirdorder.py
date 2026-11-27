@@ -26,21 +26,11 @@ Example
 .. code-block:: python
 
     import torch
-    import dxtb.coulomb.thirdorder as es3
-    from dxtb import GFN1_XTB, get_element_param
-    from dxtb import IndexHelper
+    from dxtb import GFN1_XTB, IndexHelper
+    from dxtb.components.coulomb import new_es3
 
-    # Define atomic numbers and their positions
+    # Define atomic numbers and atomic charges
     numbers = torch.tensor([14, 1, 1, 1, 1])
-    positions = torch.tensor([
-        [+0.00000000000000, -0.00000000000000, +0.00000000000000],
-        [+1.61768389755830, +1.61768389755830, -1.61768389755830],
-        [-1.61768389755830, -1.61768389755830, -1.61768389755830],
-        [+1.61768389755830, -1.61768389755830, +1.61768389755830],
-        [-1.61768389755830, +1.61768389755830, +1.61768389755830],
-    ])
-
-    # Atomic charges
     qat = torch.tensor([
         -8.41282505804719e-2,
         2.10320626451180e-2,
@@ -49,20 +39,14 @@ Example
         2.10320626451179e-2,
     ])
 
-    # Initialize the ES3 calculation class with Hubbard derivatives parameter
-    hubbard_derivs = get_element_param(GFN1_XTB.element, "gam3")
-    es = es3.ES3(positions, hubbard_derivs)
-
-    # Create an index helper from atomic numbers
     ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
-
-    # Generate the cache and carry out the energy calculation
-    cache = es.get_cache(ihelp)
-    e = es.get_atom_energy(qat, cache)
+    es = new_es3(torch.unique(numbers), GFN1_XTB)
+    cache = es.get_cache(numbers=numbers, ihelp=ihelp)
+    e = es.get_monopole_atom_energy(cache, qat)
 
     # Print the summed energy
     torch.set_printoptions(precision=7)
-    print(torch.sum(e, dim=-1))  # tensor(0.0155669)
+    print(torch.sum(e, dim=-1))  # tensor(-2.9771152e-05)
 """
 
 from __future__ import annotations

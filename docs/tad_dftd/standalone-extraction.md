@@ -1,6 +1,6 @@
 # `tad_dftd` Standalone Repository Extraction Specification (`H2.8` / `M1.4`–`M1.6`)
 
-`src/tad_dftd` is architected as a self-contained top-level Python package inside `marvinfriede/dxtb` (`claude/tender-dijkstra-cda42s`) with zero imports from `dxtb`, `tad_dftd3`, or `tad_dftd4`. Extracting it into a standalone `tad-dftd` repository requires only file movement and packaging metadata configuration—no algorithmic, numerical, or public API changes.
+`src/tad_dftd` is architected as a self-contained top-level Python package inside `marvinfriede/dxtb` (`refactor`, formerly `claude/tender-dijkstra-cda42s`) with zero imports from `dxtb`, `tad_dftd3`, or `tad_dftd4`. Extracting it into a standalone `tad-dftd` repository requires only file movement and packaging metadata configuration—no algorithmic, numerical, or public API changes.
 
 ---
 

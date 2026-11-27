@@ -17,4 +17,6 @@ Below, you can find the detailed documentation.
 
    Dispersion <../_autosummary/dxtb.components.dispersion>
    Halogen <../_autosummary/dxtb.components.halogen>
+   Isotropic Electrostatics <../_autosummary/dxtb.components.ies>
    Repulsion <../_autosummary/dxtb.components.repulsion>
+   Short-Range Bond <../_autosummary/dxtb.components.shortrangebond>

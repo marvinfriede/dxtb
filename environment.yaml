@@ -22,14 +22,16 @@ channels:
 dependencies:
   # Create the core development environment here. After activation, install
   # dxtb in editable mode (see docs/source/03_for_developers/installation.rst).
+  - h5py
   - numpy
   - pydantic
-  - python>=3.10,<3.13
+  - python>=3.10,<3.15
   - pytorch>=2.7.0,<3
   - scipy
   - pytest
   - tomli
   - tomli-w
+  - typing_extensions
   - tad-mctc=0.11.3
   - tad-multicharge=0.8.0
   - pip:

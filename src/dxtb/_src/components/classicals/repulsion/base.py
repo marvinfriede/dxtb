@@ -31,9 +31,8 @@ Example
 .. code-block:: python
 
     import torch
-    from dxtb import IndexHelper
-    from dxtb.classical import new_repulsion
-    from dxtb import GFN1_XTB
+    from dxtb import GFN1_XTB, IndexHelper
+    from dxtb.components.repulsion import new_repulsion
 
     numbers = torch.tensor([14, 1, 1, 1, 1])
     positions = torch.tensor([
@@ -44,7 +43,7 @@ Example
         [-1.61768389755830, 1.61768389755830, 1.61768389755830],
     ])
 
-    rep = new_repulsion(numbers, positions, GFN1_XTB)
+    rep = new_repulsion(torch.unique(numbers), GFN1_XTB)
     ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
 
     cache = rep.get_cache(numbers, ihelp)

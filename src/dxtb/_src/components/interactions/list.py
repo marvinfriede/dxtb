@@ -109,7 +109,7 @@ class InteractionList(ComponentList[Interaction]):
         return super().reset(name)
 
     def reset_all(self) -> None:
-        """Reset unmigrated interactions, leaving setup terms untouched."""
+        """Reset custom interactions, leaving built-in SCF interactions untouched."""
         for component in self.components:
             if type(component) not in _SCF_INTERACTION_TYPES:
                 component.reset()
@@ -170,8 +170,8 @@ class InteractionList(ComponentList[Interaction]):
 
         Returns
         -------
-        Tensor
-            Energy vector for each orbital partial charge.
+        dict[str, Tensor]
+            Atom-resolved energy vectors keyed by interaction label.
         """
         if len(self.components) <= 0:
             return {"none": torch.zeros_like(charges.mono)}

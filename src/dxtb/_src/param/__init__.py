@@ -19,13 +19,13 @@ Parametrizations: Overview
 ==========================
 
 This module defines the parametrization of the extended tight-binding
-Hamiltonians in the form of a hierarichical structure of Pydantic models.
+Hamiltonians in the form of a hierarchical structure of Pydantic models.
 
 The structure of the parametrization is adapted from the `tblite`_ library and
 separates the species-specific parameter records from the general interactions
 included in the method.
 
-The standard parametrizations of GFN1 and GFN2 are predefined.
+The standard parametrizations of GFN0, GFN1, and GFN2 are predefined.
 
 Parametrizations: Formats
 =========================

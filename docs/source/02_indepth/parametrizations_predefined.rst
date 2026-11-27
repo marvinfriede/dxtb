@@ -1,7 +1,11 @@
 .. _indepth_param_predefined:
 
-Predefinded Parametrizations
-============================
+Predefined Parametrizations
+===========================
+
+.. automodule:: dxtb._src.param.gfn0
+   :members:
+   :show-inheritance:
 
 .. automodule:: dxtb._src.param.gfn1
    :members:

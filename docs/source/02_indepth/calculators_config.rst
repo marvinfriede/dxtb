@@ -1,7 +1,7 @@
 .. _indepth_calculators_config:
 
-Configuration
-=============
+.. automodule:: dxtb._src.calculators.config
+   :no-index:
 
 .. toctree::
    :maxdepth: 1
@@ -9,14 +9,9 @@ Configuration
    General <../_autosummary/dxtb.config.Config>
    Integrals <../_autosummary/dxtb.config.ConfigIntegrals>
    SCF <../_autosummary/dxtb.config.ConfigSCF>
+   Fermi <../_autosummary/dxtb.config.ConfigFermi>
    SCF strategies <scf_strategy>
    Labels <calculators_config_labels>
-
-
-.. automodule:: dxtb._src.calculators.config
-   :members:
-   :undoc-members:
-   :show-inheritance:
 
 
 For all available keywords and settings, see

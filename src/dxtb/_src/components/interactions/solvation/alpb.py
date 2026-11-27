@@ -25,7 +25,7 @@ Example
 .. code-block:: python
 
     import torch
-    from dxtb.solvation.alpb import GeneralizedBorn
+    from dxtb.components.solvation import GeneralizedBorn
 
     numbers = torch.tensor([14, 1, 1, 1, 1])
     positions = torch.tensor([

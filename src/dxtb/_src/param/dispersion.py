@@ -18,15 +18,9 @@
 Parametrization: Dispersion
 ===========================
 
-Definitions of dispersion contributions. Contains the :class:`D3Model` and
-:class:`D4Model` representing the DFT-D3(BJ) and DFT-D4 dispersion corrections,
-respectively.
-For details on there implementation, see the `tad-dftd3`_ and `tad-dftd4`_
-libraries.
-
-.. _tad-dftd3: https://github.com/dftd3/tad-dftd3
-
-.. _tad-dftd4: https://github.com/dftd4/tad-dftd4
+Definitions of dispersion contributions. Contains :class:`PD3Model` and
+:class:`PD4Model` representing the DFT-D3(BJ) and DFT-D4 dispersion corrections,
+respectively, backed by the bundled ``tad_dftd`` implementation.
 """
 
 from __future__ import annotations
@@ -34,6 +28,7 @@ from __future__ import annotations
 from typing import Optional
 
 from pydantic import BaseModel
+
 from tad_dftd import defaults as dftd_defaults
 
 __all__ = ["PD3Model", "PD4Model", "PDispersion"]
@@ -66,7 +61,7 @@ class PD4Model(BaseModel):
     """
 
     sc: bool = False
-    """Whether the dispersion correctio is used self-consistently or not."""
+    """Whether the dispersion correction is used self-consistently or not."""
 
     s6: float = dftd_defaults.D4_S6
     """Scaling factor for multipolar (dipole-dipole contribution) terms"""

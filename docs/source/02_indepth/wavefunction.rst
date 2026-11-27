@@ -12,7 +12,7 @@ Indexhelper
    :members:
    :show-inheritance:
    :inherited-members:
-   :noindex:
+   :no-index:
 
 Basis Construction
 ------------------

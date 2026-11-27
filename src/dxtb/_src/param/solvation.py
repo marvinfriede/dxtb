@@ -15,10 +15,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Parametrization: Electrostatics (3rd order)
-===========================================
+Parametrization: Implicit Solvation
+===================================
 
-Definition of the isotropic third-order onsite correction.
+Definitions of implicit solvation model parameters (ALPB / GBSA).
 """
 
 from __future__ import annotations
@@ -59,5 +59,5 @@ class PSolvation(BaseModel):
 
     alpb: Optional[PSolvationALPB] = None
     """
-    Whether the third order contribution is shell-dependent or only atomwise.
+    Analytical linearized Poisson-Boltzmann solvation parameters.
     """

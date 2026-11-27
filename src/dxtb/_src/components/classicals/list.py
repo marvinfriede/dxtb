@@ -125,7 +125,7 @@ class ClassicalList(ComponentList[Classical]):
         return super().reset(name)
 
     def reset_all(self) -> None:
-        """Reset unmigrated classicals, leaving explicit setups intact."""
+        """Reset D3 and custom classical components, leaving setup-only built-in classicals intact."""
         for component in self.components:
             if type(component) not in (
                 Repulsion,

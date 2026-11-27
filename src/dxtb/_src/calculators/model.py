@@ -34,9 +34,11 @@ leaves, i.e., it can be called inside a differentiated function.
 
 .. note::
 
-    Component lists and classical setup remain transitional mutable objects
-    until later component/cache packages. Integral matrix production uses
-    explicit setup values and does not store per-call outputs on System.
+    ``System`` captures immutable core setups (``ExactSystemCore``) for
+    built-in components and tensor-only custom classicals alongside
+    mutation-tracked snapshots for custom classical setups. Integral matrix
+    production uses explicit setup values and does not store per-call outputs
+    on ``System``.
 """
 
 from __future__ import annotations

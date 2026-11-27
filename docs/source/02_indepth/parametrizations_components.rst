@@ -24,7 +24,15 @@ Interactions
    :members:
    :show-inheritance:
 
+.. automodule:: dxtb._src.param.multipole
+   :members:
+   :show-inheritance:
+
 .. automodule:: dxtb._src.param.thirdorder
+   :members:
+   :show-inheritance:
+
+.. automodule:: dxtb._src.param.solvation
    :members:
    :show-inheritance:
 
@@ -35,11 +43,19 @@ Classical
    :members:
    :show-inheritance:
 
+.. automodule:: dxtb._src.param.eeq
+   :members:
+   :show-inheritance:
+
 .. automodule:: dxtb._src.param.halogen
    :members:
    :show-inheritance:
 
 .. automodule:: dxtb._src.param.repulsion
+   :members:
+   :show-inheritance:
+
+.. automodule:: dxtb._src.param.short_range
    :members:
    :show-inheritance:
 

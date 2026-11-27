@@ -7,3 +7,7 @@ Modules
    :recursive:
 
    dxtb
+   dxtb.config
+   dxtb.integrals
+   dxtb.labels
+   dxtb.typing

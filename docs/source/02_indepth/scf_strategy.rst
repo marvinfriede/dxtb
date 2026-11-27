@@ -1,3 +1,5 @@
+.. _indepth_scf_strategy:
+
 SCF strategies
 ==============
 
@@ -96,7 +98,7 @@ in raw maps and full solvers; an optimized-backend speedup has not been
 established. Small same-shape ``vmap`` batches are supported, while streaming
 is the memory-bounded option for large derivative batches.
 
-The result's convergence flag and residual describe primal S2 physical
+The result's convergence flag and residual describe primal physical
 certification and controller progress. A later CPSCF failure is
 a derivative failure and does not change the primal convergence result.
 

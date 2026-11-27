@@ -18,19 +18,21 @@
 Components
 ==========
 
-The tight-binding components are the central building blocks of the each model.
+The tight-binding components are the central building blocks of each Model.
 
 The components are split into :class:`~dxtb.components.base.Interaction` and
 :class:`~dxtb.components.base.Classical` components. The
 :class:`~dxtb.components.base.Interaction` components define the Hamiltonian
-and, correspondingly, are density- or charge-dependent and required for the
-SCF. The :class:`~dxtb.components.base.Classical` components are classical
-corrections that do not dependent on the density or charges.
+and, correspondingly, depend on the SCF charges and enter the SCF loop. The
+:class:`~dxtb.components.base.Classical` components are classical corrections
+that do not depend on the SCF charges.
 
-The components are usually initialized with a parametrization and the atomic
-numbers of the Structure within the :class:`~dxtb.Calculator`, i.e., they do not
-require user intervention. For explicit instantiation, we provide factory
-functions.
+The built-in components are initialized automatically from a parametrization
+and the atomic numbers of the Structure within :class:`~dxtb.Calculator` and
+:class:`~dxtb.calculators.Model` (which also accept custom
+:class:`~dxtb.components.base.Classical` and
+:class:`~dxtb.components.base.Interaction` subclasses). For explicit
+instantiation of built-in components, factory functions are provided.
 
 .. code-block:: python
 

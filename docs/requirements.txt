@@ -1,18 +1,17 @@
+h5py
 numpy
 pydantic>=2.0.0
 scipy
 tad-mctc==0.11.3
 tad-multicharge==0.8.0
 tad-libcint==0.4.0
-# Install the accepted official D3/D4 wheels separately with --no-deps; see
-# docs/source/03_for_developers/installation.rst.
 tomli
 tomli-w
 torch>=2.7.0,<3
+typing-extensions
 sphinx
 sphinx-book-theme
 sphinx-copybutton
 sphinx-design
 sphinx-togglebutton
-sphinx_autodoc_typehints
 jinja2

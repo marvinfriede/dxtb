@@ -26,7 +26,7 @@ Example
 
 .. code-block:: python
 
-    from dxtb._src.param.gfn2 import GFN0_XTB
+    from dxtb._src.param.gfn0 import GFN0_XTB
     #from dxtb import GFN0_XTB  # also available from the top-level package
 
     # Initially, the parameters are not loaded

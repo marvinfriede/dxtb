@@ -22,10 +22,9 @@ This module implements the classical repulsion energy term.
 
 Note
 ----
-The Repulsion class is constructed for geometry optimization, i.e., the atomic
-numbers are set upon instantiation (`numbers` is a property), and the parameters
-in the cache are created for only those atomic numbers. The positions, however,
-must be supplied to the ``get_energy`` (or ``get_grad``) method.
+Element pair parameters are resolved from unique atomic numbers, and
+composition-dependent setup data is built via ``get_cache``. Positions are
+supplied to ``get_energy`` (or ``get_gradient``).
 
 Example
 -------
@@ -33,9 +32,8 @@ Example
 .. code-block:: python
 
     import torch
-    from dxtb import IndexHelper
-    from dxtb.classical import new_repulsion
-    from dxtb import GFN1_XTB
+    from dxtb import GFN1_XTB, IndexHelper
+    from dxtb.components.repulsion import new_repulsion
 
     # Define atomic numbers and positions
     numbers = torch.tensor([14, 1, 1, 1, 1])
@@ -48,7 +46,7 @@ Example
     ])
 
     # Initialize the repulsion and IndexHelper objects
-    rep = new_repulsion(numbers, positions, GFN1_XTB)
+    rep = new_repulsion(torch.unique(numbers), GFN1_XTB)
     ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
 
     # Get the cache and calculate the energy

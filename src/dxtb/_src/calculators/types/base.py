@@ -668,9 +668,9 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
 
     .. warning::
 
-        ``Calculator.to(device)`` does not move all internal state (e.g., the
-        :class:`~dxtb.IndexHelper`). Create the calculator on the target
-        device instead (``device=...``). See :ref:`help_known_issues`.
+        ``Calculator.to(device)`` does not move all internal state (such as
+        ``model``, ``system``, and component lists). Create the calculator on
+        the target device instead (``device=...``). See :ref:`help_known_issues`.
     """
 
     numbers: Tensor
@@ -974,7 +974,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             Component tensors may be replaced by detached copies.
             Explicit ``field=`` and ``field_grad=`` inputs are not component
             state and remain connected to their original tensors across reset.
-            ES2 and ES3 setup-derived parameters are not reset. See
+            Setup-only built-in components are left untouched. See
             :ref:`help_known_issues`.
         """
         self.classicals.reset_all()
@@ -1110,11 +1110,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
     @override
     def type(self, dtype: torch.dtype) -> Self:
         """
-        Returns a copy of the class instance with specified floating point type.
-
-        This method overrides the usual approach because the
-        :class:`dxtb.Calculator`'s arguments and slots differ significantly.
-        Hence, it is not practical to instantiate a new copy.
+        Convert the calculator and its components in place to ``dtype``.
 
         Parameters
         ----------
@@ -1124,7 +1120,7 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
         Returns
         -------
         Self
-            A copy of the class instance with the specified dtype.
+            The calculator instance converted to ``dtype``.
 
         Raises
         ------
@@ -1206,11 +1202,8 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
                 interaction=new_model_interaction,
             )
 
-        # Keep the System consistent with the converted components where
-        # supported. Component setup objects of Classicals and ES2/ES3 are
-        # not converted; evaluating those snapshots after `type` is a
-        # known issue (see known_issues.rst). The separate exact core below is
-        # converted because it owns setup snapshots.
+        # Convert the System setup snapshots, exact core, and valid custom
+        # classical caches alongside the converted component lists.
         self.system = _convert_system_dtype(
             self.system,
             dtype,

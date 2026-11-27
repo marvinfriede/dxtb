@@ -20,9 +20,8 @@ pip
 
     pip install dxtb[libcint]
 
-Installing the libcint interface is recommended, as it is faster than the pure PyTorch implementation on the CPU.
-The pure PyTorch integral driver provides the overlap, dipole and quadrupole integrals (and thereby GFN2-xTB) with derivatives of any order, on CPU and CUDA.
-However, the interface is currently only available on Linux.
+Installing the ``libcint`` interface (``tad-libcint``) is recommended on Linux, as it is faster than the pure PyTorch implementation on CPU; ``tad-libcint`` is currently only available on Linux.
+The pure PyTorch integral driver works on all platforms across CPU and CUDA and provides overlap, dipole, and quadrupole integrals (supporting GFN0-xTB, GFN1-xTB, and GFN2-xTB) with derivatives of any order.
 
 
 conda
@@ -60,7 +59,7 @@ Obtain the source by cloning the repository with
     cd dxtb
 
 We recommend using a `conda <https://conda.io/>`__ environment to install the package.
-You can setup the environment manager using a `mambaforge <https://github.com/conda-forge/miniforge>`__ installer.
+You can setup the environment manager using a `miniforge <https://github.com/conda-forge/miniforge>`__ installer.
 Install the required dependencies from the conda-forge channel.
 
 .. code-block:: shell
@@ -97,20 +96,21 @@ For the command line interface, add ``<path to dxtb>/dxtb/bin`` to your ``$PATH`
 Dependencies
 ------------
 
-The following dependencies are required
+The following runtime dependencies are required:
 
+- `h5py <https://www.h5py.org/>`__
 - `numpy <https://numpy.org/>`__
-- `opt_einsum <https://optimized-einsum.readthedocs.io/en/stable/>`__
+- `pydantic <https://docs.pydantic.dev/>`__ (``>=2.0.0``)
 - `scipy <https://www.scipy.org/>`__
 - `tad-mctc <https://github.com/tad-mctc/tad-mctc>`__
 - `tad-multicharge <https://github.com/tad-mctc/tad-multicharge>`__
-- `tad-dftd3 <https://github.com/dftd3/tad-dftd3>`__
-- `tad-dftd4 <https://github.com/dftd4/tad-dftd4>`__
-- `tad-libcint <https://github.com/tad-mctc/tad-libcint>`__
-- `torch <https://pytorch.org/>`__
+- `tomli <https://github.com/hukkin/tomli>`__ / `tomli-w <https://github.com/hukkin/tomli-w>`__
+- `torch <https://pytorch.org/>`__ (``>=2.7.0,<3``)
+- `typing-extensions <https://typing-extensions.readthedocs.io/>`__
 
-For tests, we also require
+Dispersion corrections (D3/D4/D4SC) are provided by the bundled ``tad_dftd`` package. Optional extras include:
 
-- `pytest <https://docs.pytest.org/>`__
-- `pyscf <https://pyscf.org/>`__
-- `tox <https://docs.pytest.org/>`__
+- `tad-libcint <https://github.com/tad-mctc/tad-libcint>`__ (``dxtb[libcint]``, Linux only)
+- `ase <https://wiki.fysik.dtu.dk/ase/>`__ (``dxtb[ase]``)
+
+For running the test suite, install ``pip install -e ".[dev]"`` (including `pytest <https://docs.pytest.org/>`__, `pytest-xdist <https://pytest-xdist.readthedocs.io/>`__, `pyscf <https://pyscf.org/>`__, `tblite <https://tblite.readthedocs.io/>`__, and `tox <https://tox.wiki/>`__).

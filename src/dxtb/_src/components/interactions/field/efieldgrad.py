@@ -42,7 +42,7 @@ __all__ = [
 
 
 LABEL_EFIELD_GRAD = "ElectricFieldGrad"
-"""Label for the 'ElectricField' interaction, coinciding with the class name."""
+"""Label for the 'ElectricFieldGrad' interaction, coinciding with the class name."""
 
 
 def build_electric_field_grad_data(

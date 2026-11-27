@@ -148,13 +148,13 @@ An SCF controller that runs Trips scheduled in advance, with no data-dependent b
 _Avoid_: masked controller, transform route
 
 **Static schedule**:
-A Fixed-trip controller schedule that always runs the configured maximum number of Trips. It is used inside function transforms.
+A Fixed-trip controller schedule that runs the configured maximum number of Trips without host early-exit checks. It is used under symbolic compilation/tracing (`torch.compile`, `torch.jit.trace`, `functionalize`), custom Python dispatch modes, trace recording, and non-CPU devices.
 
 **Adaptive schedule**:
-A Fixed-trip controller schedule that runs Trips in Chunks and stops after the first Chunk at whose end no Lane is Active.
+A Fixed-trip controller schedule that checks on the host whether any Lane remains Active (per Trip on CPU, including inside `autograd` and `torch.func` transforms, or across `[start, stop)` Chunks) and stops once no Lane is Active.
 
 **Chunk**:
-A run of consecutive Trips between two host checks in an Adaptive schedule. Its length affects only performance, never results.
+A `[start, stop)` slice of consecutive Trips passed to `FixedTripControl.advance`. Its length affects only performance, never results.
 
 ### Differentiation
 

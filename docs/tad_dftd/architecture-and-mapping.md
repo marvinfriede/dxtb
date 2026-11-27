@@ -3,9 +3,9 @@
 ## 1. Recorded Source Authority & Git Revisions
 
 - **Main integration repository**: `marvinfriede/dxtb` (`/tmp1/friede/dxtb-agentic/dxtb`)
-- **Base branch**: `origin/claude/tender-dijkstra-cda42s`
+- **Base branch**: `origin/refactor` (formerly `origin/claude/tender-dijkstra-cda42s`)
 - **Recorded base commit SHA**: `abdb4562a0607475e775072277b63f82501363a0` (merged onto target `fba253dd766566507cd6db2797b6926aa35c95c2` at `f51776e23348df71bebf00fd268bdc6615d1c934`)
-- **Merged target commit SHA (`M1`)**: `f51776e23348df71bebf00fd268bdc6615d1c934` on `claude/tender-dijkstra-cda42s`
+- **Merged target commit SHA (`M1`)**: `f51776e23348df71bebf00fd268bdc6615d1c934` on `refactor` (formerly `claude/tender-dijkstra-cda42s`)
 - **Authoritative Fortran reference (`grimme-lab/dftd`)**: `/tmp1/friede/work/dftd-grimme-lab/dftd` at commit SHA `d2740777049b2a77fd5acc86c4e1abe75d5374ee` (branch `split-c-api-tests`)
 - **Modified PyTorch `tad-dftd3` reference**: `/tmp1/friede/dxtb-agentic/tad-dftd3` at commit SHA `954c0f2237c348063e0b8190cb2cb108a49cc3d9` (branch `neighborlist`)
 

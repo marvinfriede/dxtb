@@ -99,11 +99,10 @@ class Interaction(Component):
 
     Every charge-dependent energy contribution should inherit from this class
     as it conveniently handles the different resolutions (atom, shell, orbital)
-    required for all subclasses. Depending on the contribution the user must
-    implement a ``get_<atom/shell>_<potential/energy/gradient>`` method. The
-    methods that are not implemented automatically evaluate to zero. As they
-    are always called in the process of collecting the different resolutions,
-    you must NOT implement them.
+    required for all subclasses. Depending on the multipole order and
+    resolution, subclasses implement one or more pairs of
+    ``get_<monopole/dipole/quadrupole>_<atom/shell>_<potential/energy>`` hooks;
+    hooks that are not overridden automatically evaluate to zero.
 
     .. warning::
 
@@ -111,25 +110,17 @@ class Interaction(Component):
         ``get_gradient`` methods in the subclass. These methods collect the
         respective variable for their (internally-handled) evaluation.
 
-    Additionally, a ``get_cache`` method is required that should precalculate
-    and store all charge-independent variables to avoid repeated calculations
-    during the SCF.
-
-    Note
-    ----
-    The nuclear gradient of the Mulliken charges essentially yields a
-    derivative of the overlap integral. This is handled elsewhere and must
-    not be implemented by the ``get_<atom/shell>_gradient`` methods.
+    Additionally, a ``get_cache`` method is required that precalculates and
+    returns per-geometry, charge-independent setup data to avoid repeated
+    calculations during the SCF iterations.
 
     Example
     -------
-    The third-order electrostatics class:`dxtb.components.ES3` of GFN1-xTB
-    contain only atom-resolved parameters. Hence, it only implements
-    ``get_atom_energy`` and ``get_atom_potential`` (besides the required
-    ``get_cache`` method).
-    Since there is not positional dependence (except for the charges, which is
-    handled elsewhere) in the third-order electrostatics, no gradient method
-    must be implemented.
+    The third-order electrostatics :class:`~dxtb.components.coulomb.ES3`
+    implements ``get_monopole_atom_energy``, ``get_monopole_shell_energy``,
+    ``get_monopole_atom_potential``, and ``get_monopole_shell_potential``
+    alongside ``get_cache``. Nuclear and parameter derivatives are obtained
+    automatically via PyTorch autograd / ``torch.func``.
     """
 
     # Already defined in `Component` parent class
@@ -156,7 +147,7 @@ class Interaction(Component):
 
         This method should be implemented by the subclass. Here, it serves
         only to create an empty :class:`.Interaction` by returning an empty
-        class:`.InteractionCache`.
+        :class:`.InteractionCache`.
 
         Parameters
         ----------
@@ -195,8 +186,8 @@ class Interaction(Component):
 
         Returns
         -------
-        Tensor
-            Potential vector for each orbital partial charge.
+        Potential
+            Orbital- and multipole-resolved potentials.
         """
 
         # monopole potential: shell-resolved
@@ -348,7 +339,7 @@ class Interaction(Component):
 
         Returns
         -------
-        Tensor | Nene
+        Tensor | None
             Atom-resolved potential vector for each atom or None if not needed.
         """
         return None

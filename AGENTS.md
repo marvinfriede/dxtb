@@ -187,7 +187,7 @@ Before each package:
 Current restructuring branch:
 
 ```text
-claude/tender-dijkstra-cda42s
+refactor
 ```
 
 Do not assume the SHA recorded here remains current. Refresh the branch head at the start of each new task.

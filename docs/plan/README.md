@@ -17,7 +17,7 @@ API.
 | `E0-decision-note.md` | Decision note E0 (agreed): canonical SCF map, spectral derivative contract, and E3/E4/E6 boundaries |
 | `E1.3-L2-official-d3.md` | Official tad-dftd3 0.7.0 integration, local mctc compatibility and s9 derivative acceptance |
 | `T0-baseline-report.md` | Track 0 deliverable (T0.11): the recorded baseline |
-| `07-current-state-and-execution-plan.md` | Reconciles the original plan with the implementation on `claude/tender-dijkstra-cda42s`; corrected status, dependencies and ordered execution plan |
+| `07-current-state-and-execution-plan.md` | Reconciles the original plan with the implementation on `refactor` (formerly `claude/tender-dijkstra-cda42s`); corrected status, dependencies and ordered execution plan |
 | `08-scf-redesign-overview.md` | Completed S0–S13 SCF architecture and final design invariants |
 | `30-scf-s13-defaults-api-closure.md` | Final S13 benchmark-selected defaults, public strategy API, and redesign closure |
 | `31-scf-s13.1-public-boundary-hardening.md` | S13.1 parser-authority and single/batch implicit-response consistency gate |

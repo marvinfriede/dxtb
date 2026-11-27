@@ -1,7 +1,7 @@
 # Contributing to dxtb
 
 First off, thank you for considering contributing to `dxtb`.
-Please take a moment to review this guidelines to make the contribution process simple and effective for all involved.
+Please take a moment to review these guidelines to make the contribution process simple and effective for all involved.
 
 Respecting these guidelines helps communicate that you respect the time of the developers who manage and develop this open source project.
 In return, they should return this respect by addressing your problem, evaluating changes, and helping you handle your pull requests.
@@ -47,8 +47,8 @@ Contributions are welcome via Github pull requests.
 - Do not commit changes to files that are irrelevant to your feature or
   bugfix (_e.g._ `.gitignore`).
 - Be willing to accept criticism and work on improving your code.
-- Make sure the code compiles and the tests run successful on more than
-  your local machine (_e.g._ on cluster of your university).
+- Make sure the test suite and type/lint checks pass on more than
+  your local machine (_e.g._ in CI or on a university cluster).
 
 ### For New Contributors
 
@@ -56,7 +56,7 @@ If you never created a pull request before, welcome :tada:.
 You can learn how from [this great tutorial](https://app.egghead.io/courses/how-to-contribute-to-an-open-source-project-on-github)
 
 Don't know where to start?
-You can start by looking through the [open issues](https://github.com/dftd4/tad_mctc/issues).
+You can start by looking through the [open issues](https://github.com/grimme-lab/dxtb/issues).
 Feel free to just comment on an issue you are interested in working and ask for pointers on how begin.
 
 ## Sign Your Work

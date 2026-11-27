@@ -1044,7 +1044,7 @@ class IndexHelper(Node):
         """
         Mapping of atom index to orbital index, i.e., return indices of orbitals
         belonging to given atom. The orbital order is given by
-        :meth:`.IndexHelper.orbitals_to_shell`.
+        :attr:`orbitals_to_shell`.
 
         Parameters
         ----------

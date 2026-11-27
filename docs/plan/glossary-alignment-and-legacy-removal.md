@@ -1,6 +1,6 @@
 # Glossary alignment and legacy compatibility removal
 
-Status: complete on `claude/tender-dijkstra-cda42s` (commits `46d2c17b`
+Status: complete on `refactor` (formerly `claude/tender-dijkstra-cda42s`, commits `46d2c17b`
 to `da0255d5`). Vocabulary: [`.agent-docs/GLOSSARY.md`](../../.agent-docs/GLOSSARY.md).
 
 ## Decisions (architecture owner)
@@ -74,3 +74,10 @@ Calculator, not a compatibility path. See
 [`strict-kwargs-and-compatibility-removal.md`](strict-kwargs-and-compatibility-removal.md).
 The `get_cache`/`get_energy` component API that the built-in Components
 use to build their setups remains.
+
+Subsequently (`c51f12f6`–`5bbf5dc6`), custom `Classical` and `Interaction`
+component support and the `Creating New Components` tutorial
+(`docs/source/02_indepth/components_new.rst`) were restored and hardened
+(`WP-CC-H1` through `WP-CC-H3` plus duplicate custom `Classical` label
+preservation during `Calculator` setup), while D4's setup-time `q=` remains
+removed.

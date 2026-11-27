@@ -19,21 +19,32 @@ of two interchangeable algorithms, selected with the ``int_algorithm`` option
 - ``md``: McMurchie-Davidson with Hermite moments
 
 Both algorithms agree with libcint to ``1e-12`` in double precision, support
-CPU and CUDA, padded batches, and derivatives of any order (also with
-``torch.func``) with respect to the positions and the basis parameters, and
-work with ``torch.compile``.
+CPU and CUDA, derivatives of any order (also with ``torch.func``) with respect
+to the positions and the basis parameters, and work with ``torch.compile``.
+Low-level :class:`~dxtb._src.integral.driver.pytorch.setup.PytorchIntegralSetup`
+and ``build_*`` functions operate on one single ``System`` (composable with
+``torch.vmap``, including ``Z == 0`` atom padding), while multi-system padded
+batches are handled automatically by :class:`~dxtb.Calculator` and
+:mod:`dxtb.integrals.wrappers`.
 
-The GFN2 calculator also provides the molecular traceless quadrupole moment
-(``calc.get_quadrupole(positions)``, six components ``xx, yx, yy, zx, zy, zz``,
-matching tblite), which requires the quadrupole integral.
+The molecular traceless quadrupole moment is evaluated as the derivative of the
+energy with respect to an electric field gradient (``-3 dE / dG``, six packed
+components ``xx, yx, yy, zx, zy, zz``), requiring the quadrupole integral:
 
-The quadrupole moment is also available as the derivative of the energy with
-respect to an electric field gradient, via autograd (``calc.quadrupole``) and
-finite differences (``calc.quadrupole_numerical``). Both take an explicit
-``field_grad=`` tensor (with ``requires_grad=True`` for autograd).
-They agree with the analytical diagonal elements; the analytical off-diagonal
-elements follow tblite and count the point-charge and dipole contribution
-twice.
+- On :class:`~dxtb.Calculator`: via autograd
+  (``calc.quadrupole(positions, field_grad=field_grad)`` or
+  ``calc.get_quadrupole(positions, field_grad=field_grad)``) and finite
+  differences (``calc.quadrupole_numerical(positions, field_grad=field_grad)``),
+  both taking an explicit ``field_grad=`` tensor (with ``requires_grad=True``
+  for autograd when ``use_functorch=False``).
+- On :class:`~dxtb.calculators.System`: via
+  ``system.quadrupole(positions)`` (evaluating the zero-field-gradient response
+  with ``torch.func``).
+
+These field-gradient derivatives agree with the analytical diagonal elements in
+``tblite``; ``tblite``'s analytical off-diagonal formula (available standalone
+in :func:`dxtb._src.calculators.properties.moments.quad.quadrupole`) counts the
+point-charge and dipole contributions twice.
 
 .. code-block:: python
 
@@ -63,10 +74,6 @@ Setup
 
 Implementations
 ---------------
-
-.. automodule:: dxtb._src.integral.driver.pytorch.overlap
-   :members:
-   :show-inheritance:
 
 .. automodule:: dxtb._src.integral.driver.pytorch.multipole
    :members:

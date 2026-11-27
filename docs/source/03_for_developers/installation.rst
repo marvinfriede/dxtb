@@ -11,7 +11,7 @@ Obtain the source code from GitHub at `grimme-lab/dxtb <https://github.com/grimm
     cd dxtb
 
 We recommend using a `conda <https://conda.io/>`__ environment to install the package.
-You can setup the environment manager using a `mambaforge <https://github.com/conda-forge/miniforge>`__ installer.
+You can setup the environment manager using a `miniforge <https://github.com/conda-forge/miniforge>`__ installer.
 Install the required dependencies from the conda-forge channel.
 
 .. code-block:: shell
@@ -19,12 +19,7 @@ Install the required dependencies from the conda-forge channel.
     mamba env create -n torch -f environment.yaml
     mamba activate torch
 
-For development, additionally install the development tools in your environment, and use the ``-e`` option to install the package in editable mode.
-
-.. code-block:: shell
-
-    pip install -e .[dev]
-
+For development, install the package in editable mode together with the development tools (and ``libcint`` on Linux).
 The development stack uses ``tad-mctc==0.11.3``, ``tad-multicharge==0.8.0``,
 and (when testing libcint) ``tad-libcint==0.4.0``. Unified DFT-D dispersion
 (``tad_dftd``) is bundled directly in the repository under ``src/tad_dftd/``.

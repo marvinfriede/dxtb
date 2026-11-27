@@ -29,9 +29,8 @@ the :class:`.Halogen` class in a simple scenario:
 .. code-block:: python
 
     import torch
-    from dxtb import IndexHelper
-    from dxtb.classical import new_halogen
-    from dxtb import GFN1_XTB
+    from dxtb import GFN1_XTB, IndexHelper
+    from dxtb.components.halogen import new_halogen
 
     # Define atomic numbers and positions
     numbers = torch.tensor([35, 35, 7, 1, 1, 1])
@@ -45,7 +44,7 @@ the :class:`.Halogen` class in a simple scenario:
     ])
 
     # Instantiate the halogen bond correction class and the IndexHelper
-    xb = new_halogen(numbers, positions, GFN1_XTB)
+    xb = new_halogen(torch.unique(numbers), GFN1_XTB)
     ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
 
     # Build cache and use it for energy calculation

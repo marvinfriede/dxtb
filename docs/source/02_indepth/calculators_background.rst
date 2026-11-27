@@ -45,3 +45,11 @@ Vibrational Analysis
 .. automodule:: dxtb._src.calculators.properties.vibration.result
    :members:
    :show-inheritance:
+
+
+Functional System Properties
+----------------------------
+
+.. automodule:: dxtb._src.calculators.properties.functional
+   :members:
+   :show-inheritance:

@@ -6,6 +6,9 @@ Types of Calculators
 .. toctree::
    :maxdepth: 1
 
+   Model <../_autosummary/dxtb.calculators.Model>
+   System <../_autosummary/dxtb.calculators.System>
+   Result <../_autosummary/dxtb.Result>
    Basic Energy Calculator <../_autosummary/dxtb.calculators.EnergyCalculator>
    Autograd Calculator <../_autosummary/dxtb.calculators.AutogradCalculator>
    Numerical Calculator <../_autosummary/dxtb.calculators.NumericalCalculator>
@@ -15,5 +18,3 @@ Types of Calculators
 
 .. automodule:: dxtb._src.calculators.types
    :no-index:
-   :undoc-members:
-   :show-inheritance:

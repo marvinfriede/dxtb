@@ -50,8 +50,8 @@ It is recommended to always pass the :class:`~torch.dtype` and
     print(calc.device)  # Expected output: cpu
     print(calc.dtype)  # Expected output: torch.float64
 
-The :class:`~torch.dtype` and :class:`~torch.device` can be conveniently
-changed after instantiation in the same way as for any other PyTorch tensor.
+The floating-point :class:`~torch.dtype` can be changed after instantiation
+using :meth:`~dxtb.Calculator.type`.
 
 .. code-block:: python
 
@@ -97,7 +97,7 @@ Calculators: Get Properties
 
 The calculator can be used to compute energies, forces, dipole moments and
 other properties. The properties are computed by calling the respective
-:meth:`get_<property>` method, just as in
+``get_<property>`` method, just as in
 `ASE <https://wiki.fysik.dtu.dk/ase/>`_.
 
 Depending on which calculator you choose, the properties are calculated using

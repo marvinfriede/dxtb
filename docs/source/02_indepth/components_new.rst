@@ -4,9 +4,9 @@ Creating New Components
 =======================
 
 ``dxtb`` supports both custom **classical** contributions (geometry-dependent,
-density-independent energy terms) and custom self-consistent **interactions**
+SCF-charge-independent energy terms) and custom self-consistent **interactions**
 (charge- or multipole-dependent terms coupled into the SCF cycle). Custom
-components can be passed to :class:`~dxtb._src.calculators.model.Model` or
+components can be passed to :class:`~dxtb.calculators.Model` or
 :class:`~dxtb.Calculator`, including direct subclasses of
 :class:`~dxtb.components.base.Classical` /
 :class:`~dxtb.components.base.Interaction` as well as
@@ -16,7 +16,8 @@ subclasses of built-in components.
 
    Uniform external electric fields and electric field gradients are evaluation
    inputs rather than setup-time components: pass ``field=`` or ``field_grad=``
-   to :meth:`System.singlepoint` or :meth:`Calculator.singlepoint`.
+   to :meth:`~dxtb.calculators.System.singlepoint` or
+   :meth:`~dxtb.Calculator.singlepoint`.
 
 
 Custom Classical Components
@@ -27,10 +28,12 @@ A custom classical contribution inherits from
 
 1. :meth:`~dxtb.components.base.Classical.get_cache`: builds
    composition-dependent setup data from ``numbers`` and
-   :class:`~dxtb.IndexHelper` during :meth:`Model.setup`.
+   :class:`~dxtb.IndexHelper` during :meth:`~dxtb.calculators.Model.setup`.
 2. :meth:`~dxtb.components.base.Classical.get_energy`: evaluates
    atom-resolved energies of shape ``(..., nat)`` from ``positions`` (shape
-   ``(..., nat, 3)``) and the setup cache.
+   ``(..., nat, 3)``) and the setup cache. Single-system evaluation forwards the
+   total molecular charge via ``charge=charge``, so ``get_energy`` should accept
+   ``charge: Tensor | None = None`` or ``**kwargs: Any``.
 
 .. code-block:: python
 
@@ -131,7 +134,13 @@ Each potential hook must return the partial derivative
 :math:`\partial E_{\text{int}} / \partial q` of the corresponding energy hook
 so that the variational SCF fixed point and implicit differentiation
 (``differentiation="implicit"``) remain consistent with unrolled differentiation
-(``differentiation="unrolled"``).
+(``differentiation="unrolled"``). Monopole hooks may omit ``qdp`` and ``qqp``
+from their signatures when unused; overriding dipole or quadrupole hooks
+automatically promotes the integral level when ``auto_int_level=True``.
+Non-``keep_dtype`` floating-point tensor leaves on a custom interaction or its
+cache must match the active SCF floating ``dtype``. Unlike classical setups,
+:meth:`~dxtb.components.base.Interaction.get_cache` is geometry-dependent and is
+evaluated fresh on each singlepoint call.
 
 .. code-block:: python
 
@@ -225,45 +234,69 @@ so that the variational SCF fixed point and implicit differentiation
 Transforms, ``vmap``, and Differentiation
 -----------------------------------------
 
-- **Unique interaction labels**: Distinct :class:`~dxtb.components.base.Interaction`
-  instances in a single ``System`` or ``Calculator`` (including ``batch_mode=1``
-  padded batches and ``batch_mode=2`` conformer batches) must have unique
-  ``label`` strings so their per-geometry SCF caches remain unambiguous.
-  Duplicate interaction labels raise :class:`ValueError`.
+- **Component labels**:
+  - *Interactions*: Distinct :class:`~dxtb.components.base.Interaction`
+    instances in a single ``System`` or ``Calculator`` (including
+    ``batch_mode=1`` padded batches and ``batch_mode=2`` conformer batches) must
+    have unique ``label`` strings so their per-geometry SCF caches remain
+    unambiguous; duplicate interaction labels raise :class:`ValueError`.
+  - *Classicals*: Reserved built-in classical labels (``Repulsion``,
+    ``ShortRangeBond``, ``DispersionD3``, ``DispersionD4``, ``IES``, ``Halogen``)
+    cannot be shared by distinct instances (:class:`ValueError`), and direct
+    single-``System`` :meth:`~dxtb.calculators.Model.setup` (``batch_mode=0``,
+    as well as initial 1D :class:`~dxtb.Calculator` setup) rejects duplicate
+    classical labels because ``System.classical_cache`` is label-keyed. Batched
+    ``Model.setup`` (``batch_mode=1`` or ``2``) and ``Calculator`` evaluations
+    support multiple custom :class:`~dxtb.components.base.Classical` instances
+    sharing a non-reserved ``label``: each component sees its real
+    ``self.label`` inside ``get_cache``, retains an independent setup snapshot
+    or core descriptor, and contributes a separate ``(label, energy)`` entry in
+    ``Result.classical``.
 - **Supported state, containers, and object-graph contract**: Custom components
   and their caches may store floating and integer/boolean PyTorch ``Tensor``
   leaves inside ``__slots__``, ``__dict__``, ``ComponentCache``,
-  :class:`~dxtb.typing.TensorLike`, ``tad_mctc.tree.Node``, ``tuple``,
+  :class:`~dxtb.typing.TensorLike`, ``tad_mctc.tree.Node`` (using ``child()``,
+  or ``child(keep_dtype=True)`` for fixed-precision tensors), ``tuple``,
   ``NamedTuple``, ``list``, ``dict``, mutable ``@dataclass`` instances, and
   ``@dataclass(frozen=True)`` instances whose ``init=False`` fields hold only
   non-tensor static metadata. Acyclic shared tensor and container references
-  (aliases) are preserved across ``.to()``, ``.type()``, and
-  ``Calculator.type()``. Cyclic component or cache object graphs are rejected
-  with :class:`ValueError`, and frozen dataclasses with tensor-valued
-  ``init=False`` fields are rejected with :class:`TypeError` (use an
-  ``init=True`` field, a mutable dataclass, a ``NamedTuple``, or
-  ``tad_mctc.tree.Node`` instead).
-- **Opaque external objects**: Arbitrary third-party or helper objects outside
-  the supported container types above remain opaque and are not recursively
-  traversed for dtype/device conversion or functional leaf extraction. Opaque
-  objects holding only non-tensor state are supported and route custom
-  components to independent (non-``vmap``) evaluation; opaque objects storing
-  any reachable PyTorch ``Tensor`` raise :class:`TypeError` so conversion and
-  SCF differentiation never silently skip active tensor parameters.
+  (aliases) are preserved across ``.to()``, ``.type()``, ``.reset()`` (for
+  direct component tensor leaves), and ``Calculator.type()``. Cyclic component
+  or cache object graphs raise :class:`ValueError`; frozen dataclasses with
+  tensor-valued ``init=False`` fields and ``Node`` instances storing tensors in
+  ``context()`` fields raise :class:`TypeError`. Subclasses with custom
+  ``.to()`` / ``.type()`` / ``_convert_child()`` overrides or helper
+  ``TensorLike`` objects are honored during conversion and routed to independent
+  (non-``vmap``) evaluation.
+- **Opaque external objects**: Arbitrary third-party objects and non-transparent
+  standard-library containers (such as ``set``, ``frozenset``,
+  ``collections.deque``, ``types.MappingProxyType``, and ``functools.partial``)
+  are not recursively traversed for dtype/device conversion or functional leaf
+  extraction. Opaque objects holding only non-tensor state are supported and
+  route custom components to independent evaluation; opaque objects storing any
+  reachable PyTorch ``Tensor`` raise :class:`TypeError` (and cyclic graphs raise
+  :class:`ValueError`) so conversion and SCF differentiation never silently skip
+  active tensor parameters.
 - **Hook purity and automatic ``vmap`` fallback**: ``get_cache``,
   ``get_energy``, and interaction potential/energy hooks must be pure functions
-  of their arguments and component tensors without mutating component or cache
-  state. Components holding non-tensor opaque objects are routed directly to
-  independent per-lane evaluation. Tensor-only custom components that hit a
-  genuine PyTorch ``vmap`` operator limitation (such as ``.item()`` or
-  data-dependent host branching) automatically fall back to independent
-  evaluation provided neither component nor cache state was mutated during the
-  mapped attempt; mutating state during a failed mapped attempt raises
-  :class:`RuntimeError`.
+  of their arguments and component tensors without mutating component state,
+  cache state, ``numbers``, or ``ihelp`` (mutating ``numbers`` or ``ihelp`` in
+  place raises :class:`ValueError`). Components holding non-tensor opaque
+  objects are routed directly to independent per-lane evaluation. Tensor-only
+  custom components that hit a genuine PyTorch ``vmap`` operator limitation
+  (such as ``.item()`` or data-dependent host branching) automatically fall back
+  to independent evaluation provided neither component nor cache state was
+  mutated during the mapped attempt; mutating state during a failed mapped
+  attempt raises :class:`RuntimeError`. Unrelated user exceptions propagate
+  unmodified, and lane evaluation errors carry ``exc.source_id`` identifying the
+  failing source lane.
 - **Differentiation and mutation invalidation**: Tensor parameters stored in
   supported containers on a component or its cache participate in autograd
   under both ``differentiation="unrolled"`` and ``differentiation="implicit"``.
   Any between-call change to a custom ``Classical``'s (or its captured
   cache's) tensor or non-tensor attributes invalidates that term's captured
   setup and triggers a fresh ``get_cache`` call on the next evaluation without
-  discarding unrelated built-in setups.
+  discarding unrelated built-in setups. This invalidation is preserved across
+  ``Calculator.type(dtype)`` and call-local dtype conversion so stale caches are
+  purged rather than revalidated, while unmutated custom caches convert in
+  lockstep with their components.

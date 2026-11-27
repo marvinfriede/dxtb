@@ -20,7 +20,7 @@ For an alternative implementation with a strong focus on library use, interfacin
 PyTorch Autodiff Projects
 -------------------------
 
-All PyTorch-based re-implementations required for *dxtb* can be found as standalone libraries at `tad-mctc <https://github.com/tad-mctc>`__.
+Related PyTorch-based libraries in the `tad-mctc <https://github.com/tad-mctc>`__ ecosystem (note that DFT-D3/D4 dispersion in *dxtb* is now provided by the bundled ``tad_dftd`` package, and ``tad-libcint`` is an optional Linux integral backend):
 
 `tad-mctc <https://github.com/tad-mctc/tad-mctc>`__:
   PyTorch Autodiff Utility Library

@@ -48,7 +48,7 @@ main configuration class. The maximum number of SCF iterations is passed to the
 
 For all available options, see the documentation of the configuration classes.
 The defaults for the configuration classes can be found there. Additionally,
-the defaults are stored in :mod:`~dxtb._src.constants.defaults`.
+the defaults are stored in ``dxtb._src.constants.defaults``.
 
 Verbosity
 ---------

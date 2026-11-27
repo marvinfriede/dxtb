@@ -1,8 +1,10 @@
 # Transform-Compatible SCF Early Stopping for Higher-Order Derivatives
 
 *   **Author**: marvinfriede
-*   **Status**: Draft
+*   **Status**: Implemented (`448a8f70`)
 *   **Date**: 2026-11-12
+
+> **Implementation note**: All phases in this design were implemented in commit `448a8f70`. The problem statement below records the pre-`448a8f70` baseline that motivated the change.
 
 --------------------------------------------------------------------------------
 

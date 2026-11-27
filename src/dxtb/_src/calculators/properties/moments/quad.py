@@ -20,8 +20,9 @@ Properties: Quadrupole Moment
 
 Analytical calculation of the traceless quadrupole moment.
 
-This module serves more as a short-cut for the calculation in
-:class:`~dxtb.calculator.Calculator`, hiding some implementation details.
+Standalone analytical calculation of the traceless quadrupole moment from
+multipole charges (note that :meth:`~dxtb.Calculator.quadrupole` evaluates the
+field-gradient energy derivative ``-3 dE / dG``).
 """
 
 from __future__ import annotations

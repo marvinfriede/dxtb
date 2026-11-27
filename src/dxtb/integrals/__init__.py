@@ -24,10 +24,10 @@ Stateless shortcut functions for the integral matrices of a Structure, see
 For the GFNn-xTB family of methods, only two-center one-electron integrals
 are required.
 
-- GFN1-xTB: Overlap Integral
+- GFN0-xTB / GFN1-xTB: Overlap Integral
 - GFN2-xTB: Overlap, Dipole, and Quadrupole Integral
 
-Fundametally, there are two drivers (backends) for the integral computation:
+Fundamentally, there are two drivers (backends) for the integral computation:
 
 - *PyTorch*: pure PyTorch implementation, overlap, dipole and quadrupole
   integrals with derivatives of any order
