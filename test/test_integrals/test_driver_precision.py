@@ -30,6 +30,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import torch
+from tad_mctc import Structure
 
 from dxtb import GFN1_XTB as par
 from dxtb._src.constants.labels import (
@@ -67,9 +68,15 @@ def test_overlap_matches_libcint(name: str) -> None:
     numbers = sample["numbers"].to(DEVICE)
     positions = sample["positions"].to(**dd)
 
-    s_lib = overlap(numbers, positions, par, driver=INTDRIVER_LIBCINT).to(
-        DEVICE
+    s_lib = overlap(
+        Structure(numbers=numbers, positions=positions),
+        par,
+        driver=INTDRIVER_LIBCINT,
+    ).to(DEVICE)
+    s_pt = overlap(
+        Structure(numbers=numbers, positions=positions),
+        par,
+        driver=INTDRIVER_PYTORCH,
     )
-    s_pt = overlap(numbers, positions, par, driver=INTDRIVER_PYTORCH)
 
     assert torch.allclose(s_pt, s_lib, atol=1e-12, rtol=0.0)

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+from tad_mctc import Structure
 from tad_mctc.convert import str_to_device
 
 from dxtb import GFN1_XTB, IndexHelper
@@ -259,9 +260,15 @@ def test_non_valence_orthogonalization_is_metadata_independent() -> None:
     assert setup.backend is not None
 
     s_ref = overlap(
-        numbers, positions, GFN1_XTB, driver=labels.INTDRIVER_PYTORCH
+        Structure(numbers=numbers, positions=positions),
+        GFN1_XTB,
+        driver=labels.INTDRIVER_PYTORCH,
     )
-    s_cus = overlap(numbers, positions, custom, driver=labels.INTDRIVER_PYTORCH)
+    s_cus = overlap(
+        Structure(numbers=numbers, positions=positions),
+        custom,
+        driver=labels.INTDRIVER_PYTORCH,
+    )
     torch.testing.assert_close(s_cus, s_ref, atol=0.0, rtol=0.0)
 
 
@@ -295,24 +302,42 @@ def test_basis_and_wrappers_honor_target_dtype_with_param_module() -> None:
         drivers.append(labels.INTDRIVER_LIBCINT)
     for drv in drivers:
         assert (
-            overlap(numbers, positions_f32, pm_f64, driver=drv).dtype
+            overlap(
+                Structure(numbers=numbers, positions=positions_f32),
+                pm_f64,
+                driver=drv,
+            ).dtype
             == torch.float32
         )
         assert (
-            dipint(numbers, positions_f32, pm_f64, driver=drv).dtype
+            dipint(
+                Structure(numbers=numbers, positions=positions_f32),
+                pm_f64,
+                driver=drv,
+            ).dtype
             == torch.float32
         )
         assert (
-            quadint(numbers, positions_f32, pm_f64, driver=drv).dtype
-            == torch.float32
-        )
-        assert (
-            hcore(numbers, positions_f32, pm_f64, charge=0.0, driver=drv).dtype
+            quadint(
+                Structure(numbers=numbers, positions=positions_f32),
+                pm_f64,
+                driver=drv,
+            ).dtype
             == torch.float32
         )
         assert (
             hcore(
-                numbers, positions_f32, pm_gfn0_f64, charge=0.0, driver=drv
+                Structure(numbers=numbers, positions=positions_f32),
+                pm_f64,
+                driver=drv,
+            ).dtype
+            == torch.float32
+        )
+        assert (
+            hcore(
+                Structure(numbers=numbers, positions=positions_f32),
+                pm_gfn0_f64,
+                driver=drv,
             ).dtype
             == torch.float32
         )

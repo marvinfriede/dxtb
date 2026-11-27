@@ -22,7 +22,7 @@ Simple integral interface. Can be helpful for testing.
 from pathlib import Path
 
 import torch
-from tad_mctc import read
+from tad_mctc import Structure, read
 
 from dxtb import GFN1_XTB
 from dxtb.integrals.wrappers import overlap
@@ -39,7 +39,7 @@ positions = torch.tensor(
     ]
 )
 
-s = overlap(numbers, positions, GFN1_XTB)
+s = overlap(Structure(numbers=numbers, positions=positions), GFN1_XTB)
 
 print(f"Overlap integral of SiH4 has shape: {s.shape}\n\n")
 
@@ -52,6 +52,6 @@ path = Path(__file__).resolve().parent / "molecules" / "lih.xyz"
 structure = read(path)
 numbers, positions = structure.numbers, structure.positions
 
-s = overlap(numbers, positions, GFN1_XTB)
+s = overlap(Structure(numbers=numbers, positions=positions), GFN1_XTB)
 print(f"Overlap integral of LiH has shape: {s.shape}\n")
 print("The overlap integral is:\n", s)

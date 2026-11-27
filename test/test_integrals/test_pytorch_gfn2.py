@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+from tad_mctc import Structure
 from tad_mctc.batch import pack
 
 from dxtb import GFN2_XTB, Calculator
@@ -105,8 +106,14 @@ def test_integral_wrappers() -> None:
     positions = samples["SiH4"]["positions"].to(**dd)
 
     for fn in (dipint, quadint):
-        ref = fn(numbers, positions, GFN2_XTB, driver=INTDRIVER_LIBCINT).to(
-            DEVICE
+        ref = fn(
+            Structure(numbers=numbers, positions=positions),
+            GFN2_XTB,
+            driver=INTDRIVER_LIBCINT,
+        ).to(DEVICE)
+        out = fn(
+            Structure(numbers=numbers, positions=positions),
+            GFN2_XTB,
+            driver=INTDRIVER_PYTORCH,
         )
-        out = fn(numbers, positions, GFN2_XTB, driver=INTDRIVER_PYTORCH)
         assert torch.allclose(out, ref, atol=1e-11)

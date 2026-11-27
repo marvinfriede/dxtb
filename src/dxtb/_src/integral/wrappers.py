@@ -19,7 +19,9 @@ Integrals: Wrappers/Shortcuts
 =============================
 
 Stateless convenience functions for the integral matrices of a Structure
-(or a padded batch of Structures).
+(or a padded batch of Structures). Every function takes a
+:class:`tad_mctc.Structure`; its ``uhf`` field does not enter the integrals,
+and periodic structures (``lattice`` set) are not supported.
 
 Conventions (the same for both drivers):
 
@@ -46,9 +48,11 @@ Example
 
 .. code-block:: python
 
-    from dxtb.integrals.wrappers import overlap, dipint, quadint
-    from dxtb import GFN1_XTB as par
     import torch
+    from tad_mctc import Structure
+
+    from dxtb import GFN1_XTB as par
+    from dxtb.integrals.wrappers import dipint, overlap, quadint
 
     numbers = torch.tensor([14, 1, 1, 1, 1])
     positions = torch.tensor([
@@ -58,20 +62,22 @@ Example
         [1.61768389755830, -1.61768389755830, 1.61768389755830],
         [-1.61768389755830, 1.61768389755830, 1.61768389755830],
     ])
+    structure = Structure(numbers=numbers, positions=positions)
 
-    s = overlap(numbers, positions, par)
+    s = overlap(structure, par)
     print(s.shape)  # Output: torch.Size([17, 17])
 
-    d = dipint(numbers, positions, par)
+    d = dipint(structure, par)
     print(d.shape)  # Output: torch.Size([3, 17, 17])
 
-    q = quadint(numbers, positions, par)
+    q = quadint(structure, par)
     print(q.shape)  # Output: torch.Size([9, 17, 17])
 """
 
 from __future__ import annotations
 
 import torch
+from tad_mctc import Structure
 from tad_mctc.batch import pack
 
 from dxtb import IndexHelper
@@ -97,8 +103,7 @@ _BUILDERS: dict[tuple[int, _Kind], Callable[..., Tensor]] = {
 
 
 def overlap(
-    numbers: Tensor,
-    positions: Tensor,
+    structure: Structure,
     par: Param | ParamModule,
     *,
     driver: int | None = None,
@@ -108,10 +113,9 @@ def overlap(
 
     Parameters
     ----------
-    numbers : Tensor
-        Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
-    positions : Tensor
-        Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
+    structure : Structure
+        One Structure or a padded batch of Structures. Padding atoms (atomic
+        number zero) may sit anywhere in a Lane.
     par : Param | ParamModule
         Parametrization of an extended tight-binding (xTB) Method.
     driver : int | None, optional
@@ -123,13 +127,20 @@ def overlap(
     -------
     Tensor
         Overlap matrix of shape ``(..., nao, nao)``.
+
+    Raises
+    ------
+    TypeError
+        ``structure`` is not a :class:`tad_mctc.Structure`.
+    ValueError
+        Unknown driver, periodic structure, or invalid atomic numbers or
+        positions.
     """
-    return _integral("overlap", numbers, positions, par, driver)
+    return _integral("overlap", structure, par, driver)
 
 
 def dipint(
-    numbers: Tensor,
-    positions: Tensor,
+    structure: Structure,
     par: Param | ParamModule,
     *,
     driver: int | None = None,
@@ -144,12 +155,11 @@ def dipint(
     Tensor
         Dipole integral of shape ``(..., 3, nao, nao)``.
     """
-    return _integral("dipole", numbers, positions, par, driver)
+    return _integral("dipole", structure, par, driver)
 
 
 def quadint(
-    numbers: Tensor,
-    positions: Tensor,
+    structure: Structure,
     par: Param | ParamModule,
     *,
     driver: int | None = None,
@@ -164,14 +174,12 @@ def quadint(
     Tensor
         Quadrupole integral of shape ``(..., 9, nao, nao)``.
     """
-    return _integral("quadrupole", numbers, positions, par, driver)
+    return _integral("quadrupole", structure, par, driver)
 
 
 def hcore(
-    numbers: Tensor,
-    positions: Tensor,
+    structure: Structure,
     par: Param | ParamModule,
-    charge: Tensor | float | int | None = None,
     *,
     driver: int | None = None,
 ) -> Tensor:
@@ -180,14 +188,11 @@ def hcore(
 
     Parameters
     ----------
-    numbers : Tensor
-        Atomic numbers for all atoms in the Structure (shape: ``(nat,)``).
-    positions : Tensor
-        Cartesian coordinates of all atoms (shape: ``(nat, 3)``).
+    structure : Structure
+        One unbatched Structure. Its total charge enters GFN0-xTB; an unset
+        charge means neutral.
     par : Param | ParamModule
         Parametrization of an extended tight-binding (xTB) Method.
-    charge : Tensor | float | int | None, optional
-        Total charge (required by GFN0-xTB).
     driver : int | None, optional
         Integral driver of the overlap (see :func:`overlap`).
 
@@ -199,56 +204,50 @@ def hcore(
     # pylint: disable=import-outside-toplevel
     from dxtb._src.xtb.h0 import build_hcore, setup_h0
 
-    _validate_inputs(numbers, positions, allow_batch=False)
-    numbers, positions = _extract_active_atoms(numbers, positions)
+    _validate_structure(structure, allow_batch=False)
+    numbers, positions = _extract_active_atoms(
+        structure.numbers, structure.positions
+    )
+    # an unset charge means neutral, as everywhere for a Structure
+    charge = 0 if structure.charge is None else structure.charge
 
     dd: DD = {"device": positions.device, "dtype": positions.dtype}
-    if numbers.device != positions.device:
-        numbers = numbers.to(device=positions.device)
     pm = par if isinstance(par, ParamModule) else ParamModule(par, **dd)
     ihelp = IndexHelper.from_numbers(numbers, pm)
     # set up H0 first: it validates the method name of the parametrization
     setup = setup_h0(numbers, pm, ihelp, **dd).to(**dd)
-    s = overlap(numbers, positions, pm, driver=driver)
+    s = overlap(structure, pm, driver=driver)
     return build_hcore(setup, positions, s.to(**dd), charge)[0]
 
 
-def _validate_inputs(
-    numbers: Tensor, positions: Tensor, *, allow_batch: bool
-) -> None:
-    """Validate atomic numbers and Cartesian coordinates for integral wrappers."""
-    if not isinstance(numbers, Tensor) or not isinstance(positions, Tensor):
-        raise ValueError(
-            "numbers and positions must be torch.Tensor instances."
+def _validate_structure(structure: Structure, *, allow_batch: bool) -> None:
+    """
+    Check what the wrappers need beyond the checks run by ``Structure``
+    itself (integer numbers, matching shapes, one device).
+    """
+    if not isinstance(structure, Structure):
+        raise TypeError(
+            "The integral wrappers take a tad_mctc.Structure, got "
+            f"{type(structure).__name__}. Use "
+            "Structure(numbers=numbers, positions=positions)."
         )
-    if (
-        numbers.is_floating_point()
-        or numbers.is_complex()
-        or numbers.dtype == torch.bool
-    ):
-        raise ValueError(
-            f"numbers must have an integer dtype, got {numbers.dtype}."
-        )
+    if structure.lattice is not None:
+        raise ValueError("Periodic structures are not supported.")
+
+    numbers, positions = structure.numbers, structure.positions
     if not positions.is_floating_point():
         raise ValueError(
             f"positions must have a floating-point dtype, got {positions.dtype}."
         )
-    allowed_ndims = (1, 2) if allow_batch else (1,)
-    if numbers.ndim not in allowed_ndims:
-        expected = "1D or 2D" if allow_batch else "1D"
+    if positions.shape[-1] != 3:
         raise ValueError(
-            f"Expected {expected} atomic numbers tensor, "
-            f"got shape {tuple(numbers.shape)}."
-        )
-    if (
-        positions.ndim != numbers.ndim + 1
-        or positions.shape[:-1] != numbers.shape
-        or positions.shape[-1] != 3
-    ):
-        raise ValueError(
-            "Expected positions of shape (*numbers.shape, 3) matching "
-            f"numbers shape {tuple(numbers.shape)}, "
+            "Expected positions of shape (..., nat, 3), "
             f"got {tuple(positions.shape)}."
+        )
+    if not allow_batch and numbers.ndim != 1:
+        raise ValueError(
+            f"Expected an unbatched Structure, got atomic numbers of shape "
+            f"{tuple(numbers.shape)}."
         )
     if numbers.numel() == 0:
         raise ValueError("Atomic numbers tensor must not be empty.")
@@ -272,8 +271,7 @@ def _extract_active_atoms(
 
 def _integral(
     kind: _Kind,
-    numbers: Tensor,
-    positions: Tensor,
+    structure: Structure,
     par: Param | ParamModule,
     driver: int | None,
 ) -> Tensor:
@@ -290,7 +288,8 @@ def _integral(
     if driver not in (labels.INTDRIVER_LIBCINT, labels.INTDRIVER_PYTORCH):
         raise ValueError(f"Unknown integral driver '{driver}'.")
 
-    _validate_inputs(numbers, positions, allow_batch=True)
+    _validate_structure(structure, allow_batch=True)
+    numbers, positions = structure.numbers, structure.positions
 
     dd: DD = {"device": positions.device, "dtype": positions.dtype}
     pm = par if isinstance(par, ParamModule) else ParamModule(par, **dd)

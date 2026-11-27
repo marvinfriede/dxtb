@@ -40,6 +40,7 @@ import math
 import numpy as np
 import pytest
 import torch
+from tad_mctc import Structure
 from scipy.special import factorial2
 
 from dxtb import GFN1_XTB as par
@@ -140,9 +141,11 @@ def test_overlap_matches_pyscf_after_ao_reorder(name: str) -> None:
     mol = _build_pyscf_mol(numbers, positions)
     s_pyscf = mol.intor("int1e_ovlp")
 
-    s_lib = overlap(numbers, positions, par, driver=INTDRIVER_LIBCINT).to(
-        DEVICE
-    )
+    s_lib = overlap(
+        Structure(numbers=numbers, positions=positions),
+        par,
+        driver=INTDRIVER_LIBCINT,
+    ).to(DEVICE)
     s_lib = s_lib.detach().cpu().numpy()
 
     ihelp = IndexHelper.from_numbers(numbers.cpu(), par)
@@ -188,10 +191,16 @@ def test_pytorch_matches_libcint_and_pyscf() -> None:
     s_pyscf = torch.from_numpy(mol.intor("int1e_ovlp")).to(**dd)
     s_pyscf_reordered = p @ s_pyscf @ p.mT
 
-    s_pt = overlap(numbers, positions, par, driver=INTDRIVER_PYTORCH)
-    s_lib = overlap(numbers, positions, par, driver=INTDRIVER_LIBCINT).to(
-        DEVICE
+    s_pt = overlap(
+        Structure(numbers=numbers, positions=positions),
+        par,
+        driver=INTDRIVER_PYTORCH,
     )
+    s_lib = overlap(
+        Structure(numbers=numbers, positions=positions),
+        par,
+        driver=INTDRIVER_LIBCINT,
+    ).to(DEVICE)
     # tad-libcint 0.4 and the PyTorch backend both use py, pz, px. Only the
     # PySCF reference uses px, py, pz and receives this permutation.
     s_lib_reordered = s_lib

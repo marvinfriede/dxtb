@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+from tad_mctc import Structure
 from tad_mctc.convert import symbol_to_number
 
 from dxtb import GFN1_XTB, Calculator
@@ -68,7 +69,7 @@ def test_symmetric_inverse_sqrt_orthogonality(dtype: torch.dtype) -> None:
     numbers = sample["numbers"].to(device=DEVICE)
     positions = sample["positions"].to(**dd)
 
-    s = overlap(numbers, positions, GFN1_XTB)
+    s = overlap(Structure(numbers=numbers, positions=positions), GFN1_XTB)
     x = scf_data._symmetric_inverse_sqrt(s)
     assert x.dtype == dtype
 

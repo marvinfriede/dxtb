@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+from tad_mctc import Structure
 from torch.func import jacfwd, jacrev
 
 from dxtb import GFN1_XTB as par
@@ -94,9 +95,11 @@ def test_matches_libcint(name: str, algorithm: str) -> None:
         ("dipole", dipint),
         ("quadrupole", quadint),
     ):
-        ref = ref_fn(numbers, positions, par, driver=INTDRIVER_LIBCINT).to(
-            DEVICE
-        )
+        ref = ref_fn(
+            Structure(numbers=numbers, positions=positions),
+            par,
+            driver=INTDRIVER_LIBCINT,
+        ).to(DEVICE)
         if kind == "overlap":
             ref = ref.unsqueeze(0)
 

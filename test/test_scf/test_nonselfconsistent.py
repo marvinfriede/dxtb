@@ -24,6 +24,7 @@ from unittest.mock import patch
 
 import pytest
 import torch
+from tad_mctc import Structure
 from tad_mctc.batch import pack
 
 from dxtb import IndexHelper, labels
@@ -68,8 +69,7 @@ def build_problem(
         dtype=torch.float64,
     )
     ovlp = overlap(
-        numbers,
-        positions,
+        Structure(numbers=numbers, positions=positions),
         GFN0_XTB,
         driver=labels.INTDRIVER_PYTORCH,
     )
@@ -226,8 +226,7 @@ def test_gfn0_generalized_eigensolve_has_position_gradient() -> None:
     _, numbers, positions, ihelp, h0_setup, _ = build_problem("H2O")
     positions = positions.detach().clone().requires_grad_()
     overlap_matrix = overlap(
-        numbers,
-        positions,
+        Structure(numbers=numbers, positions=positions),
         GFN0_XTB,
         driver=labels.INTDRIVER_PYTORCH,
     )
@@ -289,8 +288,7 @@ def test_heterogeneous_batch_matches_separate_solves() -> None:
         dtype=torch.float64,
     )
     ovlp = overlap(
-        numbers,
-        positions,
+        Structure(numbers=numbers, positions=positions),
         GFN0_XTB,
         driver=labels.INTDRIVER_PYTORCH,
     )

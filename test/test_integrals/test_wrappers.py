@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+from tad_mctc import Structure
 
 from dxtb import GFN1_XTB, GFN2_XTB, Param
 from dxtb._src.constants import labels
@@ -51,158 +52,133 @@ h2o_positions = torch.tensor(
 )
 
 
+sih4 = Structure(numbers=numbers, positions=positions)
+h2o = Structure(numbers=h2o_numbers, positions=h2o_positions)
+
+
 @pytest.mark.parametrize("par", [GFN1_XTB, GFN2_XTB])
 def test_fail(par: Param) -> None:
     """Invalid parametrization metadata and unknown drivers raise ValueError."""
     with pytest.raises(ValueError):
         _par = par.model_copy(deep=True)
         _par.meta = None
-        wrappers.hcore(numbers, positions, _par)
+        wrappers.hcore(sih4, _par)
 
     with pytest.raises(ValueError):
         _par = par.model_copy(deep=True)
         assert _par.meta is not None
 
         _par.meta.name = None
-        wrappers.hcore(numbers, positions, _par)
+        wrappers.hcore(sih4, _par)
 
     with pytest.raises(ValueError):
         _par = par.model_copy(deep=True)
         assert _par.meta is not None
 
         _par.meta.name = "fail"
-        wrappers.hcore(numbers, positions, _par)
+        wrappers.hcore(sih4, _par)
 
     with pytest.raises(ValueError):
-        wrappers.overlap(numbers, positions, par, driver=-1)
+        wrappers.overlap(sih4, par, driver=-1)
+
+
+@pytest.mark.parametrize(
+    "fn", [wrappers.overlap, wrappers.dipint, wrappers.quadint, wrappers.hcore]
+)
+def test_input_validation_errors(fn) -> None:
+    """
+    Inputs that ``Structure`` itself accepts but the wrappers cannot handle
+    fail explicitly. Mismatched shapes are rejected by ``Structure``.
+    """
+    driver = labels.INTDRIVER_PYTORCH
+
+    # Plain tensors instead of a Structure
+    with pytest.raises(TypeError, match="tad_mctc.Structure"):
+        fn(h2o_numbers, GFN1_XTB, driver=driver)
+
+    # Periodic structure
+    periodic = Structure(
+        numbers=h2o_numbers,
+        positions=h2o_positions,
+        lattice=10.0 * torch.eye(3, dtype=torch.float64),
+    )
+    with pytest.raises(ValueError, match="Periodic"):
+        fn(periodic, GFN1_XTB, driver=driver)
+
+    # Wrong coordinate dimension
+    flat = Structure(numbers=h2o_numbers, positions=h2o_positions[:, :2])
+    with pytest.raises(ValueError, match="Expected positions of shape"):
+        fn(flat, GFN1_XTB, driver=driver)
+
+    # Negative atomic number
+    negative = Structure(
+        numbers=torch.tensor([8, -1, 1]), positions=h2o_positions
+    )
+    with pytest.raises(ValueError, match="non-negative"):
+        fn(negative, GFN1_XTB, driver=driver)
 
 
 @pytest.mark.parametrize(
     "fn", [wrappers.overlap, wrappers.dipint, wrappers.quadint]
 )
-def test_batch_input_validation_errors(fn) -> None:
-    """Incompatible batch/atom shapes and invalid atomic numbers fail explicitly."""
-    # Mismatched batch dimension (must not silently truncate via zip)
-    with pytest.raises(ValueError, match="Expected positions of shape"):
-        fn(
-            torch.stack([h2o_numbers, h2o_numbers]),
-            torch.stack([h2o_positions, h2o_positions, h2o_positions]),
-            GFN1_XTB,
-            driver=labels.INTDRIVER_PYTORCH,
-        )
-
-    # Mismatched atom dimension (must not silently slice positions)
-    with pytest.raises(ValueError, match="Expected positions of shape"):
-        fn(
-            torch.stack([h2o_numbers, h2o_numbers]),
-            torch.zeros((2, 4, 3), dtype=torch.float64),
-            GFN1_XTB,
-            driver=labels.INTDRIVER_PYTORCH,
-        )
-
-    # Mismatched single-structure atom count
-    with pytest.raises(ValueError, match="Expected positions of shape"):
-        fn(
-            h2o_numbers,
-            positions,
-            GFN1_XTB,
-            driver=labels.INTDRIVER_PYTORCH,
-        )
-
-    # Wrong coordinate dimension
-    with pytest.raises(ValueError, match="Expected positions of shape"):
-        fn(
-            h2o_numbers,
-            h2o_positions[:, :2],
-            GFN1_XTB,
-            driver=labels.INTDRIVER_PYTORCH,
-        )
-
-    # Unsupported 3D atomic numbers tensor
-    with pytest.raises(ValueError, match="Expected 1D or 2D"):
-        fn(
-            h2o_numbers.unsqueeze(0).unsqueeze(0),
-            h2o_positions.unsqueeze(0).unsqueeze(0),
-            GFN1_XTB,
-            driver=labels.INTDRIVER_PYTORCH,
-        )
-
-    # Negative atomic number
-    with pytest.raises(ValueError, match="non-negative"):
-        fn(
-            torch.tensor([8, -1, 1]),
-            h2o_positions,
-            GFN1_XTB,
-            driver=labels.INTDRIVER_PYTORCH,
-        )
-
-    # All-zero padding lane in batch
+def test_all_padding_lane_fails(fn) -> None:
+    """A batch Lane made only of Padding raises instead of an empty matrix."""
+    batch = Structure(
+        numbers=torch.tensor([[8, 1, 1], [0, 0, 0]]),
+        positions=torch.stack([h2o_positions, torch.zeros_like(h2o_positions)]),
+    )
     with pytest.raises(ValueError, match="at least one positive"):
-        fn(
-            torch.tensor([[8, 1, 1], [0, 0, 0]]),
-            torch.stack([h2o_positions, torch.zeros_like(h2o_positions)]),
-            GFN1_XTB,
-            driver=labels.INTDRIVER_PYTORCH,
-        )
+        fn(batch, GFN1_XTB, driver=labels.INTDRIVER_PYTORCH)
 
 
-def test_hcore_rejects_batched_or_mismatched_inputs() -> None:
-    """hcore validates single-structure layout and matching coordinates."""
-    with pytest.raises(ValueError, match="Expected 1D"):
-        wrappers.hcore(
-            torch.stack([h2o_numbers, h2o_numbers]),
-            torch.stack([h2o_positions, h2o_positions]),
-            GFN1_XTB,
-            driver=labels.INTDRIVER_PYTORCH,
-        )
-
-    with pytest.raises(ValueError, match="Expected positions of shape"):
-        wrappers.hcore(
-            h2o_numbers,
-            positions,
-            GFN1_XTB,
-            driver=labels.INTDRIVER_PYTORCH,
-        )
+def test_hcore_rejects_batch() -> None:
+    """hcore takes one unbatched Structure."""
+    batch = Structure(
+        numbers=torch.stack([h2o_numbers, h2o_numbers]),
+        positions=torch.stack([h2o_positions, h2o_positions]),
+    )
+    with pytest.raises(ValueError, match="unbatched"):
+        wrappers.hcore(batch, GFN1_XTB, driver=labels.INTDRIVER_PYTORCH)
 
 
 def test_h0_gfn1() -> None:
     """Single-structure GFN1-xTB core Hamiltonian shape."""
-    h0 = wrappers.hcore(numbers, positions, GFN1_XTB)
+    h0 = wrappers.hcore(sih4, GFN1_XTB)
     assert h0.shape == (17, 17)
 
 
 def test_h0_gfn2() -> None:
     """Single-structure GFN2-xTB core Hamiltonian shape."""
-    h0 = wrappers.hcore(numbers, positions, GFN2_XTB)
+    h0 = wrappers.hcore(sih4, GFN2_XTB)
     assert h0.shape == (13, 13)
 
 
 def test_overlap() -> None:
     """Single-structure overlap matrix shapes for GFN1 and GFN2."""
-    s = wrappers.overlap(numbers, positions, GFN1_XTB)
+    s = wrappers.overlap(sih4, GFN1_XTB)
     assert s.shape == (17, 17)
 
-    s = wrappers.overlap(numbers, positions, GFN2_XTB)
+    s = wrappers.overlap(sih4, GFN2_XTB)
     assert s.shape == (13, 13)
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 def test_dipole() -> None:
     """Single-structure dipole integral shapes for GFN1 and GFN2."""
-    s = wrappers.dipint(numbers, positions, GFN1_XTB)
+    s = wrappers.dipint(sih4, GFN1_XTB)
     assert s.shape == (3, 17, 17)
 
-    s = wrappers.dipint(numbers, positions, GFN2_XTB)
+    s = wrappers.dipint(sih4, GFN2_XTB)
     assert s.shape == (3, 13, 13)
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
 def test_quad() -> None:
     """Single-structure quadrupole integral shapes for GFN1 and GFN2."""
-    s = wrappers.quadint(numbers, positions, GFN1_XTB)
+    s = wrappers.quadint(sih4, GFN1_XTB)
     assert s.shape == (9, 17, 17)
 
-    s = wrappers.quadint(numbers, positions, GFN2_XTB)
+    s = wrappers.quadint(sih4, GFN2_XTB)
     assert s.shape == (9, 13, 13)
 
 
@@ -264,9 +240,19 @@ def test_trailing_and_noncontiguous_padding_batch_agreement_and_grad(
     sih4_pos = positions.clone().requires_grad_(True)
     h2o_pos = h2o_positions.clone().requires_grad_(True)
 
-    ref_sih4 = fn(numbers, sih4_pos, GFN2_XTB, driver=driver)
-    ref_h2o = fn(h2o_numbers, h2o_pos, GFN2_XTB, driver=driver)
-    out_batch = fn(batch_numbers, batch_pos, GFN2_XTB, driver=driver)
+    ref_sih4 = fn(
+        Structure(numbers=numbers, positions=sih4_pos), GFN2_XTB, driver=driver
+    )
+    ref_h2o = fn(
+        Structure(numbers=h2o_numbers, positions=h2o_pos),
+        GFN2_XTB,
+        driver=driver,
+    )
+    out_batch = fn(
+        Structure(numbers=batch_numbers, positions=batch_pos),
+        GFN2_XTB,
+        driver=driver,
+    )
 
     nao_sih4 = ref_sih4.shape[-1]
     nao_h2o = ref_h2o.shape[-1]
@@ -332,10 +318,14 @@ def test_hcore_noncontiguous_padding_and_grad() -> None:
     clean_pos = h2o_positions.clone().requires_grad_(True)
 
     h_pad = wrappers.hcore(
-        padded_numbers, padded_pos, GFN1_XTB, driver=labels.INTDRIVER_PYTORCH
+        Structure(numbers=padded_numbers, positions=padded_pos),
+        GFN1_XTB,
+        driver=labels.INTDRIVER_PYTORCH,
     )
     h_ref = wrappers.hcore(
-        h2o_numbers, clean_pos, GFN1_XTB, driver=labels.INTDRIVER_PYTORCH
+        Structure(numbers=h2o_numbers, positions=clean_pos),
+        GFN1_XTB,
+        driver=labels.INTDRIVER_PYTORCH,
     )
     torch.testing.assert_close(h_pad, h_ref, atol=1.0e-13, rtol=1.0e-13)
 
@@ -350,8 +340,7 @@ def test_hcore_noncontiguous_padding_and_grad() -> None:
 def test_normalization_origin_shift_and_quadrupole_ordering() -> None:
     """Verify unit diagonal, origin-centered multipoles, and 9-comp order."""
     s_norm = wrappers.overlap(
-        h2o_numbers,
-        h2o_positions,
+        h2o,
         GFN2_XTB,
         driver=labels.INTDRIVER_PYTORCH,
     )
@@ -363,15 +352,13 @@ def test_normalization_origin_shift_and_quadrupole_ordering() -> None:
     )
 
     d_norm = wrappers.dipint(
-        h2o_numbers,
-        h2o_positions,
+        h2o,
         GFN2_XTB,
         driver=labels.INTDRIVER_PYTORCH,
     )
 
     q_norm = wrappers.quadint(
-        h2o_numbers,
-        h2o_positions,
+        h2o,
         GFN2_XTB,
         driver=labels.INTDRIVER_PYTORCH,
     )
@@ -387,14 +374,12 @@ def test_normalization_origin_shift_and_quadrupole_ordering() -> None:
     shift = torch.tensor([0.35, -0.8, 1.15], dtype=torch.float64)
     shifted_pos = h2o_positions + shift
     d_shifted = wrappers.dipint(
-        h2o_numbers,
-        shifted_pos,
+        Structure(numbers=h2o_numbers, positions=shifted_pos),
         GFN2_XTB,
         driver=labels.INTDRIVER_PYTORCH,
     )
     q_shifted = wrappers.quadint(
-        h2o_numbers,
-        shifted_pos,
+        Structure(numbers=h2o_numbers, positions=shifted_pos),
         GFN2_XTB,
         driver=labels.INTDRIVER_PYTORCH,
     )
@@ -436,10 +421,14 @@ def test_pytorch_libcint_parity_and_first_derivative(
     pos_lc = mol_positions.clone().requires_grad_(True)
 
     out_pt = fn(
-        mol_numbers, pos_pt, GFN2_XTB, driver=labels.INTDRIVER_PYTORCH
+        Structure(numbers=mol_numbers, positions=pos_pt),
+        GFN2_XTB,
+        driver=labels.INTDRIVER_PYTORCH,
     )
     out_lc = fn(
-        mol_numbers, pos_lc, GFN2_XTB, driver=labels.INTDRIVER_LIBCINT
+        Structure(numbers=mol_numbers, positions=pos_lc),
+        GFN2_XTB,
+        driver=labels.INTDRIVER_LIBCINT,
     )
     torch.testing.assert_close(out_pt, out_lc, atol=1.0e-11, rtol=1.0e-11)
 

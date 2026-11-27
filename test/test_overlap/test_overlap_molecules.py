@@ -26,6 +26,7 @@ from math import sqrt
 import numpy as np
 import pytest
 import torch
+from tad_mctc import Structure
 from tad_mctc.batch import pack
 
 from dxtb import GFN1_XTB
@@ -58,7 +59,11 @@ def test_single(dtype: torch.dtype, name: str) -> None:
     s = calc_overlap(numbers, positions, GFN1_XTB, dd=dd)
 
     # convenience wrapper with defaults (but pytorch driver)
-    s2 = overlap(numbers, positions, GFN1_XTB, driver=INTDRIVER_PYTORCH)
+    s2 = overlap(
+        Structure(numbers=numbers, positions=positions),
+        GFN1_XTB,
+        driver=INTDRIVER_PYTORCH,
+    )
 
     assert pytest.approx(ref.cpu(), abs=tol) == s.cpu()
     assert pytest.approx(ref.cpu(), abs=tol) == s2.cpu()
