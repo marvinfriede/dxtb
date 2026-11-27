@@ -26,19 +26,17 @@ from tad_mctc.autograd import dgradcheck, dgradgradcheck
 from tad_mctc.batch import deflate, pack
 
 from dxtb import IndexHelper
-from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.libcint import (
     build_overlap as build_overlap_libcint,
 )
-from dxtb._src.integral.driver.libcint import setup_libcint
 from dxtb._src.typing import DD, Callable, Tensor
 
 if has_libcint is True:
     from dxtb._src.exlibs import libcint
 
 from ..conftest import DEVICE
-from ..utils import get_param_module
+from ..utils import get_param_module, libcint_setup, make_basis
 from .samples import samples
 
 sample_list = ["H2", "HHe", "LiH", "Li2", "S2", "H2O", "SiH4"]
@@ -59,8 +57,8 @@ def gradchecker(
 
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
-    bas = Basis(numbers, par, ihelp, **dd)
-    lc_setup = setup_libcint(bas.cpu())
+    bas = make_basis(numbers, par, ihelp, **dd)
+    lc_setup = libcint_setup(numbers, bas)
 
     # variables to be differentiated
     pos = positions.clone().requires_grad_(True)
@@ -131,7 +129,7 @@ def gradchecker_batch(
     for nums in numbers:
         nums = deflate(nums)
         ih = IndexHelper.from_numbers(nums, par)
-        setups.append(setup_libcint(Basis(nums, par, ih, **dd).cpu()))
+        setups.append(libcint_setup(nums, make_basis(nums, par, ih, **dd)))
 
     # variables to be differentiated
     pos = positions.clone().requires_grad_(True)

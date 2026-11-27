@@ -32,9 +32,7 @@ from tad_mctc.convert import numpy_to_tensor
 from tad_mctc.math import einsum
 
 from dxtb import IndexHelper
-from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint, has_pyscf
-from dxtb._src.integral.driver.libcint import setup_libcint
 from dxtb._src.typing import DD, Tensor
 
 if has_libcint is True:
@@ -43,7 +41,7 @@ if has_pyscf is True:
     from dxtb._src.exlibs.pyscf.mol import M
 
 from ..conftest import DEVICE
-from ..utils import get_param_module
+from ..utils import get_param_module, libcint_setup, make_basis
 from .ao_order import reorder_pyscf_ao
 from .samples import samples
 
@@ -111,8 +109,8 @@ def run_single(dtype: torch.dtype, name: str) -> None:
 
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
-    bas = Basis(numbers, par, ihelp, **dd)
-    libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(
+    bas = make_basis(numbers, par, ihelp, **dd)
+    libcint_basis, structure = libcint_setup(numbers, bas).create_libcint(
         positions
     )
 
@@ -185,8 +183,8 @@ def run_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
 
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
-    bas = Basis(numbers, par, ihelp, **dd)
-    libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(
+    bas = make_basis(numbers, par, ihelp, **dd)
+    libcint_basis, structure = libcint_setup(numbers, bas).create_libcint(
         positions
     )
 
@@ -253,8 +251,8 @@ def run_grad(dtype: torch.dtype, name: str) -> None:
 
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
-    bas = Basis(numbers, par, ihelp, **dd)
-    libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(
+    bas = make_basis(numbers, par, ihelp, **dd)
+    libcint_basis, structure = libcint_setup(numbers, bas).create_libcint(
         positions
     )
     int1 = libcint.int1e("ipovlp", libcint_basis, structure)

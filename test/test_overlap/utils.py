@@ -24,7 +24,6 @@ import torch
 from tad_mctc.batch import deflate, pack
 
 from dxtb import IndexHelper
-from dxtb._src.basis.bas import Basis
 from dxtb._src.integral.driver.pytorch import (
     PytorchIntegralSetup,
     build_overlap,
@@ -33,6 +32,8 @@ from dxtb._src.integral.driver.pytorch import (
 from dxtb._src.param import Param, ParamModule
 from dxtb._src.typing import DD, Tensor
 
+from ..utils import make_basis, pytorch_setup
+
 
 def overlap_setup(
     numbers: Tensor, par: Param | ParamModule, dd: DD
@@ -40,7 +41,7 @@ def overlap_setup(
     """PyTorch integral setup of a single Structure."""
     pm = par if isinstance(par, ParamModule) else ParamModule(par, **dd)
     ihelp = IndexHelper.from_numbers(numbers, pm)
-    return setup_integrals(Basis(numbers, pm, ihelp, **dd))
+    return pytorch_setup(make_basis(numbers, pm, ihelp, **dd))
 
 
 def calc_overlap(

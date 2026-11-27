@@ -27,11 +27,10 @@ import torch
 from tad_mctc.batch import pack
 
 from dxtb import GFN1_XTB, IndexHelper
-from dxtb._src.basis.bas import Basis
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
-from ..utils import get_param_module, load_from_npz, overlap_1d
+from ..utils import get_param_module, load_from_npz, make_basis, overlap_1d
 from .samples import samples
 from .utils import calc_overlap
 
@@ -101,7 +100,7 @@ def test_overlap_higher_orbitals(dtype: torch.dtype) -> None:
 
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(number, par)
-    bas = Basis(number, par, ihelp, **dd)
+    bas = make_basis(number, par, ihelp, **dd)
     expansion = bas.expand()
 
     ai = expansion.alphas[0]

@@ -301,7 +301,6 @@ class IndexHelper(Node):
         numbers: Tensor,
         par: Param | ParamModule,
         batch_mode: int | None = None,
-        move_to_numbers_device: bool = True,
     ) -> IndexHelper:
         """
         Construct an index helper instance from atomic numbers and a
@@ -327,11 +326,6 @@ class IndexHelper(Node):
             - 0: one Structure (no Batch)
             - 1: Padded batch
             - 2: Conformer batch
-        move_to_numbers_device : bool
-            Move the resulting tensors to the device of the ``numbers`` tensor.
-            This should be switched off for GPU calculations that use `libcint`
-            for integrals as the :class:`.IndexHelper` has to be on the CPU
-            for this step.
 
         Returns
         -------
@@ -345,7 +339,6 @@ class IndexHelper(Node):
             numbers,
             angular=get_elem_angular(par.element),
             batch_mode=batch_mode,
-            move_to_numbers_device=move_to_numbers_device,
         )
 
     @classmethod
@@ -354,7 +347,6 @@ class IndexHelper(Node):
         numbers: Tensor,
         angular: dict[int, list[int]],
         batch_mode: int | None = None,
-        move_to_numbers_device: bool = True,
     ) -> IndexHelper:
         """
         Construct an index helper instance from atomic numbers and their
@@ -382,11 +374,6 @@ class IndexHelper(Node):
             - 0: one Structure (no Batch)
             - 1: Padded batch
             - 2: Conformer batch
-        move_to_numbers_device : bool
-            Move the resulting tensors to the device of the ``numbers`` tensor.
-            This should be switched off for GPU calculations that use `libcint`
-            for integrals as the :class:`.IndexHelper` has to be on the CPU
-            for this step.
 
         Returns
         -------
@@ -394,7 +381,7 @@ class IndexHelper(Node):
             Instance of index helper for given basis set.
         """
         cpu = torch.device("cpu")
-        device = numbers.device if move_to_numbers_device else cpu
+        device = numbers.device
 
         # Ensure that all tensors are moved to CPU to avoid inefficient
         # memory transfers between devices (.item() and native for-loops).
@@ -1159,7 +1146,6 @@ class IndexHelperGFN1(IndexHelper):
         cls,
         numbers: Tensor,
         batch_mode: int | None = None,
-        move_to_numbers_device: bool = True,
     ) -> IndexHelper:
         """
         Construct an index helper instance from atomic numbers and their
@@ -1175,11 +1161,6 @@ class IndexHelperGFN1(IndexHelper):
             - 0: one Structure (no Batch)
             - 1: Padded batch
             - 2: Conformer batch
-        move_to_numbers_device : bool
-            Move the resulting tensors to the device of the ``numbers`` tensor.
-            This should be switched off for GPU calculations that use `libcint`
-            for integrals as the :class:`.IndexHelper` has to be on the CPU
-            for this step.
 
         Returns
         -------
@@ -1193,7 +1174,6 @@ class IndexHelperGFN1(IndexHelper):
             numbers,
             GFN1_XTB,
             batch_mode=batch_mode,
-            move_to_numbers_device=move_to_numbers_device,
         )
 
 
@@ -1208,7 +1188,6 @@ class IndexHelperGFN2(IndexHelper):
         cls,
         numbers: Tensor,
         batch_mode: int | None = None,
-        move_to_numbers_device: bool = True,
     ) -> IndexHelper:
         """
         Construct an index helper instance from atomic numbers and their
@@ -1224,11 +1203,6 @@ class IndexHelperGFN2(IndexHelper):
             - 0: one Structure (no Batch)
             - 1: Padded batch
             - 2: Conformer batch
-        move_to_numbers_device : bool
-            Move the resulting tensors to the device of the ``numbers`` tensor.
-            This should be switched off for GPU calculations that use `libcint`
-            for integrals as the :class:`.IndexHelper` has to be on the CPU
-            for this step.
 
         Returns
         -------
@@ -1242,5 +1216,4 @@ class IndexHelperGFN2(IndexHelper):
             numbers,
             GFN2_XTB,
             batch_mode=batch_mode,
-            move_to_numbers_device=move_to_numbers_device,
         )

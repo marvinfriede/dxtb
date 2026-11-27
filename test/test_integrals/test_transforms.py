@@ -23,7 +23,6 @@ import torch
 from torch.func import jvp, vmap
 
 from dxtb import GFN1_XTB, IndexHelper
-from dxtb._src.basis.bas import Basis
 from dxtb._src.constants import labels
 from dxtb._src.integral.driver.pytorch import build_overlap
 from dxtb._src.integral.driver.pytorch.multipole import (
@@ -40,6 +39,7 @@ from dxtb._src.integral.driver.pytorch.setup import (
 from dxtb._src.integral.evaluation import _make_quadrupole_traceless
 
 from ..conftest import DEVICE
+from ..utils import make_basis, pytorch_setup
 from .samples import samples
 
 _LOWER_TRIANGLE = [0, 3, 4, 6, 7, 8]  # xx, yx, yy, zx, zy, zz of the 9 raw
@@ -87,8 +87,8 @@ def _setup_and_inputs() -> (
     numbers = sample["numbers"].to(DEVICE)
     positions = sample["positions"].to(**dd)
     ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
-    basis = Basis(torch.unique(numbers), GFN1_XTB, ihelp, **dd)
-    return setup_integrals(basis), numbers, positions, ihelp
+    basis = make_basis(torch.unique(numbers), GFN1_XTB, ihelp, **dd)
+    return pytorch_setup(basis), numbers, positions, ihelp
 
 
 def _evaluate_multipoles(
@@ -174,7 +174,9 @@ def test_ket_centered_moments_are_translation_invariant(
     numbers = sample["numbers"].to(DEVICE)
     positions = sample["positions"].to(**dd)
     ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
-    setup = setup_integrals(Basis(torch.unique(numbers), GFN1_XTB, ihelp, **dd))
+    setup = pytorch_setup(
+        make_basis(torch.unique(numbers), GFN1_XTB, ihelp, **dd)
+    )
 
     reference = evaluate_moments(setup, positions, labels.INTLEVEL_QUADRUPOLE)
     translated = evaluate_moments(

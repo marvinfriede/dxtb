@@ -28,7 +28,8 @@ from typing import TYPE_CHECKING
 import torch
 from tad_mctc.tree import Node, child, context
 
-from dxtb._src.basis.bas import Basis, _to_int_list
+from dxtb._src.basis.bas import CGTOExpansion, _to_int_list
+from dxtb._src.basis.indexhelper import IndexHelper
 from dxtb._src.typing import Tensor
 
 if TYPE_CHECKING:
@@ -232,58 +233,60 @@ class LibcintIntegralSetup(Node):
         )
 
 
-def setup_libcint(basis: Basis) -> LibcintIntegralSetup:
-    """Build the authoritative CPU-resident libcint setup Node from ``basis``."""
-    ihelp = basis.ihelp
+def setup_libcint(
+    numbers: Tensor, ihelp: IndexHelper, expansion: CGTOExpansion
+) -> LibcintIntegralSetup:
+    """
+    Build the authoritative CPU-resident libcint setup Node.
+
+    libcint runs on the CPU only, so the expanded Gaussians and the atomic
+    numbers are moved to the CPU here. The move is differentiable: gradients
+    still reach the parametrization on its own device.
+
+    Parameters
+    ----------
+    numbers : Tensor
+        Atomic numbers of one single System (shape: ``(nat,)``).
+    ihelp : IndexHelper
+        Index helper of ``numbers``.
+    expansion : CGTOExpansion
+        Contracted Gaussians of the unique shells (:meth:`.Basis.expand`).
+
+    Returns
+    -------
+    LibcintIntegralSetup
+        Setup with all tensors on the CPU.
+    """
     if ihelp.batch_mode != 0:
         raise ValueError("Libcint setup requires one single System.")
-    if (
-        basis.numbers.ndim != 1
-        or basis.numbers.shape != ihelp.shells_per_atom.shape
-    ):
+    if numbers.ndim != 1 or numbers.shape != ihelp.shells_per_atom.shape:
         raise ValueError(
             "Libcint setup requires 1D atomic numbers matching IndexHelper."
         )
 
-    source_tensors = (
-        basis.numbers,
-        basis.unique,
-        basis.ngauss,
-        basis.pqn,
-        basis.slater,
-        basis.valence,
-        ihelp.shells_per_atom,
-        ihelp.shells_to_ushell,
-        ihelp.angular,
-        ihelp.ushells_per_unique,
-        ihelp.unique_angular,
-        ihelp.shells_to_atom,
-        ihelp.orbitals_to_shell,
-    )
-    if any(tensor.device.type != "cpu" for tensor in source_tensors):
-        raise ValueError(
-            "setup_libcint requires CPU-resident basis and IndexHelper tensors."
-        )
+    cpu = torch.device("cpu")
+    numbers = numbers.to(device=cpu)
+    alphas = tuple(alpha.to(device=cpu) for alpha in expansion.alphas)
+    coeffs = tuple(coeff.to(device=cpu) for coeff in expansion.coeffs)
 
-    expansion = basis.expand()
     shell_layout = _build_shell_layout(
-        basis.unique, ihelp.ushells_per_unique, ihelp.unique_angular
+        torch.unique(numbers), ihelp.ushells_per_unique, ihelp.unique_angular
     )
 
-    numbers = basis.numbers.clone()
+    numbers = numbers.clone()
     active_atoms: Tensor | None = None
-    num_list = _to_int_list(basis.numbers)
+    num_list = _to_int_list(numbers)
     if any(z <= 0 for z in num_list):
         active_atoms = torch.tensor(
             [idx for idx, z in enumerate(num_list) if z > 0],
             dtype=torch.long,
-            device=numbers.device,
+            device=cpu,
         )
 
     return LibcintIntegralSetup(
         numbers=numbers,
-        alphas=expansion.alphas,
-        coeffs=expansion.coeffs,
+        alphas=alphas,
+        coeffs=coeffs,
         active_atoms=active_atoms,
         shell_layout=shell_layout,
     )

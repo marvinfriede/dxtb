@@ -34,7 +34,6 @@ import pytest
 import torch
 
 from dxtb import IndexHelper
-from dxtb._src.basis.bas import Basis
 from dxtb._src.basis.slater import (
     pAlpha6sp,
     pCoeff6sp_p,
@@ -46,7 +45,7 @@ from dxtb._src.param import GFN1_XTB, GFN2_XTB, Param, ParamModule
 from dxtb._src.typing import DD
 
 from ..conftest import DEVICE
-from ..utils import overlap_1d
+from ..utils import libcint_setup, make_basis, overlap_1d, pytorch_setup
 
 # Reference values directly from tblite src/tblite/basis/slater.f90 (commit 7c935fb)
 TBLITE_ALPHA_4SP = [
@@ -230,8 +229,8 @@ def test_custom_param_sto_selection() -> None:
     # Basis reflects setting
     numbers = torch.tensor([26], device=DEVICE)  # Fe (contains 4s, 4p)
     ih = IndexHelper.from_numbers(numbers, par_gfn1)
-    b_gfn1 = Basis(numbers, par_gfn1, ih)
-    b_gfn2 = Basis(numbers, par_gfn2, ih)
+    b_gfn1 = make_basis(numbers, par_gfn1, ih)
+    b_gfn2 = make_basis(numbers, par_gfn2, ih)
     assert b_gfn1.sto == "gfn1"
     assert b_gfn2.sto == "gfn2"
 
@@ -272,13 +271,12 @@ def test_custom_param_sto_selection() -> None:
 def test_basis_construction_and_export() -> None:
     """Verify Basis CGTO expansion, backend setups, and BSE export use sto."""
     from dxtb._src.exlibs.available import has_libcint
-    from dxtb._src.integral.driver.pytorch import setup_integrals
 
     # Fe (Z=26, 4s/4p) and Rb (Z=37, 5s/5p) in unsorted atom order
     numbers = torch.tensor([37, 26], device=DEVICE)
     ih = IndexHelper.from_numbers(numbers, GFN1_XTB)
-    b_gfn1 = Basis(numbers, GFN1_XTB, ih)
-    b_gfn2 = Basis(
+    b_gfn1 = make_basis(numbers, GFN1_XTB, ih)
+    b_gfn2 = make_basis(
         numbers, GFN2_XTB, IndexHelper.from_numbers(numbers, GFN2_XTB)
     )
 
@@ -286,16 +284,15 @@ def test_basis_construction_and_export() -> None:
     assert b_gfn2.sto == "gfn2"
 
     exp_ref = b_gfn1.expand()
-    pt_setup = setup_integrals(b_gfn1)
+    pt_setup = pytorch_setup(b_gfn1)
     for a_ref, a_pt in zip(exp_ref.alphas, pt_setup.alphas):
         torch.testing.assert_close(a_ref, a_pt, atol=0.0, rtol=0.0)
     for c_ref, c_pt in zip(exp_ref.coeffs, pt_setup.coeffs):
         torch.testing.assert_close(c_ref, c_pt, atol=0.0, rtol=0.0)
 
     if has_libcint:
-        from dxtb._src.integral.driver.libcint import setup_libcint
 
-        lc_setup = setup_libcint(b_gfn1.cpu())
+        lc_setup = libcint_setup(numbers, b_gfn1)
         for a_ref, a_lc in zip(exp_ref.alphas, lc_setup.alphas):
             torch.testing.assert_close(a_ref.cpu(), a_lc, atol=0.0, rtol=0.0)
         for c_ref, c_lc in zip(exp_ref.coeffs, lc_setup.coeffs):

@@ -172,29 +172,25 @@ def setup_integral_evaluation(
     target_device = (
         numbers.device if device is None else normalize_device(device)
     )
+    if numbers.device != target_device:
+        raise ValueError(
+            f"Atomic numbers are on {numbers.device}, not on the requested "
+            f"device {target_device}."
+        )
     target_dtype = par.dtype if dtype is None else dtype
-    backend_device = (
-        torch.device("cpu")
-        if driver_type == labels.INTDRIVER_LIBCINT
-        else target_device
-    )
 
-    basis = Basis(
-        numbers,
-        par,
-        ihelp,
-        device=backend_device,
-        dtype=target_dtype,
-    )
+    # Gaussians on the device of the inputs; libcint moves them to the CPU
+    expansion = Basis(numbers, par, ihelp, dtype=target_dtype).expand()
 
     backend: PytorchIntegralSetup | LibcintIntegralSetup
     if driver_type == labels.INTDRIVER_PYTORCH:
         backend = setup_integrals(
-            basis,
+            expansion,
+            ihelp,
             **({} if algorithm is None else {"algorithm": algorithm}),
         )
     else:
-        backend = setup_libcint(basis)
+        backend = setup_libcint(numbers, ihelp, expansion)
 
     return IntegralSetup(
         driver_type=driver_type,

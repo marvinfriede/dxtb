@@ -40,12 +40,11 @@ import math
 import numpy as np
 import pytest
 import torch
-from tad_mctc import Structure
 from scipy.special import factorial2
+from tad_mctc import Structure
 
 from dxtb import GFN1_XTB as par
 from dxtb import IndexHelper
-from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.pytorch.impls.kernels import (
     ALGORITHMS,
@@ -56,6 +55,7 @@ from dxtb.integrals.wrappers import overlap
 from dxtb.labels import INTDRIVER_LIBCINT, INTDRIVER_PYTORCH
 
 from ..conftest import DEVICE
+from ..utils import make_basis
 from .samples import samples
 
 try:
@@ -82,7 +82,7 @@ def _prim_norm(l: int, a: float) -> float:
 def _build_pyscf_mol(numbers: torch.Tensor, positions: torch.Tensor):
     ihelp = IndexHelper.from_numbers(numbers.cpu(), par)
     dd: DD = {"dtype": torch.double, "device": torch.device("cpu")}
-    bas = Basis(numbers.cpu(), par, ihelp, **dd)
+    bas = make_basis(numbers.cpu(), par, ihelp, **dd)
     expansion = bas.expand()
     alphas, coeffs = expansion.alphas, expansion.coeffs
 
@@ -240,7 +240,7 @@ def test_os_multipoles_match_pyscf(
     positions = sample["positions"].to(**dd)
 
     ihelp = IndexHelper.from_numbers(numbers, par)
-    expansion = Basis(numbers, par, ihelp, **dd).expand()
+    expansion = make_basis(numbers, par, ihelp, **dd).expand()
     comps = DIPOLE_COMPONENTS if kind == "dipole" else QUADRUPOLE_COMPONENTS
     mine = assemble_matrix(
         get_kernel(algorithm),

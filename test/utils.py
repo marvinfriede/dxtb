@@ -25,7 +25,17 @@ from pathlib import Path
 import torch
 from tad_mctc.data import pse
 
-from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, ParamModule
+from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, IndexHelper, Param, ParamModule
+from dxtb._src.basis.bas import Basis
+from dxtb._src.integral.driver.libcint import (
+    LibcintIntegralSetup,
+    setup_libcint,
+)
+from dxtb._src.integral.driver.pytorch import (
+    PytorchIntegralSetup,
+    setup_integrals,
+)
+from dxtb._src.param import as_param_module
 from dxtb._src.param.element import Element
 from dxtb._src.typing import Any, Literal, Size, Tensor
 
@@ -427,8 +437,8 @@ def scf_strategy(
 
     from dxtb.scf import (
         AndersonConverger,
-        SCFVariable,
         SCFStrategy,
+        SCFVariable,
         strategy_preset,
     )
 
@@ -445,3 +455,31 @@ def scf_strategy(
             ),
         )
     return SCFStrategy((stage,))
+
+
+def make_basis(
+    numbers: Tensor,
+    par: Param | ParamModule,
+    ihelp: IndexHelper,
+    *,
+    device: torch.device | None = None,
+    dtype: torch.dtype | None = None,
+) -> Basis:
+    """
+    Build a :class:`Basis` from a plain :class:`Param` or a
+    :class:`ParamModule`; a plain :class:`Param` is wrapped on the device of
+    ``numbers`` (or ``device``).
+    """
+    device = numbers.device if device is None else device
+    pm = as_param_module(par, device=device, dtype=dtype)
+    return Basis(numbers, pm, ihelp, dtype=dtype)
+
+
+def pytorch_setup(basis: Basis, **kwargs: Any) -> PytorchIntegralSetup:
+    """PyTorch integral setup of a :class:`Basis`."""
+    return setup_integrals(basis.expand(), basis.ihelp, **kwargs)
+
+
+def libcint_setup(numbers: Tensor, basis: Basis) -> LibcintIntegralSetup:
+    """libcint integral setup of a :class:`Basis` of ``numbers``."""
+    return setup_libcint(numbers, basis.ihelp, basis.expand())

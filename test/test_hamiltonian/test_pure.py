@@ -10,15 +10,14 @@ import torch
 from tad_mctc.batch import pack
 
 from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, IndexHelper, ParamModule
-from dxtb._src.basis.bas import Basis
 from dxtb._src.integral.driver.pytorch import build_overlap
 from dxtb._src.integral.driver.pytorch.multipole import build_dipole
-from dxtb._src.integral.driver.pytorch.setup import setup_integrals
 from dxtb._src.xtb.gfn0 import GFN0Hamiltonian
 from dxtb._src.xtb.gfn1 import GFN1Hamiltonian
 from dxtb._src.xtb.gfn2 import GFN2Hamiltonian
 from dxtb._src.xtb.h0 import build_hcore, setup_h0
 
+from ..utils import make_basis, pytorch_setup
 from .samples import samples
 
 
@@ -161,7 +160,7 @@ def test_pure_h0_survives_prior_backward_and_integral_call_order(
     )
     ihelp = IndexHelper.from_numbers(numbers, par)
     setup = setup_h0(numbers, par, ihelp)
-    integral_setup = setup_integrals(Basis(numbers, par, ihelp))
+    integral_setup = pytorch_setup(make_basis(numbers, par, ihelp))
     charge = torch.tensor(0.0, dtype=positions.dtype, device=positions.device)
     charge_arg = charge if method == "gfn0" else None
 

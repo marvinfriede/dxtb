@@ -29,7 +29,6 @@ from tad_mctc.autograd import dgradcheck
 
 from dxtb import GFN2_XTB as par
 from dxtb import IndexHelper
-from dxtb._src.basis.bas import Basis
 from dxtb._src.integral.driver.pytorch.impls.kernels.os import compute_1d_os
 from dxtb._src.integral.driver.pytorch.impls.pairs import (
     _bounds,
@@ -45,6 +44,7 @@ from dxtb._src.integral.driver.pytorch.impls.pipeline import (
 from dxtb._src.typing import DD, Tensor
 
 from ..conftest import DEVICE
+from ..utils import make_basis
 from .samples import samples
 
 COMPONENTS = {
@@ -61,7 +61,7 @@ def _setup(name: str, dd: DD, ascale: float):
     numbers = samples[name]["numbers"].to(DEVICE)
     positions = samples[name]["positions"].to(**dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
-    expansion = Basis(numbers, par, ihelp, **dd).expand()
+    expansion = make_basis(numbers, par, ihelp, **dd).expand()
     return (
         ihelp,
         [a * ascale for a in expansion.alphas],
@@ -154,7 +154,7 @@ def _two_molecules(dd: DD, gap: float, ascale: float):
     shift = torch.tensor([gap, 0.0, 0.0], **dd)
     positions = torch.cat([base, base[:4] * 0.6 + shift])
     ihelp = IndexHelper.from_numbers(numbers, par)
-    expansion = Basis(numbers, par, ihelp, **dd).expand()
+    expansion = make_basis(numbers, par, ihelp, **dd).expand()
     return (
         ihelp,
         [a * ascale for a in expansion.alphas],
@@ -357,7 +357,7 @@ def test_compile() -> None:
         **dd,
     )
     ihelp = IndexHelper.from_numbers(numbers, par)
-    expansion = Basis(numbers, par, ihelp, **dd).expand()
+    expansion = make_basis(numbers, par, ihelp, **dd).expand()
     alphas, coeffs = expansion.alphas, expansion.coeffs
     plan = prepare(ihelp, positions.device)
 

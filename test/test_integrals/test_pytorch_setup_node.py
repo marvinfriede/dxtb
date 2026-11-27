@@ -25,7 +25,6 @@ from torch.func import jacfwd, jacrev, jvp, vmap
 from torch.utils._pytree import tree_flatten, tree_unflatten
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, IndexHelper, labels
-from dxtb._src.basis.bas import Basis
 from dxtb._src.integral.driver.pytorch import build_overlap
 from dxtb._src.integral.driver.pytorch import setup as pytorch_setup_module
 from dxtb._src.integral.driver.pytorch.impls.kernels.os import compute_1d_os
@@ -42,6 +41,7 @@ from dxtb._src.integral.driver.pytorch.setup import (
 from dxtb._src.param import ParamModule
 from dxtb._src.typing import Any, Tensor
 
+from ..utils import make_basis, pytorch_setup
 from .samples import samples
 
 
@@ -126,7 +126,7 @@ def test_system_owns_registered_pair_nodes_and_conversion_is_isolated(
     assert setup.algorithm not in leaves
 
     other_ihelp = IndexHelper.from_numbers(numbers, par)
-    other = setup_integrals(Basis(numbers, par, other_ihelp))
+    other = pytorch_setup(make_basis(numbers, par, other_ihelp))
     system_originals = tuple(
         tensor.clone()
         for tensor in (
@@ -251,8 +251,8 @@ def test_position_and_parameter_derivatives_and_transforms(
             with torch.no_grad():
                 shift_param.copy_(perturbed)
             ihelp_shift = IndexHelper.from_numbers(numbers, par_shift)
-            setup_shift = setup_integrals(
-                Basis(numbers, par_shift, ihelp_shift)
+            setup_shift = pytorch_setup(
+                make_basis(numbers, par_shift, ihelp_shift)
             )
             pos_leaf = positions.clone().requires_grad_(True)
             val_shift = objective(setup_shift, pos_leaf)
@@ -415,24 +415,24 @@ def test_node_screening_chunking_checkpoint_and_missing_plan() -> None:
     with pytest.raises(ValueError, match="requires one single System"):
         pytorch_setup_module.prepare(batched_ihelp, positions.device)
     with pytest.raises(ValueError, match="requires one single System"):
-        setup_integrals(Basis(batched_numbers, GFN1_XTB, batched_ihelp))
+        pytorch_setup(make_basis(batched_numbers, GFN1_XTB, batched_ihelp))
 
 
 def test_pytorch_setup_index_identity_validation_and_meta_conversion() -> None:
-    """setup_integrals preserves Basis.ihelp identity, validates kernel/device, and converts to meta."""
+    """setup_integrals keeps the IndexHelper identity, validates kernel/device, and converts to meta."""
     numbers = samples["H2O"]["numbers"]
     par = ParamModule(GFN1_XTB, dtype=torch.float64)
     ihelp = IndexHelper.from_numbers(numbers, par)
-    basis = Basis(numbers, par, ihelp, dtype=torch.float64)
+    basis = make_basis(numbers, par, ihelp, dtype=torch.float64)
     assert basis.ihelp is ihelp
 
-    setup = setup_integrals(basis)
+    setup = pytorch_setup(basis)
     assert not hasattr(setup, "index")
     assert setup.pair_plan.atom is ihelp.shells_to_atom
     assert torch.equal(setup.pair_plan.orbitals_to_atom, ihelp.orbitals_to_atom)
 
     with pytest.raises(ValueError, match="Unknown integral algorithm"):
-        setup_integrals(basis, algorithm="not_a_kernel")
+        pytorch_setup(basis, algorithm="not_a_kernel")
 
     meta_setup = setup.to(device="meta")
     meta_leaves, _ = tree_flatten(meta_setup)
@@ -442,10 +442,10 @@ def test_pytorch_setup_index_identity_validation_and_meta_conversion() -> None:
         if isinstance(leaf, Tensor)
     )
 
-    mismatched_basis = Basis(numbers, par, ihelp, dtype=torch.float64)
-    mismatched_basis.ihelp = ihelp.to(device="meta")
-    with pytest.raises(ValueError, match="must match Basis device"):
-        setup_integrals(mismatched_basis)
+    with pytest.raises(ValueError, match="must match the device"):
+        pytorch_setup_module.setup_integrals(
+            basis.expand(), ihelp.to(device="meta")
+        )
 
 
 @pytest.mark.skipif(
@@ -532,8 +532,12 @@ def test_stacked_pytorch_setup_vmap_multipole_moments() -> None:
     )
     ih_c2 = IndexHelper.from_numbers(nums_c2, par)
     ih_n2 = IndexHelper.from_numbers(nums_n2, par)
-    setup_c2 = setup_integrals(Basis(nums_c2, par, ih_c2, dtype=torch.float64))
-    setup_n2 = setup_integrals(Basis(nums_n2, par, ih_n2, dtype=torch.float64))
+    setup_c2 = pytorch_setup(
+        make_basis(nums_c2, par, ih_c2, dtype=torch.float64)
+    )
+    setup_n2 = pytorch_setup(
+        make_basis(nums_n2, par, ih_n2, dtype=torch.float64)
+    )
 
     stacked_setup = stack((setup_c2, setup_n2))
     stacked_pos = torch.stack((pos_c2, pos_n2))

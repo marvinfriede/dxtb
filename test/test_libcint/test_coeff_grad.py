@@ -27,13 +27,13 @@ from torch.autograd import gradcheck, gradgradcheck
 from torch.nn import Parameter
 
 from dxtb import GFN1_XTB, GFN2_XTB, IndexHelper, Param, ParamModule
-from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.libcint import (
     build_overlap as build_overlap_libcint,
 )
-from dxtb._src.integral.driver.libcint import setup_libcint
 from dxtb._src.typing import DD, Callable, Tensor
+
+from ..utils import libcint_setup, make_basis
 
 if has_libcint is True:
     from dxtb._src.exlibs import libcint
@@ -71,10 +71,10 @@ def gradchecker(name: str, gfn: Param) -> tuple[
         p.data = slater
 
         ihelp = IndexHelper.from_numbers(numbers, par)
-        bas = Basis(numbers, par, ihelp, **dd)
+        bas = make_basis(numbers, par, ihelp, **dd)
 
         # variable to be differentiated
-        libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(
+        libcint_basis, structure = libcint_setup(numbers, bas).create_libcint(
             positions
         )
         return libcint.overlap(libcint_basis, structure)
@@ -150,7 +150,9 @@ def gradchecker_batch(name1: str, name2: str, gfn: Param) -> tuple[
             active = nums > 0
             nums_active, pos_active = nums[active], pos[active]
             ihelp = IndexHelper.from_numbers(nums_active, par)
-            setup = setup_libcint(Basis(nums_active, par, ihelp, **dd).cpu())
+            setup = libcint_setup(
+                nums_active, make_basis(nums_active, par, ihelp, **dd)
+            )
             matrices.append(build_overlap_libcint(setup, pos_active))
         return pack(matrices)
 

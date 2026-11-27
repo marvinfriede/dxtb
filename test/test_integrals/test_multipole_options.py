@@ -26,7 +26,6 @@ from tad_mctc.batch import deflate, pack
 
 from dxtb import GFN1_XTB as par
 from dxtb import IndexHelper
-from dxtb._src.basis.bas import Basis
 from dxtb._src.integral.driver.pytorch.impls.kernels import (
     DEFAULT_ALGORITHM,
     get_kernel,
@@ -39,6 +38,7 @@ from dxtb._src.integral.driver.pytorch.impls.pipeline import (
 from dxtb._src.typing import DD, Tensor
 
 from ..conftest import DEVICE
+from ..utils import make_basis
 from .samples import samples
 
 
@@ -46,7 +46,7 @@ def setup(
     numbers: Tensor, dd: DD
 ) -> tuple[IndexHelper, tuple[Tensor, ...], tuple[Tensor, ...]]:
     ihelp = IndexHelper.from_numbers(numbers, par)
-    expansion = Basis(numbers, par, ihelp, **dd).expand()
+    expansion = make_basis(numbers, par, ihelp, **dd).expand()
     return ihelp, expansion.alphas, expansion.coeffs
 
 

@@ -24,10 +24,10 @@ import pytest
 import torch
 
 from dxtb import GFN1_XTB, IndexHelper
-from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
-from dxtb._src.integral.driver.libcint import setup_libcint
 from dxtb._src.typing import DD, Tensor
+
+from ..utils import libcint_setup, make_basis
 
 if has_libcint is True:
     from dxtb._src.exlibs import libcint
@@ -54,14 +54,14 @@ def num_grad(
     step = 1.0e-5
 
     def compute_integral(pos: torch.Tensor) -> torch.Tensor:
-        bas = Basis(
+        bas = make_basis(
             numbers,
             GFN1_XTB,
             ihelp,
             dtype=positions.dtype,
             device=positions.device,
         )
-        basis, structure = setup_libcint(bas.cpu()).create_libcint(pos)
+        basis, structure = libcint_setup(numbers, bas).create_libcint(pos)
         return libcint.int1e(intstr, basis, structure).to(device=pos.device)
 
     # Loop over all atoms and their x, y, z coordinates
@@ -98,9 +98,9 @@ def test_grad(dtype: torch.dtype, name: str):
     pos = positions.clone().requires_grad_(True)
 
     ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
-    bas = Basis(numbers, GFN1_XTB, ihelp, **dd)
+    bas = make_basis(numbers, GFN1_XTB, ihelp, **dd)
 
-    basis, structure = setup_libcint(bas.cpu()).create_libcint(pos)
+    basis, structure = libcint_setup(numbers, bas).create_libcint(pos)
 
     INTSTR = "r0"
 

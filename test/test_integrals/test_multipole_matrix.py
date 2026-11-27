@@ -28,7 +28,6 @@ from torch.func import jacfwd, jacrev
 
 from dxtb import GFN1_XTB as par
 from dxtb import IndexHelper
-from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.pytorch.impls.kernels import (
     ALGORITHMS,
@@ -46,6 +45,7 @@ from dxtb.integrals.wrappers import dipint, overlap, quadint
 from dxtb.labels import INTDRIVER_LIBCINT
 
 from ..conftest import DEVICE
+from ..utils import make_basis
 from .samples import samples
 
 COMPONENTS = {
@@ -60,7 +60,7 @@ class Matrices:
 
     def __init__(self, numbers: Tensor, algorithm: str, dd: DD) -> None:
         self.ihelp = IndexHelper.from_numbers(numbers, par)
-        bas = Basis(numbers, par, self.ihelp, **dd)
+        bas = make_basis(numbers, par, self.ihelp, **dd)
         expansion = bas.expand()
         self.alphas = expansion.alphas
         self.coeffs = expansion.coeffs

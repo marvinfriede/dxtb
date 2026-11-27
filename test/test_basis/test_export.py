@@ -26,10 +26,10 @@ import pytest
 import torch
 
 from dxtb import IndexHelper
-from dxtb._src.basis.bas import Basis, format_contraction
+from dxtb._src.basis.bas import format_contraction
 from dxtb._src.typing import DD, Literal
 
-from ..utils import get_param_module
+from ..utils import get_param_module, make_basis
 
 
 def _round_numbers(data: list[str]) -> list[str | float]:
@@ -61,7 +61,7 @@ def test_export(
     par = get_param_module(xtb_version, **dd)
 
     ihelp = IndexHelper.from_numbers(numbers, par)
-    bas = Basis(numbers, par, ihelp, **dd)
+    bas = make_basis(numbers, par, ihelp, **dd)
 
     txt = bas.to_bse(qcformat=qcformat)
 
@@ -87,7 +87,7 @@ def test_export_gaussian() -> None:
     numbers = torch.tensor([3], device=dd["device"])
     par = get_param_module("gfn2", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
-    bas = Basis(numbers, par, ihelp, **dd)
+    bas = make_basis(numbers, par, ihelp, **dd)
 
     # fmt: off
     ref = [
@@ -111,7 +111,7 @@ def test_fail_symbol() -> None:
     numbers = torch.tensor([3], device=dd["device"])
     par = get_param_module("gfn2", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
-    bas = Basis(numbers, par, ihelp, **dd)
+    bas = make_basis(numbers, par, ihelp, **dd)
 
     # wipe shells info to trigger error
     bas.shells = {}
@@ -157,14 +157,14 @@ def test_export_multiatom_unsorted(
     par = get_param_module(xtb_version, **dd)
 
     numbers = torch.tensor(comp, device=dd["device"])
-    bas_multi = Basis(
+    bas_multi = make_basis(
         numbers, par, IndexHelper.from_numbers(numbers, par), **dd
     )
 
     expected_blocks = []
     for z in sorted(set(comp)):
         z_t = torch.tensor([z], device=dd["device"])
-        bas_z = Basis(z_t, par, IndexHelper.from_numbers(z_t, par), **dd)
+        bas_z = make_basis(z_t, par, IndexHelper.from_numbers(z_t, par), **dd)
         expected_blocks.append(bas_z.to_bse(qcformat=qcformat).rstrip())
 
     assert bas_multi.to_bse(qcformat=qcformat).rstrip() == "\n".join(

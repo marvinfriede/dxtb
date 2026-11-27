@@ -53,6 +53,7 @@ from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, IndexHelper, ParamModule
 from dxtb._src.typing import Tensor
 
 from ..molecules import mols
+from ..utils import make_basis, pytorch_setup
 
 __all__ = ["TARGETS", "CHECKS", "ComponentResult", "run_check"]
 
@@ -443,7 +444,6 @@ def _alpb_positions() -> Target:
 def _integral(kind: str, algorithm: str = "os", method: str = "gfn2") -> Target:
     def build():
         # pylint: disable=import-outside-toplevel
-        from dxtb._src.basis.bas import Basis
         from dxtb._src.integral.driver.pytorch import (
             build_dipole,
             build_overlap,
@@ -456,8 +456,8 @@ def _integral(kind: str, algorithm: str = "os", method: str = "gfn2") -> Target:
         ihelp = IndexHelper.from_numbers(numbers, par)
 
         def f(x: Tensor) -> Tensor:
-            setup = setup_integrals(
-                Basis(numbers, par, ihelp, **DD), algorithm=algorithm
+            setup = pytorch_setup(
+                make_basis(numbers, par, ihelp, **DD), algorithm=algorithm
             )
             if kind == "overlap":
                 return build_overlap(setup, x)
@@ -475,7 +475,6 @@ def _integral(kind: str, algorithm: str = "os", method: str = "gfn2") -> Target:
 def _hcore(method: str) -> Target:
     def build():
         # pylint: disable=import-outside-toplevel
-        from dxtb._src.basis.bas import Basis
         from dxtb._src.integral.driver.pytorch import (
             build_overlap,
             setup_integrals,
@@ -486,7 +485,7 @@ def _hcore(method: str) -> Target:
         par = _par(method)
         ihelp = IndexHelper.from_numbers(numbers, par)
         h0_setup = setup_h0(numbers, par, ihelp)
-        integral_setup = setup_integrals(Basis(numbers, par, ihelp, **DD))
+        integral_setup = pytorch_setup(make_basis(numbers, par, ihelp, **DD))
 
         def f(x: Tensor) -> Tensor:
             overlap = build_overlap(integral_setup, x)
@@ -502,7 +501,6 @@ def _basis_exponent() -> Target:
 
     def build():
         # pylint: disable=import-outside-toplevel
-        from dxtb._src.basis.bas import Basis
         from dxtb._src.integral.driver.pytorch import (
             build_overlap,
             setup_integrals,
@@ -519,7 +517,7 @@ def _basis_exponent() -> Target:
             mod = p.get("element.Li.slater", unwrapped=False)
             del mod._parameters["param"]  # pylint: disable=protected-access
             mod.param = x
-            setup = setup_integrals(Basis(numbers, p, ihelp, **DD))
+            setup = pytorch_setup(make_basis(numbers, p, ihelp, **DD))
             return build_overlap(setup, positions)
 
         return f, _leaf(x0)

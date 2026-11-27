@@ -26,9 +26,10 @@ import torch
 from tad_mctc import Structure
 from tad_mctc.convert import str_to_device
 
-from dxtb import GFN1_XTB, IndexHelper
+from dxtb import GFN1_XTB, IndexHelper, ParamModule
 from dxtb._src.basis.bas import Basis, CGTOExpansion
 from dxtb._src.basis.slater import slater_to_gauss
+from dxtb._src.constants.defaults import DEFAULT_BASIS_INT
 from dxtb._src.typing.exceptions import (
     CGTOAzimuthalQuantumNumberError,
     CGTOPrimitivesError,
@@ -39,7 +40,7 @@ from dxtb._src.typing.exceptions import (
 )
 
 from ..conftest import DEVICE
-from ..utils import overlap_1d
+from ..utils import libcint_setup, make_basis, overlap_1d, pytorch_setup
 
 
 def test_fail_number_primitives() -> None:
@@ -90,7 +91,7 @@ def test_fail_higher_orbital_trafo():
     number = torch.tensor([86])
 
     ihelp = IndexHelper.from_numbers(number, GFN1_XTB)
-    bas = Basis(number, GFN1_XTB, ihelp)
+    bas = make_basis(number, GFN1_XTB, ihelp)
     expansion = bas.expand()
     alpha = expansion.alphas
     coeff = expansion.coeffs
@@ -119,90 +120,54 @@ def test_fail_higher_orbital_trafo():
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32, torch.float64])
-def test_change_type(dtype: torch.dtype) -> None:
-    """Test changing the `dtype` of the Basis class without corrupting int/bool slots."""
+def test_dtype(dtype: torch.dtype) -> None:
+    """``dtype`` sets the Slater exponents; integer and bool fields keep theirs."""
     number = torch.tensor([8, 1, 1])
     ihelp = IndexHelper.from_numbers(number, GFN1_XTB)
+    pm = ParamModule(GFN1_XTB, dtype=torch.float64)
 
-    bas = Basis(number, GFN1_XTB, ihelp, dtype=torch.float64)
-    assert bas is not None
-
-    for converted in (bas.type(dtype), bas.to(dtype=dtype)):
-        assert converted.dtype == dtype
-        assert converted.slater.dtype == dtype
-        assert converted.numbers.dtype == bas.numbers.dtype
-        assert converted.unique.dtype == bas.unique.dtype
-        assert converted.ngauss.dtype == bas.ngauss.dtype
-        assert converted.pqn.dtype == bas.pqn.dtype
-        assert converted.valence.dtype == torch.bool
-        if dtype in (torch.float32, torch.float64):
-            expansion = converted.expand()
-            assert all(a.dtype == dtype for a in expansion.alphas)
-            assert all(c.dtype == dtype for c in expansion.coeffs)
-
-    meta_bas = bas.to(device=torch.device("meta"), dtype=dtype)
-    assert meta_bas.device == torch.device("meta")
-    assert meta_bas.dtype == dtype
-    assert meta_bas.ihelp.device == torch.device("meta")
-    assert meta_bas.slater.dtype == dtype
-    assert meta_bas.ngauss.dtype == bas.ngauss.dtype
-    assert meta_bas.pqn.dtype == bas.pqn.dtype
-    assert meta_bas.valence.dtype == torch.bool
-    assert meta_bas.numbers.dtype == bas.numbers.dtype
-    assert meta_bas.unique.dtype == bas.unique.dtype
-
-
-def test_change_type_fail() -> None:
-    """Test failure upon changing `dtype` incorrectly."""
-    number = torch.tensor([1])
-    ihelp = IndexHelper.from_numbers(number, GFN1_XTB)
-
-    bas = Basis(number, GFN1_XTB, ihelp)
-    assert bas is not None
-
-    # trying to use setter
-    with pytest.raises(AttributeError):
-        bas.dtype = torch.float64
-
-    # passing disallowed dtype
-    with pytest.raises(ValueError):
-        bas.type(torch.bool)
-
-
-@pytest.mark.cuda
-@pytest.mark.parametrize("device_str", ["cpu", "cuda"])
-def test_change_device(device_str: str) -> None:
-    """Test changing the `device` of the class."""
-    device = str_to_device(device_str)
-
-    number = torch.tensor([1])
-    ihelp = IndexHelper.from_numbers(number, GFN1_XTB)
-
-    bas_orig = Basis(number, GFN1_XTB, ihelp)
-    assert bas_orig is not None
-
-    bas = bas_orig.to(device)
-    assert bas.device == device
-    assert bas.ihelp.device == device
-    assert bas.ngauss.dtype == bas_orig.ngauss.dtype
-    assert bas.pqn.dtype == bas_orig.pqn.dtype
+    bas = Basis(number, pm, ihelp, dtype=dtype)
+    assert bas.slater.dtype == dtype
+    assert bas.unique.dtype == number.dtype
+    assert bas.ngauss.dtype == DEFAULT_BASIS_INT
+    assert not bas.pqn.is_floating_point()
     assert bas.valence.dtype == torch.bool
-    expansion = bas.expand()
-    assert all(a.device == device for a in expansion.alphas)
-    assert all(c.device == device for c in expansion.coeffs)
+
+    if dtype in (torch.float32, torch.float64):
+        expansion = bas.expand()
+        assert all(a.dtype == dtype for a in expansion.alphas)
+        assert all(c.dtype == dtype for c in expansion.coeffs)
+
+    # without `dtype`, the dtype of the parametrization is used
+    assert Basis(number, pm, ihelp).slater.dtype == torch.float64
 
 
-def test_change_device_fail() -> None:
-    """Test failure upon changing `device` incorrectly."""
+def test_requires_param_module() -> None:
+    """Basis is internal and takes a ParamModule only."""
     number = torch.tensor([1])
     ihelp = IndexHelper.from_numbers(number, GFN1_XTB)
 
-    bas = Basis(number, GFN1_XTB, ihelp)
-    assert bas is not None
+    with pytest.raises(TypeError, match="ParamModule"):
+        Basis(number, GFN1_XTB, ihelp)  # type: ignore[arg-type]
 
-    # trying to use setter
-    with pytest.raises(AttributeError):
-        bas.device = "cpu"
+
+def test_rejects_inputs_on_different_devices() -> None:
+    """Basis makes no device moves; inputs on different devices raise."""
+    number = torch.tensor([8, 1, 1])
+    ihelp = IndexHelper.from_numbers(number, GFN1_XTB)
+    pm = ParamModule(GFN1_XTB)
+
+    with pytest.raises(ValueError, match="one device"):
+        Basis(number, pm, ihelp.to(device=torch.device("meta")))
+
+    pm_meta = ParamModule(GFN1_XTB, device=torch.device("meta"))
+    with pytest.raises(ValueError, match="one device"):
+        Basis(number, pm_meta, ihelp)
+
+    # no conversion methods that could move or cast fields behind the caller
+    bas = Basis(number, pm, ihelp)
+    assert not hasattr(bas, "to")
+    assert not hasattr(bas, "type")
 
 
 def test_non_valence_orthogonalization_is_metadata_independent() -> None:
@@ -220,19 +185,19 @@ def test_non_valence_orthogonalization_is_metadata_independent() -> None:
     custom.meta = None
     custom_pm = ParamModule(custom, dtype=torch.float64)
 
-    bas_ref = Basis(
+    bas_ref = make_basis(
         numbers,
         GFN1_XTB,
         IndexHelper.from_numbers(numbers, GFN1_XTB),
         dtype=torch.float64,
     )
-    bas_custom = Basis(
+    bas_custom = make_basis(
         numbers,
         custom,
         IndexHelper.from_numbers(numbers, custom),
         dtype=torch.float64,
     )
-    bas_custom_pm = Basis(
+    bas_custom_pm = make_basis(
         numbers, custom_pm, IndexHelper.from_numbers(numbers, custom_pm)
     )
 
@@ -288,12 +253,11 @@ def test_basis_and_wrappers_honor_target_dtype_with_param_module() -> None:
     ihelp = IndexHelper.from_numbers(numbers, pm_f64)
 
     bas_default = Basis(numbers, pm_f64, ihelp)
-    assert bas_default.dtype == torch.float64
     assert bas_default.slater.dtype == torch.float64
 
     bas_f32 = Basis(numbers, pm_f64, ihelp, dtype=torch.float32)
     exp_f32 = bas_f32.expand()
-    assert bas_f32.dtype == torch.float32
+    assert bas_f32.slater.dtype == torch.float32
     assert all(a.dtype == torch.float32 for a in exp_f32.alphas)
     assert all(c.dtype == torch.float32 for c in exp_f32.coeffs)
 
@@ -349,14 +313,14 @@ def test_basis_and_wrappers_honor_target_dtype_with_param_module() -> None:
 def test_expand_handles_zero_padded_numbers(batched: bool) -> None:
     """Zero-padded atomic numbers produce 1D placeholder CGTO slots."""
     unpadded = torch.tensor([8, 1])
-    bas_ref = Basis(
+    bas_ref = make_basis(
         unpadded, GFN1_XTB, IndexHelper.from_numbers(unpadded, GFN1_XTB)
     )
     exp_ref = bas_ref.expand()
 
     padded = torch.tensor([[8, 1, 0]]) if batched else torch.tensor([8, 1, 0])
     ihelp = IndexHelper.from_numbers(padded, GFN1_XTB, batch_mode=int(batched))
-    bas_pad = Basis(padded, GFN1_XTB, ihelp)
+    bas_pad = make_basis(padded, GFN1_XTB, ihelp)
     exp_pad = bas_pad.expand()
 
     assert len(exp_pad.alphas) == len(exp_ref.alphas) + 1
@@ -393,7 +357,7 @@ def test_canonical_cgtos_all_supported_elements(method: str) -> None:
     for z in zs:
         num = torch.tensor([z], device=DEVICE)
         ihelp = IndexHelper.from_numbers(num, par)
-        bas = Basis(num, par, ihelp, device=DEVICE, dtype=torch.float64)
+        bas = make_basis(num, par, ihelp, device=DEVICE, dtype=torch.float64)
         expansion = bas.expand()
         alphas, coeffs = expansion.alphas, expansion.coeffs
 
@@ -456,7 +420,7 @@ def test_custom_multi_nonvalence_s_shells_orthogonalize_to_primary() -> None:
     par = ParamModule(custom, dtype=torch.float64, device=DEVICE)
     num = torch.tensor([1], device=DEVICE)
     ihelp = IndexHelper.from_numbers(num, par)
-    bas = Basis(num, par, ihelp, device=DEVICE, dtype=torch.float64)
+    bas = make_basis(num, par, ihelp, device=DEVICE, dtype=torch.float64)
     expansion = bas.expand()
     alphas, coeffs = expansion.alphas, expansion.coeffs
 
@@ -500,7 +464,7 @@ def test_cgto_expansion_container_pytree_and_autograd() -> None:
     o_slater.requires_grad_(True)
 
     ihelp = IndexHelper.from_numbers(numbers, par)
-    bas = Basis(numbers, par, ihelp, device=DEVICE, dtype=torch.float64)
+    bas = make_basis(numbers, par, ihelp, device=DEVICE, dtype=torch.float64)
     assert not hasattr(bas, "create_cgtos")
     assert not hasattr(bas, "__dict__")
 
@@ -532,10 +496,10 @@ def test_cgto_expansion_container_pytree_and_autograd() -> None:
     assert type(mapped) is CGTOExpansion
     loss = sum(
         (a.square().sum() for a in mapped.alphas),
-        torch.zeros((), dtype=torch.float64, device=bas.device),
+        torch.zeros((), dtype=torch.float64, device=DEVICE),
     ) + sum(
         (c.square().sum() for c in mapped.coeffs),
-        torch.zeros((), dtype=torch.float64, device=bas.device),
+        torch.zeros((), dtype=torch.float64, device=DEVICE),
     )
     grad_h, grad_o = torch.autograd.grad(loss, (h_slater, o_slater))
     assert torch.isfinite(grad_h).all() and grad_h.abs().sum() > 0
@@ -547,74 +511,33 @@ def test_cgto_expansion_container_pytree_and_autograd() -> None:
     mapped2 = pytree.tree_map(_scale_tensor_leaf, expansion2)
     loss2 = sum(
         (a.square().sum() for a in mapped2.alphas),
-        torch.zeros((), dtype=torch.float64, device=bas.device),
+        torch.zeros((), dtype=torch.float64, device=DEVICE),
     ) + sum(
         (c.square().sum() for c in mapped2.coeffs),
-        torch.zeros((), dtype=torch.float64, device=bas.device),
+        torch.zeros((), dtype=torch.float64, device=DEVICE),
     )
     grad_h2, grad_o2 = torch.autograd.grad(loss2, (h_slater, o_slater))
     torch.testing.assert_close(grad_h2, grad_h, atol=0.0, rtol=0.0)
     torch.testing.assert_close(grad_o2, grad_o, atol=0.0, rtol=0.0)
 
 
-class _PreTransferSentinelTensor(torch.Tensor):
-    """Tensor wrapper that forbids structural ops before an explicit ``.to()``."""
-
-    _raw_data: torch.Tensor
-    events: list[str]
-    converted: list[torch.Tensor]
-
-    @staticmethod
-    def __new__(
-        cls,
-        data: torch.Tensor,
-        events: list[str],
-        converted: list[torch.Tensor],
-    ) -> _PreTransferSentinelTensor:
-        raw = data.detach().clone()
-        obj = torch.Tensor._make_subclass(
-            cls, data.detach().clone(), require_grad=False
-        )
-        obj._raw_data = raw
-        obj.events = events
-        obj.converted = converted
-        return obj
-
-    @classmethod
-    def __torch_function__(cls, func, types, args=(), kwargs=None):
-        kwargs = {} if kwargs is None else kwargs
-        if func is torch.Tensor.to:
-            self = args[0]
-            plain = self._raw_data.clone().to(*args[1:], **kwargs)
-            self.events.append(f"numbers.to:{plain.device.type}")
-            self.converted.append(plain)
-            return plain
-        raise AssertionError(
-            f"Structural op {func} executed on numbers before Basis device transfer."
-        )
-
-
-def test_basis_establishes_device_before_structural_lookups(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Basis moves numbers to target device before torch.unique and element lookups."""
+def test_basis_and_setups_keep_parametrization_in_place() -> None:
+    """
+    Basis reads the ParamModule without moving or copying it, and gradients
+    reach the Slater exponents through both integral setups.
+    """
     import sys
 
-    import dxtb._src.basis.bas as bas_mod
     import dxtb._src.calculators.types.base as base_calc_mod
-    from dxtb import Calculator, ParamModule, labels
-    from dxtb._src.calculators.model import Model
+    from dxtb import Calculator, labels
     from dxtb._src.components.classicals.dispersion import new_dispersion
     from dxtb._src.exlibs.available import has_libcint
-    from dxtb._src.integral.driver.libcint import setup_libcint
     from dxtb._src.integral.driver.pytorch import (
         build_overlap as build_overlap_pytorch,
     )
-    from dxtb._src.integral.driver.pytorch import setup_integrals
     from dxtb._src.integral.evaluation import setup_integral_evaluation
     from dxtb._src.typing.exceptions import DeviceError
     from dxtb._src.xtb.h0 import setup_h0, setup_h0_core
-    from dxtb.config import Config
 
     raw_numbers = torch.tensor([8, 1, 1])
     positions = torch.tensor(
@@ -623,65 +546,7 @@ def test_basis_establishes_device_before_structural_lookups(
     )
     ihelp = IndexHelper.from_numbers(raw_numbers, GFN1_XTB)
 
-    events: list[str] = []
-    converted: list[torch.Tensor] = []
-    unique_results: list[torch.Tensor] = []
-
-    orig_unique = torch.unique
-    orig_get_elem_param = ParamModule.get_elem_param
-    orig_get_elem_pqn = ParamModule.get_elem_pqn
-    orig_get_elem_valence = ParamModule.get_elem_valence
-    orig_get_elem_shells = ParamModule.get_elem_shells
-
-    def _called_from_basis() -> bool:
-        return sys._getframe(2).f_code.co_filename == bas_mod.__file__
-
-    def tracked_unique(tensor: torch.Tensor, *args, **kwargs):
-        out = orig_unique(tensor, *args, **kwargs)
-        if _called_from_basis():
-            assert type(tensor) is torch.Tensor
-            assert tensor.device == torch.device("cpu")
-            events.append(f"unique:{tensor.device.type}")
-            unique_results.append(out)
-        return out
-
-    def tracked_get_elem_param(self, unique: torch.Tensor, key: str, *a, **kw):
-        if _called_from_basis():
-            assert unique is unique_results[-1]
-            assert unique.device == torch.device("cpu")
-            events.append(f"get_elem_param:{key}:{unique.device.type}")
-        return orig_get_elem_param(self, unique, key, *a, **kw)
-
-    def tracked_get_elem_pqn(self, unique: torch.Tensor, *a, **kw):
-        if _called_from_basis():
-            assert unique is unique_results[-1]
-            assert unique.device == torch.device("cpu")
-            events.append(f"get_elem_pqn:{unique.device.type}")
-        return orig_get_elem_pqn(self, unique, *a, **kw)
-
-    def tracked_get_elem_valence(self, unique: torch.Tensor, *a, **kw):
-        if _called_from_basis():
-            assert unique is unique_results[-1]
-            assert unique.device == torch.device("cpu")
-            events.append(f"get_elem_valence:{unique.device.type}")
-        return orig_get_elem_valence(self, unique, *a, **kw)
-
-    def tracked_get_elem_shells(self, unique: torch.Tensor, *a, **kw):
-        if _called_from_basis():
-            assert unique is unique_results[-1]
-            assert unique.device == torch.device("cpu")
-            events.append(f"get_elem_shells:{unique.device.type}")
-        return orig_get_elem_shells(self, unique, *a, **kw)
-
-    monkeypatch.setattr(bas_mod.torch, "unique", tracked_unique)
-    monkeypatch.setattr(ParamModule, "get_elem_param", tracked_get_elem_param)
-    monkeypatch.setattr(ParamModule, "get_elem_pqn", tracked_get_elem_pqn)
-    monkeypatch.setattr(
-        ParamModule, "get_elem_valence", tracked_get_elem_valence
-    )
-    monkeypatch.setattr(ParamModule, "get_elem_shells", tracked_get_elem_shells)
-
-    # 1. Existing ParamModule + sentinel numbers + explicit CPU target device
+    # 1. Basis keeps the ParamModule's storage and the IndexHelper identity
     pm = ParamModule(GFN1_XTB, dtype=torch.float64, device=torch.device("cpu"))
     pm.set_differentiable("element.O.slater")
     pm.set_differentiable("element.H.slater")
@@ -690,48 +555,25 @@ def test_basis_establishes_device_before_structural_lookups(
     o_ptr_before = o_slater.data_ptr()
     h_ptr_before = h_slater.data_ptr()
 
-    sentinel = _PreTransferSentinelTensor(raw_numbers, events, converted)
-    bas_pm = Basis(sentinel, pm, ihelp, device=torch.device("cpu"))
-    assert events == [
-        "numbers.to:cpu",
-        "unique:cpu",
-        "get_elem_param:ngauss:cpu",
-        "get_elem_pqn:cpu",
-        "get_elem_param:slater:cpu",
-        "get_elem_valence:cpu",
-        "get_elem_shells:cpu",
-    ]
-    assert len(converted) == 1
-    assert bas_pm.numbers is converted[0]
-    assert bas_pm.unique is unique_results[0]
-    assert bas_pm.ihelp is ihelp
-    assert bas_pm.dtype == torch.float64
+    bas = Basis(raw_numbers, pm, ihelp)
+    assert bas.ihelp is ihelp
+    assert torch.equal(bas.unique, torch.tensor([1, 8]))
+    assert bas.slater.dtype == torch.float64
     assert o_slater.data_ptr() == o_ptr_before
     assert h_slater.data_ptr() == h_ptr_before
 
-    # 2. Plain Param + string device normalization + explicit float32 dtype
-    events.clear()
-    converted.clear()
-    unique_results.clear()
-    sentinel_f32 = _PreTransferSentinelTensor(raw_numbers, events, converted)
-    bas_param = Basis(
-        sentinel_f32, GFN1_XTB, ihelp, device="cpu", dtype=torch.float32  # type: ignore[arg-type]
-    )
-    assert bas_param.device == torch.device("cpu")
-    assert bas_param.dtype == torch.float32
-    assert bas_param.slater.dtype == torch.float32
-    assert bas_param.numbers is converted[0]
-    assert bas_param.unique is unique_results[0]
-    assert bas_param.to(torch.device("cpu")) is bas_param
-    assert bas_param.to("cpu") is bas_param  # type: ignore[arg-type]
-    assert bas_param.type(torch.float64).dtype == torch.float64
+    # 2. setup_integral_evaluation needs the numbers on the requested device
+    with pytest.raises(ValueError, match="requested device"):
+        setup_integral_evaluation(
+            raw_numbers,
+            pm,
+            ihelp,
+            driver_type=labels.INTDRIVER_PYTORCH,
+            intlevel=labels.INTLEVEL_OVERLAP,
+            device=torch.device("meta"),
+        )
 
-    # 3. Same-device plain tensor preserves numbers/ihelp identity without copy
-    bas_same = Basis(raw_numbers, pm, ihelp)
-    assert bas_same.numbers is raw_numbers
-    assert bas_same.ihelp is ihelp
-
-    # 4. Dispersion & Calculator cross-dtype/device boundary invariants
+    # 3. Dispersion & Calculator cross-dtype/device boundary invariants
     with torch.device("meta"):
         disp = new_dispersion(raw_numbers, pm)
     assert disp is not None and disp.device == torch.device("cpu")
@@ -747,38 +589,30 @@ def test_basis_establishes_device_before_structural_lookups(
     )
     orig_pm_dd = ParamModule.dd.fget  # type: ignore[union-attr]
     assert orig_pm_dd is not None
-    monkeypatch.setattr(
-        ParamModule,
-        "dd",
-        property(
-            lambda _self: (
-                {"device": torch.device("meta"), "dtype": _self.dtype}
-                if sys._getframe(1).f_code.co_filename == base_calc_mod.__file__
-                else orig_pm_dd(_self)
-            )
-        ),
-    )
-    eval_sys = calc_f32._prepare_eval_system()
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            ParamModule,
+            "dd",
+            property(
+                lambda _self: (
+                    {"device": torch.device("meta"), "dtype": _self.dtype}
+                    if sys._getframe(1).f_code.co_filename
+                    == base_calc_mod.__file__
+                    else orig_pm_dd(_self)
+                )
+            ),
+        )
+        eval_sys = calc_f32._prepare_eval_system()
     assert eval_sys.h0_setup.selfenergy.dtype == torch.float32
     assert eval_sys.h0_setup.selfenergy.device == torch.device("cpu")
-    monkeypatch.undo()
 
-    monkeypatch.setattr(bas_mod.torch, "unique", tracked_unique)
-    monkeypatch.setattr(ParamModule, "get_elem_param", tracked_get_elem_param)
-    monkeypatch.setattr(ParamModule, "get_elem_pqn", tracked_get_elem_pqn)
-    monkeypatch.setattr(
-        ParamModule, "get_elem_valence", tracked_get_elem_valence
-    )
-    monkeypatch.setattr(ParamModule, "get_elem_shells", tracked_get_elem_shells)
-
-    # 5. H0 setup, PyTorch setup, libcint setup, Model.setup spy scoping, and gradients
+    # 4. H0 setups, PyTorch and libcint setups, and gradients
     h0 = setup_h0(raw_numbers, pm, ihelp)
     h0_core = setup_h0_core(raw_numbers, pm, ihelp)
     assert h0.selfenergy.requires_grad is False
     assert h0_core.hscale.requires_grad is False
 
-    pt_setup = setup_integrals(bas_pm)
-    s_pt = build_overlap_pytorch(pt_setup, positions)
+    s_pt = build_overlap_pytorch(pytorch_setup(bas), positions)
     grad_pt_o, grad_pt_h = torch.autograd.grad(
         s_pt.pow(2).sum(), (o_slater, h_slater)
     )
@@ -790,31 +624,7 @@ def test_basis_establishes_device_before_structural_lookups(
             build_overlap as build_overlap_libcint,
         )
 
-        events.clear()
-        converted.clear()
-        unique_results.clear()
-        sentinel_lc = _PreTransferSentinelTensor(raw_numbers, events, converted)
-        isetup_lc = setup_integral_evaluation(
-            sentinel_lc,
-            pm,
-            ihelp,
-            driver_type=labels.INTDRIVER_LIBCINT,
-            intlevel=labels.INTLEVEL_OVERLAP,
-            device=torch.device("cpu"),
-        )
-        assert isetup_lc is not None and isetup_lc.libcint is not None
-        assert events[0] == "numbers.to:cpu"
-        assert events[1] == "unique:cpu"
-
-        events.clear()
-        unique_results.clear()
-        model_lc = Model(
-            par=pm, config=Config.create(int_driver=labels.INTDRIVER_LIBCINT)
-        )
-        _ = model_lc.setup(raw_numbers)
-        assert [e for e in events if e.startswith("unique:")] == ["unique:cpu"]
-
-        lc_setup = setup_libcint(Basis(raw_numbers, pm, ihelp))
+        lc_setup = libcint_setup(raw_numbers, Basis(raw_numbers, pm, ihelp))
         s_lc = build_overlap_libcint(lc_setup, positions)
         torch.testing.assert_close(s_lc, s_pt, atol=1e-12, rtol=1e-12)
         grad_lc_o, grad_lc_h = torch.autograd.grad(
@@ -825,15 +635,13 @@ def test_basis_establishes_device_before_structural_lookups(
 
 
 @pytest.mark.cuda
-def test_cuda_system_libcint_basis_device_ordering(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """CUDA System with libcint runs Basis unique/element lookups on CPU and preserves gradients."""
+def test_cuda_system_libcint_moves_only_the_gaussians() -> None:
+    """
+    A CUDA System with libcint builds the Basis on CUDA; only the libcint
+    setup moves to the CPU, and energies and gradients match PyTorch.
+    """
     pytest.importorskip("tad_libcint")
-    import sys
-
-    import dxtb._src.basis.bas as bas_mod
-    from dxtb import ParamModule, labels
+    from dxtb import labels
     from dxtb._src.calculators.model import Model
     from dxtb.config import Config
 
@@ -846,27 +654,13 @@ def test_cuda_system_libcint_basis_device_ordering(
         requires_grad=True,
     )
 
-    seen_unique_devices: list[torch.device] = []
-    orig_unique = torch.unique
-
-    def spy_unique(tensor: torch.Tensor, *args, **kwargs):
-        if sys._getframe(1).f_code.co_filename == bas_mod.__file__:
-            seen_unique_devices.append(tensor.device)
-        return orig_unique(tensor, *args, **kwargs)
-
-    monkeypatch.setattr(bas_mod.torch, "unique", spy_unique)
-
-    for par_dev in (torch.device("cpu"), cuda_dev):
-        pm_probe = ParamModule(GFN1_XTB, dtype=torch.float64, device=par_dev)
-        ihelp_cuda = IndexHelper.from_numbers(numbers, pm_probe)
-        seen_unique_devices.clear()
-        bas_cpu = Basis(
-            numbers, pm_probe, ihelp_cuda, device=torch.device("cpu")
-        )
-        assert seen_unique_devices == [torch.device("cpu")]
-        assert bas_cpu.numbers.device == torch.device("cpu")
-        assert bas_cpu.unique.device == torch.device("cpu")
-        assert next(pm_probe.parameters()).device == par_dev
+    pm_probe = ParamModule(GFN1_XTB, dtype=torch.float64, device=cuda_dev)
+    ihelp_cuda = IndexHelper.from_numbers(numbers, pm_probe)
+    bas = Basis(numbers, pm_probe, ihelp_cuda)
+    assert bas.unique.device == cuda_dev
+    assert all(a.device == cuda_dev for a in bas.expand().alphas)
+    lc_setup = libcint_setup(numbers, bas)
+    assert all(a.device.type == "cpu" for a in lc_setup.alphas)
 
     pm_cuda = ParamModule(GFN1_XTB, dtype=torch.float64, device=cuda_dev)
     pm_cuda.set_differentiable("element.O.slater")
@@ -874,9 +668,7 @@ def test_cuda_system_libcint_basis_device_ordering(
     model_lc = Model(
         par=pm_cuda, config=Config.create(int_driver=labels.INTDRIVER_LIBCINT)
     )
-    seen_unique_devices.clear()
     sys_lc = model_lc.setup(numbers)
-    assert seen_unique_devices == [torch.device("cpu")]
 
     pm_pt = ParamModule(GFN1_XTB, dtype=torch.float64, device=cuda_dev)
     pm_pt.set_differentiable("element.O.slater")

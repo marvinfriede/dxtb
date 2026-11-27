@@ -25,7 +25,6 @@ import torch
 from torch.func import jvp, vmap
 
 from dxtb import GFN1_XTB, GFN2_XTB, IndexHelper
-from dxtb._src.basis.bas import Basis
 from dxtb._src.integral.driver.pytorch.impls.kernels import (
     ALGORITHMS,
     get_kernel,
@@ -46,6 +45,7 @@ from dxtb._src.integral.driver.pytorch.setup import (
 from dxtb._src.param import Param, ParamModule
 
 from ..conftest import DEVICE
+from ..utils import make_basis, pytorch_setup
 from .samples import samples
 
 
@@ -63,8 +63,8 @@ def test_pure_multipole_reuses_setup_without_call_state(
     numbers = sample["numbers"].to(DEVICE)
     positions = sample["positions"].to(**dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
-    basis = Basis(torch.unique(numbers), par, ihelp, **dd)
-    setup = setup_integrals(basis, algorithm=algorithm)
+    basis = make_basis(torch.unique(numbers), par, ihelp, **dd)
+    setup = pytorch_setup(basis, algorithm=algorithm)
     assert isinstance(setup, PytorchIntegralSetup)
 
     first = build(setup, positions)
@@ -105,8 +105,8 @@ def test_pure_multipole_equal_leaf_gradients(
     numbers = sample["numbers"].to(DEVICE)
     positions = sample["positions"].to(**dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
-    basis = Basis(torch.unique(numbers), par, ihelp, **dd)
-    setup = setup_integrals(basis, algorithm=algorithm)
+    basis = make_basis(torch.unique(numbers), par, ihelp, **dd)
+    setup = pytorch_setup(basis, algorithm=algorithm)
 
     left = positions.clone().requires_grad_(True)
     right = positions.clone().requires_grad_(True)
@@ -131,8 +131,8 @@ def test_pure_multipole_supports_jvp_and_vmap(
     numbers = sample["numbers"].to(DEVICE)
     positions = sample["positions"].to(**dd)
     ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
-    basis = Basis(torch.unique(numbers), GFN1_XTB, ihelp, **dd)
-    setup = setup_integrals(basis, algorithm=algorithm)
+    basis = make_basis(torch.unique(numbers), GFN1_XTB, ihelp, **dd)
+    setup = pytorch_setup(basis, algorithm=algorithm)
     tangent = torch.ones_like(positions)
 
     def eval_multipole(pos: torch.Tensor) -> torch.Tensor:

@@ -25,7 +25,8 @@ from __future__ import annotations
 
 from tad_mctc.tree import Node, child, context
 
-from dxtb._src.basis.bas import Basis
+from dxtb._src.basis.bas import CGTOExpansion
+from dxtb._src.basis.indexhelper import IndexHelper
 from dxtb._src.typing import Tensor
 
 from .impls.kernels import DEFAULT_ALGORITHM, get_kernel
@@ -75,26 +76,42 @@ class PytorchIntegralSetup(Node):
 
 
 def setup_integrals(
-    basis: Basis,
+    expansion: CGTOExpansion,
+    ihelp: IndexHelper,
     *,
     algorithm: str = DEFAULT_ALGORITHM,
 ) -> PytorchIntegralSetup:
-    """Build the authoritative PyTorch integral setup Node from ``basis``."""
-    dev = basis.device
-    index = basis.ihelp
-    if index.batch_mode != 0:
+    """
+    Build the authoritative PyTorch integral setup Node.
+
+    Parameters
+    ----------
+    expansion : CGTOExpansion
+        Contracted Gaussians of the unique shells (:meth:`.Basis.expand`).
+    ihelp : IndexHelper
+        Index helper of one single System, on the device of ``expansion``.
+    algorithm : str, optional
+        Name of the integral kernel.
+
+    Returns
+    -------
+    PytorchIntegralSetup
+        Setup on the device of ``ihelp``.
+    """
+    if ihelp.batch_mode != 0:
         raise ValueError("PyTorch integral setup requires one single System.")
-    if index.device != dev:
+    if not expansion.alphas:
+        raise ValueError("PyTorch integral setup requires at least one shell.")
+    dev = ihelp.device
+    if expansion.alphas[0].device != dev:
         raise ValueError(
-            f"Basis IndexHelper device ({index.device}) must match Basis "
-            f"device ({dev})."
+            f"IndexHelper device ({dev}) must match the device of the "
+            f"expanded basis ({expansion.alphas[0].device})."
         )
     # Validate the kernel before creating the setup.
     _ = get_kernel(algorithm)
-    expansion = basis.expand()
-    dtype = (
-        expansion.alphas[0].dtype if expansion.alphas else basis.slater.dtype
-    )
+    index = ihelp
+    dtype = expansion.alphas[0].dtype
     pair_plan = prepare(index, dev, dtype=dtype)
     return PytorchIntegralSetup(
         alphas=expansion.alphas,

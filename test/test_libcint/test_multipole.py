@@ -31,7 +31,6 @@ from tad_mctc.convert import numpy_to_tensor
 from tad_mctc.math import einsum
 
 from dxtb import IndexHelper
-from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint, has_pyscf
 from dxtb._src.integral.driver.libcint import (
     build_dipole as build_dipole_libcint,
@@ -39,14 +38,12 @@ from dxtb._src.integral.driver.libcint import (
 from dxtb._src.integral.driver.libcint import (
     build_quadrupole as build_quadrupole_libcint,
 )
-from dxtb._src.integral.driver.libcint import setup_libcint
 from dxtb._src.integral.driver.pytorch import (
     build_dipole as build_dipole_pytorch,
 )
 from dxtb._src.integral.driver.pytorch import (
     build_quadrupole as build_quadrupole_pytorch,
 )
-from dxtb._src.integral.driver.pytorch import setup_integrals as setup_pytorch
 from dxtb._src.integral.evaluation import _make_quadrupole_traceless
 from dxtb._src.param import ParamModule
 from dxtb._src.typing import DD, Any, Tensor
@@ -57,7 +54,7 @@ if has_libcint is True:
     from dxtb._src.exlibs import libcint
 
 from ..conftest import DEVICE
-from ..utils import get_param_module
+from ..utils import get_param_module, libcint_setup, make_basis, pytorch_setup
 from .ao_order import reorder_pyscf_ao
 from .samples import samples
 
@@ -88,7 +85,7 @@ def libcint_moment(
 ) -> Tensor:
     """Multipole integral from normalized libcint shells."""
     ihelp = IndexHelper.from_numbers(numbers, par)
-    setup = setup_libcint(Basis(numbers, par, ihelp, **dd).cpu())
+    setup = libcint_setup(numbers, make_basis(numbers, par, ihelp, **dd))
     return libcint.int1e(intstring, *setup.create_libcint(positions))
 
 
@@ -125,8 +122,8 @@ def run_single(dtype: torch.dtype, name: str, gfn: str) -> None:
     numbers = sample["numbers"].to(DEVICE)
     positions = sample["positions"].to(**dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
-    bas = Basis(numbers, par, ihelp, **dd)
-    libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(
+    bas = make_basis(numbers, par, ihelp, **dd)
+    libcint_basis, structure = libcint_setup(numbers, bas).create_libcint(
         positions
     )
 
@@ -346,9 +343,9 @@ def test_standalone_origin_centered_builders_match_pytorch(gfn: str) -> None:
     positions = samples["SiH4"]["positions"].to(**dd)
 
     ihelp = IndexHelper.from_numbers(numbers, par)
-    bas = Basis(numbers, par, ihelp, **dd)
-    pt_setup = setup_pytorch(bas)
-    lc_setup = setup_libcint(bas)
+    bas = make_basis(numbers, par, ihelp, **dd)
+    pt_setup = pytorch_setup(bas)
+    lc_setup = libcint_setup(numbers, bas)
 
     dip_pt = build_dipole_pytorch(pt_setup, positions)
     dip_lc = build_dipole_libcint(lc_setup, positions)

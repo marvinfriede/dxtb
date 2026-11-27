@@ -31,9 +31,8 @@ import torch
 from tad_mctc.data import pse
 
 from dxtb._src.constants.defaults import DEFAULT_BASIS_INT
-from dxtb._src.param import Param, ParamModule
-from dxtb._src.typing import Literal, Self, Tensor, TensorLike, override
-from dxtb._src.utils.tensors import normalize_device
+from dxtb._src.param import ParamModule
+from dxtb._src.typing import Any, Literal, Tensor
 
 from .indexhelper import IndexHelper
 from .ortho import orthogonalize
@@ -70,8 +69,45 @@ angular2label = {
 }
 
 
-class Basis(TensorLike):
-    """Atomic orbital basis set."""
+class Basis:
+    """
+    Atomic orbital basis set of the unique elements of one Composition.
+
+    Gathers the Slater-type basis parameters from a :class:`ParamModule` and
+    expands them into contracted Gaussians (:meth:`expand`) or exports them
+    (:meth:`to_bse`). A ``Basis`` is a short-lived view of the
+    parametrization: it makes no device moves and has no ``.to()``. All
+    inputs must already be on one device; a backend that needs another
+    device (libcint needs the CPU) moves the expanded Gaussians itself.
+
+    Parameters
+    ----------
+    numbers : Tensor
+        Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``).
+    par : ParamModule
+        Parametrization of an extended tight-binding (xTB) Method.
+    ihelp : IndexHelper
+        Index helper of the same atomic numbers.
+    dtype : torch.dtype | None, optional
+        Floating point dtype of the Slater exponents and hence of the
+        expanded Gaussians. Defaults to the dtype of ``par``.
+
+    Raises
+    ------
+    TypeError
+        ``par`` is not a :class:`ParamModule`.
+    ValueError
+        ``numbers``, ``ihelp`` and ``par`` are not on the same device.
+    """
+
+    unique: Tensor
+    """Unique atomic numbers (sorted)."""
+
+    ihelp: IndexHelper
+    """Index helper of the atomic numbers."""
+
+    meta: Any
+    """Metadata (name, version) of the parametrization, or ``None``."""
 
     ngauss: Tensor
     """Number of Gaussians used in expansion from Slater orbital."""
@@ -92,10 +128,9 @@ class Basis(TensorLike):
     """STO-NG expansion set for Slater-type orbitals."""
 
     __slots__ = [
-        "numbers",
         "unique",
-        "meta",
         "ihelp",
+        "meta",
         "ngauss",
         "shells",
         "slater",
@@ -107,92 +142,43 @@ class Basis(TensorLike):
     def __init__(
         self,
         numbers: Tensor,
-        par: Param | ParamModule,
+        par: ParamModule,
         ihelp: IndexHelper,
-        device: torch.device | None = None,
+        *,
         dtype: torch.dtype | None = None,
     ) -> None:
-        resolved_device = (
-            numbers.device if device is None else normalize_device(device)
-        )
-        resolved_dtype = (
-            par.dtype
-            if dtype is None and isinstance(par, ParamModule)
-            else dtype
-        )
-        super().__init__(resolved_device, resolved_dtype)
-        self.numbers = numbers.to(device=self.device)
-        self.unique: Tensor = torch.unique(self.numbers)
-        self.ihelp = (
-            ihelp
-            if ihelp.device == self.device
-            else ihelp.to(device=self.device)
-        )
-
         if not isinstance(par, ParamModule):
-            par = ParamModule(par, **self.dd)
+            raise TypeError(
+                f"Basis requires a ParamModule instance, got "
+                f"{type(par).__name__}."
+            )
+        devices = {numbers.device, ihelp.device, par.device}
+        if len(devices) > 1:
+            raise ValueError(
+                "Atomic numbers, IndexHelper and ParamModule must be on one "
+                f"device, got {sorted(str(d) for d in devices)}."
+            )
 
+        self.unique = torch.unique(numbers)
+        self.ihelp = ihelp
         self.meta = None if par.is_none("meta") else par.meta
+        self.sto = (
+            "gfn2"
+            if par.is_none("hamiltonian.xtb.sto")
+            else par.get("hamiltonian.xtb.sto")
+        )
 
-        if par.is_none("hamiltonian.xtb.sto"):
-            self.sto: Literal["gfn1", "gfn2"] = "gfn2"
-        else:
-            self.sto = par.get("hamiltonian.xtb.sto")
-
-        # Integer data types for `ngauss` and `pqn`
         self.ngauss = par.get_elem_param(
             self.unique, "ngauss", dtype=DEFAULT_BASIS_INT
         )
         self.pqn = par.get_elem_pqn(self.unique)
-
-        self.slater = par.get_elem_param(self.unique, "slater")
         self.valence = par.get_elem_valence(self.unique)
         self.shells = par.get_elem_shells(self.unique)
 
-        # Keep extracted basis tensors on the requested target device without
-        # mutating the device of an externally owned ParamModule.
-        self.ngauss = self.ngauss.to(device=self.device)
-        self.slater = self.slater.to(device=self.device, dtype=self.dtype)
-        self.pqn = self.pqn.to(device=self.device)
-        self.valence = self.valence.to(device=self.device)
-
-    @override
-    def to(
-        self,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> Self:
-        """Return a copy of Basis on the normalized device and dtype."""
-        return super().to(device=normalize_device(device), dtype=dtype)
-
-    @override
-    def _clone_tensorlike(
-        self,
-        *,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> Self:
-        """Clone Basis tensors while preserving structural integer/bool dtypes."""
-        target_device = (
-            self.device if device is None else normalize_device(device)
+        # the cast is differentiable, so gradients reach the parametrization
+        self.slater = par.get_elem_param(self.unique, "slater").to(
+            dtype=par.dtype if dtype is None else dtype
         )
-        target_dtype = self.dtype if dtype is None else dtype
-        new = super()._clone_tensorlike(device=target_device, dtype=dtype)
-
-        # TensorLike treats every plain tensor slot as floating-point. Restore
-        # the integer and boolean structural tensors with only a device move.
-        new.numbers = self.numbers.to(device=target_device)
-        new.unique = self.unique.to(device=target_device)
-        new.ngauss = self.ngauss.to(device=target_device)
-        new.pqn = self.pqn.to(device=target_device)
-        new.valence = self.valence.to(device=target_device)
-        new.slater = self.slater.to(device=target_device, dtype=target_dtype)
-        new.ihelp = (
-            self.ihelp
-            if self.ihelp.device == target_device
-            else self.ihelp.to(device=target_device)
-        )
-        return new
 
     def expand(self) -> CGTOExpansion:
         """

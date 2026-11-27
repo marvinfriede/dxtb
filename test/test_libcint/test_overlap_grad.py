@@ -29,14 +29,13 @@ import torch
 from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
-from dxtb._src.integral.driver.libcint import setup_libcint
 from dxtb._src.typing import DD, Tensor
 
 if has_libcint is True:
     from dxtb._src.exlibs import libcint
 
 from ..conftest import DEVICE
-from ..utils import get_param_module, load_from_npz
+from ..utils import get_param_module, libcint_setup, load_from_npz, make_basis
 from .samples import samples
 
 ref_overlap = np.load("test/test_overlap/grad.npz")
@@ -52,8 +51,8 @@ def explicit(name: str, dd: DD, tol: float) -> None:
 
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
-    bas = Basis(numbers, par, ihelp, **dd)
-    libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(
+    bas = make_basis(numbers, par, ihelp, **dd)
+    libcint_basis, structure = libcint_setup(numbers, bas).create_libcint(
         positions
     )
 
@@ -97,11 +96,11 @@ def autograd(name: str, dd: DD, tol: float) -> None:
 
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
-    bas = Basis(numbers, par, ihelp, **dd)
+    bas = make_basis(numbers, par, ihelp, **dd)
 
     # variable to be differentiated
     pos = positions.clone().requires_grad_(True)
-    libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(pos)
+    libcint_basis, structure = libcint_setup(numbers, bas).create_libcint(pos)
     s = libcint.overlap(libcint_basis, structure)
 
     (g,) = torch.autograd.grad(s.sum(), pos)
@@ -136,7 +135,7 @@ def num_grad(bas: Basis, ihelp: IndexHelper, positions: Tensor) -> torch.Tensor:
 
     positions = positions.clone().detach()
 
-    lc_setup = setup_libcint(bas.cpu())
+    lc_setup = libcint_setup(numbers, bas)
 
     def compute_overlap(positions: torch.Tensor) -> torch.Tensor:
         libcint_basis, structure = lc_setup.create_libcint(positions)

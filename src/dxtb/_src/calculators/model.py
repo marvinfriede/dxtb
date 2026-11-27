@@ -1989,7 +1989,6 @@ class System:
                 raw_numbers,
                 angular=angular,
                 batch_mode=self.batch_mode,
-                move_to_numbers_device=True,
             )
             return _index_helpers_equal(raw_ihelp, expected_ihelp)
 

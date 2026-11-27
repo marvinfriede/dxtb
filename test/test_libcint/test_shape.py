@@ -25,16 +25,14 @@ import torch
 from tad_mctc.batch import pack
 
 from dxtb import IndexHelper
-from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
-from dxtb._src.integral.driver.libcint import setup_libcint
 from dxtb._src.typing import DD
 
 if has_libcint is True:
     from dxtb._src.exlibs import libcint
 
 from ..conftest import DEVICE
-from ..utils import get_param_module
+from ..utils import get_param_module, libcint_setup, make_basis
 from .samples import samples
 
 sample_list = ["H2", "HHe", "LiH", "Li2", "S2", "H2O", "SiH4"]
@@ -55,9 +53,9 @@ def test_single(dtype: torch.dtype, intstr: str, name: str) -> None:
 
     par = get_param_module("gfn1", **dd)
     ihelp = IndexHelper.from_numbers(numbers, par)
-    bas = Basis(numbers, par, ihelp, **dd)
+    bas = make_basis(numbers, par, ihelp, **dd)
 
-    libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(
+    libcint_basis, structure = libcint_setup(numbers, bas).create_libcint(
         positions
     )
     i = libcint.int1e(intstr, libcint_basis, structure)
@@ -83,8 +81,8 @@ def test_batch(dtype: torch.dtype, name1: str, name2: str, intstr: str) -> None:
         numbers = sample["numbers"].to(DEVICE)
         positions = sample["positions"].to(**dd)
         ihelp = IndexHelper.from_numbers(numbers, par)
-        bas = Basis(numbers, par, ihelp, **dd)
-        libcint_basis, structure = setup_libcint(bas.cpu()).create_libcint(
+        bas = make_basis(numbers, par, ihelp, **dd)
+        libcint_basis, structure = libcint_setup(numbers, bas).create_libcint(
             positions
         )
         values.append(libcint.int1e(intstr, libcint_basis, structure))

@@ -57,6 +57,8 @@ from dxtb._src.scf.map import scf_map
 from dxtb._src.typing import Tensor
 from dxtb.config import Config, ConfigSCF
 
+from ..utils import make_basis, pytorch_setup
+
 
 def _water_fixtures() -> tuple[Model, ParamModule, System, System, Tensor]:
     """Return GFN2 Model, ParamModule, OH2/HOH Systems, and geometry."""
@@ -433,7 +435,6 @@ def test_scf_dynamo_capture_and_post_compile_mutation_guard() -> None:
 
 def test_standalone_scf_without_system_object_and_metadata_guards() -> None:
     """Cover B7 item 13: standalone solve() and setup_scf_inputs() checks."""
-    from dxtb._src.basis.bas import Basis
     from dxtb._src.components.interactions.coulomb.secondorder import new_es2
     from dxtb._src.integral.driver.pytorch import (
         build_overlap,
@@ -455,8 +456,8 @@ def test_standalone_scf_without_system_object_and_metadata_guards() -> None:
     # Pure standalone construction for GFN1 (no Model, System, or Calculator!)
     par1 = ParamModule(GFN1_XTB, dtype=torch.float64)
     ihelp1 = IndexHelper.from_numbers(nums, par1)
-    bas1 = Basis(nums, par1, ihelp1, dtype=torch.float64)
-    pt_setup1 = setup_integrals(bas1)
+    bas1 = make_basis(nums, par1, ihelp1, dtype=torch.float64)
+    pt_setup1 = pytorch_setup(bas1)
     ovlp1 = build_overlap(pt_setup1, pos)
     h0_1 = setup_h0(nums, par1, ihelp1, dtype=torch.float64)
     hcore1, _ = build_hcore(h0_1, pos, ovlp1, charge=chrg)
@@ -498,8 +499,8 @@ def test_standalone_scf_without_system_object_and_metadata_guards() -> None:
     # Standalone GFN0 non-SCF solve
     par0 = ParamModule(GFN0_XTB, dtype=torch.float64)
     ihelp0 = IndexHelper.from_numbers(nums, par0)
-    bas0 = Basis(nums, par0, ihelp0, dtype=torch.float64)
-    ovlp0 = build_overlap(setup_integrals(bas0), pos)
+    bas0 = make_basis(nums, par0, ihelp0, dtype=torch.float64)
+    ovlp0 = build_overlap(pytorch_setup(bas0), pos)
     h0_0 = setup_h0(nums, par0, ihelp0, dtype=torch.float64)
     hcore0, _ = build_hcore(h0_0, pos, ovlp0, charge=chrg)
     empty_ilist = InteractionList()
@@ -1150,7 +1151,6 @@ def _standalone_h2o_bundle(method_label: int, dtype: torch.dtype) -> tuple[
     Tensor,
 ]:
     """Build standalone H2O numbers, geometry, integrals, cache, and config."""
-    from dxtb._src.basis.bas import Basis
     from dxtb._src.integral.driver.pytorch import (
         build_overlap,
         setup_integrals,
@@ -1172,7 +1172,7 @@ def _standalone_h2o_bundle(method_label: int, dtype: torch.dtype) -> tuple[
         [[0.0, 0.0, 0.0], [0.0, 0.0, 1.8], [0.0, 1.8, 0.0]], dtype=dtype
     )
     ihelp = IndexHelper.from_numbers(nums, par)
-    pt_setup = setup_integrals(Basis(nums, par, ihelp, dtype=dtype))
+    pt_setup = pytorch_setup(make_basis(nums, par, ihelp, dtype=dtype))
     h0 = setup_h0(nums, par, ihelp, dtype=dtype)
     chrg0 = torch.tensor([0.0], dtype=dtype)
     if method_label == labels.GFN2_XTB:
