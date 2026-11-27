@@ -305,10 +305,6 @@ def test_exact_aes2_update_reset_and_setup_authority() -> None:
         setup, positions, interaction, _charges(ihelp, numbers), ihelp
     )
     torch.testing.assert_close(energy_after_mutation, reference_energy)
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        interaction.update(dmp3=torch.tensor(2.0, **DD))
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        interaction.reset()
 
     model = Model(
         par=parameters,
@@ -319,11 +315,6 @@ def test_exact_aes2_update_reset_and_setup_authority() -> None:
     assert system.aes2_interaction is interaction
     assert system.aes2_setup is not None
     assert torch.allclose(system.aes2_setup.dmp3, interaction.dmp3)
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        system.interactions.update("AES2", dmp3=torch.tensor(2.0, **DD))
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        system.interactions.reset("AES2")
-    system.interactions.reset_all()
     assert system.aes2_setup is not None
 
     calc = Calculator(
@@ -339,7 +330,6 @@ def test_exact_aes2_update_reset_and_setup_authority() -> None:
     )
     calculator_setup = calc.system.aes2_setup
     assert calculator_setup is not None
-    calc.reset()
     assert calc.system.aes2_setup is calculator_setup
 
 
@@ -481,89 +471,6 @@ def test_core_interaction_data_is_call_local_after_geometry_change() -> None:
     assert first is not second and second is not third
     assert not torch.allclose(first.amat_sd, second.amat_sd)
     torch.testing.assert_close(first.amat_sd, third.amat_sd)
-
-
-def test_aes2_subclass_remains_a_cache_driven_extension() -> None:
-    """Subclasses keep per-call cache refresh and custom reset semantics."""
-    numbers, positions, parameters, ihelp, base = _inputs()
-
-    class AES2Extension(AES2):
-        __slots__ = ("scale", "initial_scale", "cache_calls", "reset_calls")
-
-        def __init__(self) -> None:
-            super().__init__(
-                base.dmp3,
-                base.dmp5,
-                base.dkernel,
-                base.qkernel,
-                base.shift,
-                base.kexp,
-                base.rmax,
-                base.rad,
-                base.vcn,
-                **DD,
-            )
-            self.scale = torch.tensor(1.0, **DD)
-            self.initial_scale = self.scale.clone()
-            self.cache_calls = 0
-            self.reset_calls = 0
-
-        def get_cache(self, **_: object) -> Tensor:
-            self.cache_calls += 1
-            return self.scale.clone()
-
-        def get_monopole_atom_energy(
-            self, cache: Tensor, qat: Tensor, **_: object
-        ) -> Tensor:
-            return torch.ones_like(qat) * cache
-
-        def reset(self) -> None:
-            self.reset_calls += 1
-            self.scale = self.initial_scale.clone()
-
-    extension = AES2Extension()
-    system = Model(
-        par=parameters,
-        config=Config.create(exclude=("aes2",)),
-        interaction=(extension,),
-    ).setup(numbers)
-    assert system.aes2_interaction is None
-    charges = Charges(mono=torch.ones(ihelp.nao, **DD))
-
-    def energy() -> Tensor:
-        cache = _interaction_data(system, positions)
-        return system.interactions.get_energy_as_dict(charges, cache, ihelp)[
-            extension.label
-        ].sum()
-
-    one = energy()
-    extension.update(scale=torch.tensor(2.0, **DD))
-    two = energy()
-    assert two > one
-    assert extension.cache_calls == 2
-    system.interactions.reset(extension.label)
-    assert extension.reset_calls == 1
-    torch.testing.assert_close(energy(), one)
-
-    calc = Calculator(
-        numbers,
-        parameters,
-        interaction=extension,
-        dtype=torch.float64,
-        opts={
-            "verbosity": 0,
-            "int_driver": "pytorch",
-            "int_level": 4,
-            "exclude": ("aes2", "d4sc", "disp"),
-        },
-    )
-    calc.reset()
-    assert extension.reset_calls == 2
-    calc_data = _interaction_data(calc.system, positions)
-    calc_energy = calc.interactions.get_energy_as_dict(
-        charges, calc_data, calc.ihelp
-    )[extension.label].sum()
-    torch.testing.assert_close(calc_energy, one)
 
 
 def test_absent_aes2_leaves_system_setup_none() -> None:

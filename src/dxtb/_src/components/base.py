@@ -32,7 +32,6 @@ from collections.abc import Mapping
 from collections.abc import Set as AbstractSet
 from enum import Enum
 from typing import NoReturn, TypeVar
-from weakref import WeakKeyDictionary
 
 import torch
 from tad_mctc.exceptions import DtypeError
@@ -66,11 +65,6 @@ _NON_TRAVERSABLE_TYPES = (
     types.MethodType,
     types.ModuleType,
 )
-
-_COMPONENT_MUTATION_EPOCHS: WeakKeyDictionary[Component, int] = (
-    WeakKeyDictionary()
-)
-
 
 def _iter_mro_slots(obj: object) -> tuple[str, ...]:
     """Return instance slot attribute names across ``type(obj).__mro__`` in parent-first order."""
@@ -1135,23 +1129,6 @@ def _convert_component_like(
     )
 
 
-def component_mutation_epoch(component: Component) -> int:
-    """Return the monotonic ``update``/``reset`` epoch recorded for ``component``."""
-    try:
-        return _COMPONENT_MUTATION_EPOCHS.get(component, 0)
-    except TypeError:
-        return 0
-
-
-def _bump_component_mutation_epoch(component: Component) -> None:
-    try:
-        _COMPONENT_MUTATION_EPOCHS[component] = (
-            _COMPONENT_MUTATION_EPOCHS.get(component, 0) + 1
-        )
-    except TypeError:
-        pass
-
-
 class ComponentCache(TensorLike):
     """Cache of a component."""
 
@@ -1262,26 +1239,6 @@ class Component(TensorLike):
 
     __slots__ = ["label"]
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
-        for method_name in ("update", "reset"):
-            raw = cls.__dict__.get(method_name)
-            if raw is None or not callable(raw):
-                continue
-
-            def _make_wrapped(fn: Any) -> Any:
-                @functools.wraps(fn)
-                def _wrapped(
-                    self: Component, *m_args: Any, **m_kwargs: Any
-                ) -> Any:
-                    result = fn(self, *m_args, **m_kwargs)
-                    _bump_component_mutation_epoch(self)
-                    return result
-
-                return _wrapped
-
-            setattr(cls, method_name, _make_wrapped(raw))
-
     def __init__(
         self,
         device: torch.device | None = None,
@@ -1291,97 +1248,6 @@ class Component(TensorLike):
         self.label = self.__class__.__name__
 
     ############################################################################
-
-    def update(self, **kwargs: Any) -> None:
-        """
-        Update the attributes of the :class:`.Component` instance.
-
-        This method updates the attributes of the :class:`.Component`
-        instance based on the provided keyword arguments. Attributes defined in
-        ``__slots__`` across the class hierarchy or already present on the
-        instance can be updated.
-
-        Parameters
-        ----------
-        kwargs : dict[str, Any]
-            Keyword arguments where keys are attribute names and values are the
-            new values for those attributes.
-
-        Raises
-        ------
-        AttributeError
-            If any key in kwargs is not a valid attribute of this component.
-
-        Examples
-        --------
-
-        .. code-block:: python
-
-            component = SomeMutableComponent(parameter=initial_value)
-            component.update(parameter=new_value)
-        """
-        slots = _iter_mro_slots(self)
-        extra_attrs = getattr(self, "__dict__", {})
-        valid_keys = (*slots, *(k for k in extra_attrs if k not in slots))
-        updated = False
-        for key, value in kwargs.items():
-            if key in valid_keys:
-                setattr(self, key, value)
-                updated = True
-            else:
-                raise AttributeError(
-                    f"Cannot update '{key}' of the '{self.__class__.__name__}' "
-                    "interaction. Invalid attribute.\nPossible attributes are: "
-                    f"{', '.join(valid_keys)}."
-                )
-        if updated:
-            _bump_component_mutation_epoch(self)
-
-    def reset(self) -> None:
-        """
-        Reset the tensor attributes of the
-        :class:`dxtb.components.base.Component` instance to their original
-        states or to specified values.
-
-        This method iterates through the component attributes and resets any
-        tensor attributes to a detached clone of their current state. The
-        `requires_grad` status of each tensor is preserved.
-
-        Examples
-        --------
-
-        .. code-block:: python
-
-            component = SomeMutableComponent(parameter=initial_value)
-            component.reset()
-        """
-        reset_memo: dict[int, Tensor] = {}
-        slots = _iter_mro_slots(self)
-        for slot in slots:
-            if not hasattr(self, slot):
-                continue
-            attr = getattr(self, slot)
-            if isinstance(attr, Tensor):
-                reset = reset_memo.get(id(attr))
-                if reset is None:
-                    reset = attr.detach().clone()
-                    reset.requires_grad = attr.requires_grad
-                    reset_memo[id(attr)] = reset
-                setattr(self, slot, reset)
-
-        extra_attrs = getattr(self, "__dict__", None)
-        if extra_attrs is not None:
-            for key, attr in list(extra_attrs.items()):
-                if key in slots:
-                    continue
-                if isinstance(attr, Tensor):
-                    reset = reset_memo.get(id(attr))
-                    if reset is None:
-                        reset = attr.detach().clone()
-                        reset.requires_grad = attr.requires_grad
-                        reset_memo[id(attr)] = reset
-                    setattr(self, key, reset)
-        _bump_component_mutation_epoch(self)
 
     ############################################################################
 

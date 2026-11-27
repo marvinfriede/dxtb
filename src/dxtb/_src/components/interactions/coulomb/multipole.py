@@ -374,24 +374,6 @@ class AES2(Interaction):
             real_pairs(numbers, mask_diagonal=True),
         )
 
-    def update(self, **kwargs: Any) -> None:
-        """Reject updates for exact setup-migrated AES2 interactions."""
-        if type(self) is AES2:
-            raise RuntimeError(
-                "AES2 parameters are setup-derived and cannot be updated. "
-                "Create a new Model/System/Calculator with changed parameters."
-            )
-        super().update(**kwargs)
-
-    def reset(self) -> None:
-        """Reject resets for exact setup-migrated AES2 interactions."""
-        if type(self) is AES2:
-            raise RuntimeError(
-                "AES2 parameters are setup-derived and cannot be reset. "
-                "Create a new Model/System/Calculator with changed parameters."
-            )
-        super().reset()
-
     @override
     def get_dipole_atom_energy(
         self,

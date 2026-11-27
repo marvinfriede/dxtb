@@ -959,21 +959,6 @@ class BaseCalculator(GetPropertiesMixin, TensorLike):
             eval_sys = _convert_eval_system_dtype(eval_sys, self.dtype)
         return eval_sys
 
-    def reset(self) -> None:
-        """
-        Reset the calculator to its initial state.
-
-        .. warning::
-
-            Component tensors may be replaced by detached copies.
-            Explicit ``field=`` and ``field_grad=`` inputs are not component
-            state and remain connected to their original tensors across reset.
-            Setup-only built-in components are left untouched. See
-            :ref:`help_known_issues`.
-        """
-        self.classicals.reset_all()
-        self.interactions.reset_all()
-
     @abstractmethod
     def calculate(
         self,

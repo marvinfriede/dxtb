@@ -524,15 +524,7 @@ def test_field_get_cache_is_fresh_and_update_reset_are_rejected() -> None:
     assert not hasattr(ef, "cache")
     assert not hasattr(ef, "_cachevars")
     assert not hasattr(ef, "_cachegrad")
-    with pytest.raises(RuntimeError, match="per-evaluation"):
-        ef.update(field=field)
-    with pytest.raises(RuntimeError, match="per-evaluation"):
-        ef.reset()
     field_list = InteractionList(ef)
-    with pytest.raises(RuntimeError, match="per-evaluation"):
-        field_list.update("ElectricField", field=field)
-    with pytest.raises(RuntimeError, match="per-evaluation"):
-        field_list.reset("ElectricField")
 
     grad = new_efield_grad(torch.ones((3, 3), dtype=torch.double))
     first_grad = grad.get_cache(numbers=numbers, positions=positions)

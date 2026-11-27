@@ -36,7 +36,6 @@ from dxtb._src.typing import (
 )
 
 from ..list import ComponentList, ComponentListCache
-from ..utils import _docstring_reset, _docstring_update
 from .base import Classical
 from .dispersion.d3 import LABEL_DISPERSIOND3, DispersionD3
 from .dispersion.d4 import LABEL_DISPERSIOND4, DispersionD4
@@ -116,25 +115,6 @@ class ClassicalList(ComponentList[Classical]):
 
         super().__init__(*components, device=device, dtype=dtype)
 
-    def update(self, name: str, **kwargs: Any) -> Classical:
-        """Update classicals through their family-specific component API."""
-        return super().update(name, **kwargs)
-
-    def reset(self, name: str) -> Classical:
-        """Reset classicals through their family-specific component API."""
-        return super().reset(name)
-
-    def reset_all(self) -> None:
-        """Reset D3 and custom classical components, leaving setup-only built-in classicals intact."""
-        for component in self.components:
-            if type(component) not in (
-                Repulsion,
-                ShortRangeBond,
-                DispersionD4,
-                IES,
-                Halogen,
-            ):
-                component.reset()
 
     @override
     def get_cache(
@@ -246,13 +226,6 @@ class ClassicalList(ComponentList[Classical]):
 
     ###########################################################################
 
-    @_docstring_reset
-    def reset_halogen(self) -> Classical:
-        """Reset tensor attributes to a detached clone of the current state."""
-        return self.reset(LABEL_HALOGEN)
 
     ###########################################################################
 
-    @_docstring_update
-    def update_halogen(self, **kwargs: Any) -> Classical:
-        return self.update(LABEL_HALOGEN, **kwargs)

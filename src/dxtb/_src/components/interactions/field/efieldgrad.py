@@ -182,23 +182,6 @@ class ElectricFieldGrad(Interaction):
 
         return build_electric_field_grad_data(positions, self.field_grad)
 
-    def update(self, **kwargs: Any) -> None:
-        if type(self) is ElectricFieldGrad:
-            raise RuntimeError(
-                "ElectricFieldGrad is a per-evaluation input. Pass "
-                "field_grad= to singlepoint/energy instead of updating the "
-                "interaction."
-            )
-        super().update(**kwargs)
-
-    def reset(self) -> None:
-        if type(self) is ElectricFieldGrad:
-            raise RuntimeError(
-                "ElectricFieldGrad is a per-evaluation input and cannot be "
-                "reset."
-            )
-        super().reset()
-
     @override
     def get_monopole_atom_energy(
         self, cache: ElectricFieldGradCache, qat: Tensor, **_: Any

@@ -428,21 +428,3 @@ class DispersionD4(Dispersion):
         if charge is None:
             charge = positions.new_tensor(0.0)
         return dispersion_d4_energy(cache, positions, charge, q=q)
-
-    def update(self, **kwargs: Any) -> None:
-        """Reject mutation of setup-derived exact D4 parameters."""
-        if type(self) is DispersionD4:
-            raise RuntimeError(
-                "Exact classical D4 is setup-derived and immutable. Create a "
-                "new Model/System after changing its parameters."
-            )
-        super().update(**kwargs)
-
-    def reset(self) -> None:
-        """Reject mutation of setup-derived exact D4 parameters."""
-        if type(self) is DispersionD4:
-            raise RuntimeError(
-                "Exact classical D4 is setup-derived and immutable. Create a "
-                "new Model/System after changing its parameters."
-            )
-        super().reset()

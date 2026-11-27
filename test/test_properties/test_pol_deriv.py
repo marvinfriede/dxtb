@@ -121,7 +121,6 @@ def execute(
     assert pytest.approx(num, abs=atol, rel=rtol) == pol
 
     # applying AD twice requires detaching
-    calc.reset()
 
     # FIXME:
     #

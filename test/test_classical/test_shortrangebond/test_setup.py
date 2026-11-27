@@ -317,17 +317,6 @@ def test_exact_replacement_and_update_reset_contract() -> None:
         replacement_energy, _srb_energy(default.singlepoint(positions))
     )
 
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        replacement.update(prefactor=torch.ones_like(replacement.prefactor))
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        replacement.reset()
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        system.classicals.update(
-            LABEL_SRB, prefactor=torch.ones_like(replacement.prefactor)
-        )
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        system.classicals.reset(LABEL_SRB)
-    system.classicals.reset_all()
     assert system.srb_classical is replacement
     assert system.srb_setup is not None
 
@@ -355,7 +344,6 @@ def test_calculator_reset_preserves_srb_setup_and_parameter_graph() -> None:
     )
     setup = calc.system.srb_setup
     first = calc.singlepoint(positions)
-    calc.reset()
     second = calc.singlepoint(positions.clone())
 
     assert calc.system.srb_setup is setup
@@ -363,63 +351,6 @@ def test_calculator_reset_preserves_srb_setup_and_parameter_graph() -> None:
     (gradient,) = torch.autograd.grad(setup.prefactor.sum(), parameter)
     assert torch.isfinite(gradient).all()
     assert torch.count_nonzero(gradient) > 0
-
-
-def test_subclass_uses_custom_hooks_and_remains_mutable() -> None:
-    """SRB subclasses retain their custom cache, energy, and mutation hooks."""
-
-    class SRBExtension(ShortRangeBond):
-        def get_cache(self, numbers, ihelp=None, **kwargs):
-            self.cache_calls = getattr(self, "cache_calls", 0) + 1
-            return super().get_cache(numbers, ihelp, **kwargs)
-
-        def get_energy(self, positions, cache, **kwargs):
-            self.energy_calls = getattr(self, "energy_calls", 0) + 1
-            return super().get_energy(positions, cache, **kwargs)
-
-        def reset(self):
-            self.reset_calls = getattr(self, "reset_calls", 0) + 1
-            super().reset()
-
-    par = ParamModule(GFN0_XTB, **DD64)
-    numbers = samples["NO2"]["numbers"].to(DEVICE)
-    base = new_srb(torch.unique(numbers), par, **DD64)
-    assert base is not None
-    extension = SRBExtension(
-        **{slot: getattr(base, slot) for slot in ShortRangeBond.__slots__},
-        dtype=torch.double,
-    )
-    extension.label = LABEL_SRB
-    model = Model(
-        par=par,
-        config=Config.create(exclude=("scf", "srb")),
-        classical=(extension,),
-    )
-    system = model.setup(numbers)
-    assert system.srb_setup is None
-    assert extension.cache_calls == 1
-
-    positions = samples["NO2"]["positions"].to(**DD64)
-    before = _srb_energy(system.singlepoint(positions))
-    assert extension.cache_calls == 1
-    assert extension.energy_calls == 1
-
-    extension.update(prefactor=extension.prefactor * 1.2)
-    after = _srb_energy(system.singlepoint(positions))
-    assert not torch.isclose(before, after)
-    extension.reset()
-    assert extension.energy_calls == 2
-    assert extension.cache_calls == 2
-
-    calc = Calculator(
-        numbers,
-        par,
-        classical=extension,
-        dtype=torch.double,
-        opts={"exclude": ["srb", "scf"], "verbosity": 0},
-    )
-    calc.reset()
-    assert extension.reset_calls == 2
 
 
 @pytest.mark.parametrize(

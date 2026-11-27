@@ -551,8 +551,6 @@ def test_all_13_setup_lifecycle_and_grad_mode_transitions() -> None:
     torch.testing.assert_close(
         calc_1d.forces(p12), f_ref_w2, atol=1e-7, rtol=1e-7
     )
-    calc_1d.reset()
-    calc_2d.reset()
     assert not hasattr(calc_1d, "integrals") and not hasattr(
         calc_2d, "integrals"
     )

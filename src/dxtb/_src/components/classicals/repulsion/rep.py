@@ -92,21 +92,3 @@ class Repulsion(BaseRepulsion):
         if kwargs.get("atom_resolved", True) is True:
             return 0.5 * torch.sum(e, dim=-1)
         return e
-
-    def update(self, **kwargs: Any) -> None:
-        """Exact migrated Repulsion parameters cannot be changed in place."""
-        if type(self) is Repulsion:
-            raise RuntimeError(
-                "Repulsion parameters are setup-derived and cannot be updated. "
-                "Create a new Model/System/Calculator with changed parameters."
-            )
-        super().update(**kwargs)
-
-    def reset(self) -> None:
-        """Exact migrated Repulsion parameters cannot be reset in place."""
-        if type(self) is Repulsion:
-            raise RuntimeError(
-                "Repulsion parameters are setup-derived and cannot be reset. "
-                "Create a new Model/System/Calculator with changed parameters."
-            )
-        super().reset()

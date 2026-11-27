@@ -312,23 +312,3 @@ class ShortRangeBond(Classical):
                 f"Data in {self.label} is not of type 'ShortRangeBondSetup'."
             )
         return short_range_bond_energy(cache, positions)
-
-    def update(self, **kwargs: Any) -> None:
-        """Reject in-place changes for the exact setup-migrated SRB term."""
-        if type(self) is ShortRangeBond:
-            raise RuntimeError(
-                "ShortRangeBond parameters are setup-derived and cannot be "
-                "updated. Create a new Model/System/Calculator with changed "
-                "parameters."
-            )
-        super().update(**kwargs)
-
-    def reset(self) -> None:
-        """Reject in-place reset for the exact setup-migrated SRB term."""
-        if type(self) is ShortRangeBond:
-            raise RuntimeError(
-                "ShortRangeBond parameters are setup-derived and cannot be "
-                "reset. Create a new Model/System/Calculator with changed "
-                "parameters."
-            )
-        super().reset()

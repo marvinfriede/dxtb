@@ -1361,17 +1361,6 @@ def test_core_has_no_legacy_mutation_owners(
 
     reject_legacy_owner(inputs)
 
-    def forbidden(*args, **kwargs):
-        raise AssertionError("A functional raw map reached a legacy mutator.")
-
-    for cls, names in (
-        (Component, ("update", "reset")),
-        (Interaction, ("update", "reset")),
-        (InteractionList, ("update", "reset", "reset_all")),
-    ):
-        for name in names:
-            monkeypatch.setattr(cls, name, forbidden)
-
     initial = evaluate_hamiltonian(inputs.integrals.hcore, inputs).charges
     charge_first = scf_map(case.x, inputs)
     charge_again = scf_map(case.x, inputs)

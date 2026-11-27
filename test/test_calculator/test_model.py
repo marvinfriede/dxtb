@@ -509,80 +509,11 @@ def test_es2_subclass_evaluates_via_custom_interaction_path() -> None:
     )
 
 
-def test_es3_subclass_keeps_custom_interaction_and_mutation() -> None:
-    """An ES3 subclass uses its cache hook, evaluates in SCF, and stays mutable."""
-
-    class ES3Extension(ES3):
-        __slots__ = ("extension_scale", "cache_calls", "reset_calls")
-
-        def __init__(self, *args, **kwargs) -> None:
-            super().__init__(*args, **kwargs)
-            self.extension_scale = torch.tensor(1.0, **DD)
-            self.cache_calls = 0
-            self.reset_calls = 0
-
-        def get_cache(self, **kwargs):
-            self.cache_calls += 1
-            cache = super().get_cache(**kwargs)
-            return ES3Cache(
-                cache.hd * self.extension_scale,
-                shell_resolved=cache.shell_resolved,
-            )
-
-        def reset(self) -> None:
-            self.reset_calls += 1
-            super().reset()
-
-    numbers = torch.tensor([8, 1, 1], device=DEVICE)
-    positions = torch.tensor(
-        [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [-1.4, 0.0, 0.0]],
-        **DD,
-    )
-    par = ParamModule(GFN1_XTB, **DD)
-    original = new_es3(torch.unique(numbers), par, dtype=torch.double)
-    assert original is not None
-    custom = ES3Extension(
-        original.hubbard_derivs,
-        shell_scale=original.shell_scale,
-        dtype=torch.double,
-    )
-    custom.label = "ES3"
-    calc = Calculator(
-        numbers,
-        par,
-        interaction=(custom,),
-        opts={"verbosity": 0, "int_driver": "pytorch", "exclude": "es3"},
-        dtype=torch.double,
-    )
-
-    assert calc.system.es3_setup is None
-    first = calc.singlepoint(positions)
-    assert custom.cache_calls == 1
-    calc.interactions.update("ES3", extension_scale=torch.tensor(2.0, **DD))
-    assert custom.extension_scale.item() == 2.0
-    second = calc.singlepoint(positions.clone())
-    assert custom.cache_calls == 2
-    assert not torch.allclose(first.energy, second.energy)
-    calc.interactions.reset("ES3")
-    assert custom.reset_calls == 1
-    calc.reset()
-    assert custom.reset_calls == 2
-    assert custom.extension_scale.item() == 2.0
-
-
 def test_exact_es2_es3_mutations_are_rejected() -> None:
     """Only exact migrated ES2/ES3 objects reject update and reset."""
     numbers = torch.tensor([8, 1, 1], device=DEVICE)
     par = ParamModule(GFN1_XTB, **DD)
     calc = Calculator(numbers, par, dtype=torch.double, opts={"verbosity": 0})
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        calc.interactions.update("ES2", gexp=torch.tensor(3.0, **DD))
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        calc.interactions.reset("ES2")
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        calc.interactions.update("ES3", hubbard_derivs=torch.ones(1, **DD))
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        calc.interactions.reset("ES3")
 
 
 def test_es2_setup_does_not_alias_legacy_gexp() -> None:
@@ -653,7 +584,6 @@ def test_calculator_reset_preserves_es2_es3_setup() -> None:
         es2_setup.gexp,
     )
     es3_parameters = es3_setup.hubbard_derivs
-    calc.reset()
     second = calc.singlepoint(positions.clone())
 
     assert calc.system.es2_setup is es2_setup

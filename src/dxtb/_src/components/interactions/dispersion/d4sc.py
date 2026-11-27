@@ -555,24 +555,6 @@ class DispersionD4SC(Interaction):
         self.counting_function = counting_function
         self.damping_function = damping_function
 
-    def update(self, **kwargs: Any) -> None:
-        """Reject mutation of setup-derived exact D4SC terms."""
-        if type(self) is DispersionD4SC:
-            raise RuntimeError(
-                "Exact DispersionD4SC parameters are setup-derived. "
-                "Create a new Model/System with changed parameters."
-            )
-        super().update(**kwargs)
-
-    def reset(self) -> None:
-        """Reject resetting setup-derived exact D4SC terms."""
-        if type(self) is DispersionD4SC:
-            raise RuntimeError(
-                "Exact DispersionD4SC parameters are setup-derived. "
-                "Create a new Model/System with changed parameters."
-            )
-        super().reset()
-
     # pylint: disable=unused-argument
     @override
     def get_cache(

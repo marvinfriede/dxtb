@@ -534,15 +534,6 @@ def test_exact_update_and_reset_are_rejected() -> None:
     assert interaction is not None
     interactions = InteractionList(interaction)
 
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        interaction.update(param={})
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        interaction.reset()
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        interactions.update(interaction.label, param={})
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        interactions.reset(interaction.label)
-    interactions.reset_all()
 
 
 def test_duplicate_d4sc_labels_are_rejected() -> None:
@@ -581,79 +572,6 @@ def test_duplicate_d4sc_labels_are_rejected() -> None:
         ).setup(numbers)
 
 
-def test_subclass_stays_on_fresh_custom_cache_path() -> None:
-    """D4SC subclasses keep their update/reset, get_cache, and SCF evaluation hooks."""
-    numbers, positions = _sample()
-    base = new_d4sc(numbers, _parameters(), **DD)
-    assert base is not None
-
-    class ScaleCache(InteractionCache):
-        __slots__ = ("scale",)
-
-        def __init__(self, scale: Tensor) -> None:
-            super().__init__(**DD)
-            self.scale = scale
-
-    class D4SCExtension(DispersionD4SC):
-        __slots__ = ("scale",)
-
-        def get_cache(self, *, numbers=None, positions=None, ihelp=None, **_):
-            _ = ihelp
-            assert numbers is not None and positions is not None
-            return ScaleCache(self.scale.clone())
-
-        def get_monopole_atom_potential(
-            self, cache, qat, qdp=None, qqp=None
-        ) -> Tensor:
-            _ = (qat, qdp, qqp)
-            assert isinstance(cache, ScaleCache)
-            return torch.full_like(qat, cache.scale)
-
-        def get_monopole_atom_energy(self, cache, qat, **_) -> Tensor:
-            assert isinstance(cache, ScaleCache)
-            return cache.scale * qat
-
-    extension = D4SCExtension(
-        base.param,
-        base.model,
-        base.rcov,
-        base.r4r2,
-        base.cutoff,
-        base.counting_function,
-        base.damping_function,
-        **DD,
-    )
-    extension.label = base.label
-    extension.scale = torch.tensor(1.0, **DD)
-    system = Model(
-        par=_parameters(),
-        interaction=(extension,),
-        config=Config.create(
-            exclude=("d4sc", "es2", "es3", "aes2"), int_driver="pytorch"
-        ),
-        auto_int_level=False,
-    ).setup(numbers)
-    assert system.d4sc_setup is None
-    assert system.d4sc_interaction is None
-    q = torch.tensor([0.2, -0.1], **DD)
-
-    first_data = _interaction_data(system, positions)[extension.label]
-    first_energy = extension.get_monopole_atom_energy(first_data, q).sum()
-    first_scf = system.singlepoint(positions).energy
-    extension.update(scale=torch.tensor(2.0, **DD))
-    second_data = _interaction_data(system, positions)[extension.label]
-    second_energy = extension.get_monopole_atom_energy(second_data, q).sum()
-    second_scf = system.singlepoint(positions).energy
-    assert first_data is not second_data
-    assert not torch.equal(first_energy, second_energy)
-    assert not torch.allclose(first_scf, second_scf)
-
-    extension.reset()
-    system.interactions.reset_all()
-    after_reset = _interaction_data(system, positions)[extension.label]
-    torch.testing.assert_close(after_reset.scale, extension.scale)
-
-
 def test_calculator_reset_preserves_exact_d4sc_setup() -> None:
     """Calculator reset skips exact D4SC setup authority and its graph."""
     numbers, positions = _sample()
@@ -670,7 +588,6 @@ def test_calculator_reset_preserves_exact_d4sc_setup() -> None:
     setup = calc.system.d4sc_setup
     interaction = calc.system.d4sc_interaction
     assert setup is not None and interaction is not None
-    calc.reset()
     assert calc.system.d4sc_setup is setup
     data = build_d4sc_data(setup, positions)
     q = torch.tensor([0.1, -0.1], **DD)

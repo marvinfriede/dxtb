@@ -296,21 +296,3 @@ class IES(Classical):
         if charge is None:
             raise ValueError("Total molecular charge is required for IES.")
         return ies_energy(cache, positions, charge, solve_mode=solve_mode)
-
-    def update(self, **kwargs: Any) -> None:
-        """Reject setup-authority changes for exact migrated IES."""
-        if type(self) is IES:
-            raise RuntimeError(
-                "Exact IES is setup-derived and immutable. Create a new "
-                "Model/System after changing its parameters."
-            )
-        super().update(**kwargs)
-
-    def reset(self) -> None:
-        """Reject reset of exact migrated IES parameters."""
-        if type(self) is IES:
-            raise RuntimeError(
-                "Exact IES is setup-derived and immutable. Create a new "
-                "Model/System after changing its parameters."
-            )
-        super().reset()

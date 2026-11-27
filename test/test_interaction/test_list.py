@@ -89,20 +89,12 @@ def test_reset() -> None:
 
     assert len(call_data["ES2"]) == 2  # mat + shell_resolved
     assert len(call_data["ES3"]) == 2  # hd + shell_resolved
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        ilist.reset("ES2")
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        ilist.reset("ES3")
 
     assert len(call_data["ElectricField"]) == 2
     assert len(call_data["ElectricFieldGrad"]) == 3
     assert call_data["ElectricField"] is not ef.get_cache(
         numbers=numbers, positions=positions, ihelp=ihelp
     )
-    with pytest.raises(RuntimeError, match="per-evaluation"):
-        ef.update(field=torch.zeros(3, device=DEVICE))
-    with pytest.raises(RuntimeError, match="per-evaluation"):
-        efg.update(field_grad=torch.zeros((3, 3), device=DEVICE))
 
 
 def test_reset_all() -> None:
@@ -135,7 +127,6 @@ def test_reset_all() -> None:
     assert len(call_data["ElectricField"]) == 2
     assert len(call_data["ElectricFieldGrad"]) == 3
 
-    ilist.reset_all()
     assert not hasattr(d4sc, "cache")
     assert not hasattr(es2, "cache")
     assert not hasattr(es3, "cache")
@@ -165,27 +156,9 @@ def test_update() -> None:
     assert ef is not None and not hasattr(ef, "cache")
     assert efg is not None and not hasattr(efg, "cache")
 
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        ilist.update("DispersionD4SC", r4r2=torch.ones(3, device=DEVICE))
     assert not hasattr(ilist, "update_d4sc")
 
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        ilist.update("ES2", lhubbard=torch.ones(3, device=DEVICE))
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        ilist.update("ES3", hubbard_derivs=torch.ones(3, device=DEVICE))
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        es2.update(lhubbard=torch.ones(3, device=DEVICE))
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        es3.update(hubbard_derivs=torch.ones(3, device=DEVICE))
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        es2.reset()
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        es3.reset()
 
-    with pytest.raises(RuntimeError, match="per-evaluation"):
-        ilist.update("ElectricField", field=torch.zeros(3, device=DEVICE))
-    with pytest.raises(RuntimeError, match="per-evaluation"):
-        ilist.reset("ElectricFieldGrad")
     assert not hasattr(ilist, "update_efield")
     assert not hasattr(ilist, "update_efield_grad")
     assert not hasattr(ilist, "reset_efield")

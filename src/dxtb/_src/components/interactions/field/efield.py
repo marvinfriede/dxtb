@@ -142,21 +142,6 @@ class ElectricField(Interaction):
 
         return build_electric_field_data(positions, self.field)
 
-    def update(self, **kwargs: Any) -> None:
-        if type(self) is ElectricField:
-            raise RuntimeError(
-                "ElectricField is a per-evaluation input. Pass field= to "
-                "singlepoint/energy instead of updating the interaction."
-            )
-        super().update(**kwargs)
-
-    def reset(self) -> None:
-        if type(self) is ElectricField:
-            raise RuntimeError(
-                "ElectricField is a per-evaluation input and cannot be reset."
-            )
-        super().reset()
-
     @override
     def get_monopole_atom_energy(
         self, cache: ElectricFieldCache, qat: Tensor, **_: Any

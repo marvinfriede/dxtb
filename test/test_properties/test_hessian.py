@@ -134,7 +134,6 @@ def execute(
     )
 
     # reset before another AD run
-    calc.reset()
 
     # manual jacobian of energy
     pos = positions.clone().detach().requires_grad_(True)
@@ -151,7 +150,6 @@ def execute(
     assert pytest.approx(hess1, abs=atol, rel=rtol) == hess2
 
     # reset before another AD run
-    calc.reset()
 
     # jacrev of forces
     pos = positions.clone().detach().requires_grad_(True)
@@ -169,7 +167,6 @@ def execute(
     assert pytest.approx(hess2, abs=atol, rel=rtol) == hess3
 
     # reset before another AD run
-    calc.reset()
 
     # manual jacobian of forces
     hess4 = tensor_to_numpy(

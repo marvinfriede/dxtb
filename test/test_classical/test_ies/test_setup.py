@@ -366,7 +366,6 @@ def test_ies_model_state_and_setup_survive_calls_and_reset() -> None:
     )
     calc_setup = calc.system.ies_setup
     calc_before = _energy(calc.system, positions)
-    calc.reset()
     assert calc.system.ies_setup is calc_setup
     torch.testing.assert_close(
         _energy(calc.system, positions.clone()), calc_before
@@ -406,79 +405,6 @@ def test_exact_custom_ies_replaces_excluded_builtin_and_mutation_is_rejected() -
         energy,
         _energy(_model(_module()).setup(numbers), positions),
     )
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        custom.update(cutoff=torch.tensor(1.0, **DD))
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        custom.reset()
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        system.classicals.update("IES", cutoff=torch.tensor(1.0, **DD))
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        system.classicals.reset("IES")
-
-
-def test_ies_subclass_refreshes_custom_cache_and_reset() -> None:
-    """IES subclasses remain cache-driven mutable extensions."""
-    numbers, positions = _geometry()
-    par = _module()
-    base = new_ies(numbers, par, **DD)
-    assert base is not None
-
-    class IESExtension(IES):
-        __slots__ = ("scale", "initial_scale", "cache_calls", "reset_calls")
-
-        def __init__(self) -> None:
-            super().__init__(
-                base.chi,
-                base.eeq_kcn,
-                base.eta,
-                base.rad,
-                base.rcov,
-                base.cutoff,
-                base.cn_max,
-                base.cn_kcn,
-                **DD,
-            )
-            self.scale = torch.tensor(1.0, **DD)
-            self.initial_scale = self.scale.clone()
-            self.cache_calls = 0
-            self.reset_calls = 0
-            self.label = "IES"
-
-        def get_cache(self, numbers, ihelp=None, **kwargs):
-            _ = (numbers, ihelp, kwargs)
-            self.cache_calls += 1
-            return self.scale.clone()
-
-        def get_energy(self, positions, cache, **kwargs):
-            _ = kwargs
-            return positions.new_ones(positions.shape[-2]) * cache
-
-        def reset(self) -> None:
-            self.reset_calls += 1
-            self.scale = self.initial_scale.clone()
-
-    extension = IESExtension()
-    calc = Calculator(
-        numbers,
-        par,
-        classical=(extension,),
-        opts={"exclude": ("ies", *EXCLUDE), "verbosity": 0},
-        dtype=torch.double,
-        auto_int_level=False,
-    )
-    assert calc.system.ies_setup is None
-    assert extension.cache_calls == 1
-    first = dict(calc.system.singlepoint(positions).classical)["IES"].sum()
-    assert extension.cache_calls == 1
-    calc.classicals.update("IES", scale=torch.tensor(2.0, **DD))
-    updated = dict(calc.system.singlepoint(positions).classical)["IES"].sum()
-    assert updated == 2 * first
-    assert extension.cache_calls == 2
-    calc.reset()
-    reset = dict(calc.system.singlepoint(positions).classical)["IES"].sum()
-    torch.testing.assert_close(reset, first)
-    assert extension.cache_calls == 3
-    assert extension.reset_calls == 1
 
 
 def test_ies_duplicate_labels_are_rejected() -> None:

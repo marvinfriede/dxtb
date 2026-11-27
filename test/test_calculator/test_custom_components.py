@@ -935,7 +935,7 @@ def test_components_new_tutorial_snippets_execute() -> None:
 
 
 def test_private_and_dunder_slots_implicit_gradients_and_dtype() -> None:
-    """Private (__x) and mid-dunder (r0__bohr) slots survive .type(), .reset(), and implicit SCF."""
+    """Private (__x) and mid-dunder (r0__bohr) slots survive .type() and implicit SCF."""
 
     class PrivateSlotInteraction(Interaction):
         __slots__ = ["__scale", "r0__bohr"]
@@ -993,8 +993,6 @@ def test_private_and_dunder_slots_implicit_gradients_and_dtype() -> None:
     inter32 = PrivateSlotInteraction(s0, r0).type(torch.float32)
     assert inter32.scale_tensor().dtype == torch.float32
     assert inter32.r0__bohr.dtype == torch.float32
-    inter32.reset()
-    assert inter32.scale_tensor().requires_grad
 
     numbers = torch.tensor([8, 1, 1], device=DEVICE)
     pos = torch.tensor(

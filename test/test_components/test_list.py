@@ -53,8 +53,5 @@ def test_list() -> None:
     with pytest.raises(ValueError):
         clist.get_interaction("dummy")
 
-    with pytest.raises(ValueError):
-        clist.update("dummy")
-
-    with pytest.raises(ValueError):
-        clist.reset("dummy")
+    assert not hasattr(clist, "update")
+    assert not hasattr(clist, "reset")

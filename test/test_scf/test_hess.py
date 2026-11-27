@@ -122,7 +122,6 @@ def _numhess(
 
         # autograd forces: the analytical forces need the libcint driver
         if calc.opts.method in (labels.GFN1_XTB, labels.GFN2_XTB):
-            calc.reset()
             result = -calc.get_forces(pos, charge)
         else:
             assert False

@@ -176,7 +176,6 @@ def test_b8a_first_and_second_order_functional_properties(
 @pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB])
 def test_b8b_e8_third_order_directional_param_forces_and_open_shell_free_energy(
     method: object,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Third-order directional derivative, mixed parameter-force Jacobian, and open-shell free energy pass E8."""
     model, numbers, system, calc = _setup_model_and_calculator(method, (1, 1))
@@ -184,15 +183,7 @@ def test_b8b_e8_third_order_directional_param_forces_and_open_shell_free_energy(
     pos_req = pos.clone().requires_grad_(True)
     field0 = torch.tensor([0.002, -0.001, 0.003], **_DD, requires_grad=True)
 
-    # Verify reset_all is NOT called during Calculator.ir on single-System exact core
-    reset_calls = 0
-
-    def forbid_reset():
-        nonlocal reset_calls
-        reset_calls += 1
-
-    monkeypatch.setattr(calc.classicals, "reset_all", forbid_reset)
-    monkeypatch.setattr(calc.interactions, "reset_all", forbid_reset)
+    assert not hasattr(calc, "reset")
     assert not hasattr(calc, "integrals")
 
     ir_sys = system.ir(pos, field=field0.detach())
@@ -203,7 +194,6 @@ def test_b8b_e8_third_order_directional_param_forces_and_open_shell_free_energy(
     torch.testing.assert_close(
         ir_sys.ints, ir_calc.ints, atol=1.0e-8, rtol=1.0e-8
     )
-    assert reset_calls == 0
 
     # Third directional derivative vs 4-point central finite difference of 2nd derivative
     direction = torch.tensor([[0.0, 0.0, -1.0], [0.0, 0.0, 1.0]], **_DD)
@@ -277,7 +267,6 @@ def test_b8b_e8_third_order_directional_param_forces_and_open_shell_free_energy(
 @pytest.mark.parametrize("method", [GFN1_XTB, GFN2_XTB])
 def test_b8b_e8_third_order_hyperpolarizability_pol_deriv_and_raman(
     method: object,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Third-order molecular responses (hyperpolarizability, pol_deriv, Raman) match Calculator."""
     _, _, system, calc = _setup_model_and_calculator(method, (1, 1))
@@ -286,14 +275,6 @@ def test_b8b_e8_third_order_hyperpolarizability_pol_deriv_and_raman(
     field0 = torch.tensor([0.002, -0.001, 0.003], **_DD, requires_grad=True)
 
     # Verify reset_all is NOT called during Calculator.raman on single-System exact core
-    reset_calls = 0
-
-    def forbid_reset():
-        nonlocal reset_calls
-        reset_calls += 1
-
-    monkeypatch.setattr(calc.classicals, "reset_all", forbid_reset)
-    monkeypatch.setattr(calc.interactions, "reset_all", forbid_reset)
     assert not hasattr(calc, "integrals")
 
     # 1. Hyperpolarizability beta = -d^3E/dF^3
@@ -320,7 +301,6 @@ def test_b8b_e8_third_order_hyperpolarizability_pol_deriv_and_raman(
     torch.testing.assert_close(
         raman_sys.depol, raman_calc.depol, atol=1.0e-8, rtol=1.0e-8
     )
-    assert reset_calls == 0
 
 
 def _setup_converged_model_and_calculator(

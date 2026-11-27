@@ -119,7 +119,6 @@ def execute(
     assert pytest.approx(num.cpu(), abs=atol, rel=rtol) == dipder1
 
     # applying AD twice requires detaching
-    calc.reset()
 
     # jacrev of AD dipole moment
     dipder2 = tensor_to_numpy(

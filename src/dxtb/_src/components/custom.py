@@ -55,7 +55,6 @@ from .base import (
     _validate_node_contexts,
     _validate_opaque_object,
     _validate_supported_dataclass,
-    component_mutation_epoch,
 )
 
 __all__ = [
@@ -336,8 +335,6 @@ class ComponentMutationSnapshot:
         """Return ``True`` iff ``component`` (and bound cache) matches capture state."""
         if id(component) != self.component_id:
             return False
-        if component_mutation_epoch(component) != self.epoch:
-            return False
         target: Any = (
             (component, self.bound_cache) if self.has_cache else component
         )
@@ -365,7 +362,7 @@ def snapshot_component_state(
     tensor_records, static_records = _collect_component_state(target)
     return ComponentMutationSnapshot(
         component_id=id(component),
-        epoch=component_mutation_epoch(component),
+        epoch=0,
         has_cache=has_cache,
         bound_cache=cache if has_cache else None,
         tensor_records=tuple(tensor_records),

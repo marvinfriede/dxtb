@@ -135,7 +135,6 @@ def execute(
     assert pytest.approx(numints, abs=atol2, rel=rtol2) == ints1
 
     # reset (for vibration) before another AD run
-    calc.reset()
     pos = positions.clone().detach().requires_grad_(True)
 
     # jacrev of energy

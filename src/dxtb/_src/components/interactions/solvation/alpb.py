@@ -412,24 +412,6 @@ class GeneralizedBorn(Interaction):
             "born_offset": born_offset,
         }
 
-    def update(self, **kwargs: Any) -> None:
-        """Reject mutation of setup-derived exact solvation terms."""
-        if type(self) is GeneralizedBorn:
-            raise RuntimeError(
-                "Exact GeneralizedBorn settings are setup-derived. Create a "
-                "new System with changed solvent settings."
-            )
-        super().update(**kwargs)
-
-    def reset(self) -> None:
-        """Reject resetting setup-derived exact solvation terms."""
-        if type(self) is GeneralizedBorn:
-            raise RuntimeError(
-                "Exact GeneralizedBorn settings are setup-derived. Create a "
-                "new System with changed solvent settings."
-            )
-        super().reset()
-
     # pylint: disable=unused-argument
     @override
     def get_cache(

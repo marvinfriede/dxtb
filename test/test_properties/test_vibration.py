@@ -142,7 +142,6 @@ def execute(
     assert pytest.approx(numfreqs, abs=atol, rel=rtol) == freqs1
 
     # reset before another AD run
-    calc.reset()
     pos = positions.clone().detach().requires_grad_(True)
 
     ####################

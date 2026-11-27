@@ -131,7 +131,6 @@ def execute(
     assert pos.grad is None
     assert pytest.approx(numforces, abs=atol, rel=rtol) == forces1
 
-    calc.reset()
     pos2 = positions.clone().detach().requires_grad_(True)
     forces2 = tensor_to_numpy(calc.get_forces(pos2, charge))
     assert pos2.grad is None

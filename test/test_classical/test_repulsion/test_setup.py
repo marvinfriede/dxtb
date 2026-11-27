@@ -230,14 +230,6 @@ def test_exact_repulsion_update_and_reset_are_rejected() -> None:
         opts={"verbosity": 0},
     )
     assert calc.system.repulsion_classical is not None
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        calc.system.repulsion_classical.update(cutoff=torch.tensor(1.0))
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        calc.system.repulsion_classical.reset()
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        calc.classicals.update("Repulsion", cutoff=torch.tensor(1.0))
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        calc.classicals.reset("Repulsion")
 
 
 def test_calculator_reset_preserves_repulsion_setup() -> None:
@@ -254,7 +246,6 @@ def test_calculator_reset_preserves_repulsion_setup() -> None:
     calc = Calculator(numbers, par, dtype=torch.double, opts={"verbosity": 0})
     setup = calc.system.repulsion_setup
     first = calc.singlepoint(positions)
-    calc.reset()
     second = calc.singlepoint(positions.clone())
 
     assert calc.system.repulsion_setup is setup
@@ -295,100 +286,6 @@ def test_custom_exact_repulsion_replaces_excluded_builtin() -> None:
     result = system.singlepoint(positions)
     assert torch.isfinite(result.energy).all()
     assert torch.count_nonzero(dict(result.classical)["Repulsion"]) == 0
-
-
-def test_repulsion_subclass_uses_custom_classical_path() -> None:
-    """Repulsion subclasses keep their custom setup, energy, and mutation hooks."""
-
-    class RepulsionExtension(Repulsion):
-        __slots__ = (
-            "get_cache_calls",
-            "get_energy_calls",
-            "reset_calls",
-            "extension_value",
-            "original_arep",
-        )
-
-        def __init__(self, *args, **kwargs) -> None:
-            super().__init__(*args, **kwargs)
-            self.get_cache_calls = 0
-            self.get_energy_calls = 0
-            self.reset_calls = 0
-            self.extension_value = torch.tensor(
-                1.0, device=DEVICE, dtype=torch.double
-            )
-            self.original_arep = self.arep.clone()
-
-        def get_cache(self, *args, **kwargs):
-            self.get_cache_calls += 1
-            return super().get_cache(*args, **kwargs)
-
-        def get_energy(self, *args, **kwargs):
-            self.get_energy_calls += 1
-            return self.extension_value * super().get_energy(*args, **kwargs)
-
-        def update(self, **kwargs) -> None:
-            arep = kwargs.pop("arep", None)
-            if arep is not None:
-                self.arep = arep
-            super().update(**kwargs)
-
-        def reset(self) -> None:
-            self.reset_calls += 1
-            self.arep = self.original_arep.clone()
-            super().reset()
-
-    numbers = samples["H2O"]["numbers"].to(DEVICE)
-    positions = samples["H2O"]["positions"].to(
-        device=DEVICE, dtype=torch.double
-    )
-    par = ParamModule(GFN1_XTB, device=DEVICE, dtype=torch.double)
-    base = new_repulsion(torch.unique(numbers), par)
-    assert base is not None
-    custom = RepulsionExtension(
-        base.arep,
-        base.zeff,
-        base.kexp,
-        klight=base.klight,
-        cutoff=base.cutoff,
-        en=base.en,
-        enscale=base.enscale,
-        dtype=torch.double,
-    )
-    custom.label = "Repulsion"
-    calc = Calculator(
-        numbers,
-        par,
-        opts={"verbosity": 0, "int_driver": "pytorch", "exclude": "rep"},
-        classical=(custom,),
-        device=DEVICE,
-        dtype=torch.double,
-    )
-
-    assert calc.system.repulsion_setup is None
-    result = calc.singlepoint(positions)
-    assert custom.get_cache_calls == 2  # Model setup + this evaluation
-    assert custom.get_energy_calls == 1
-    assert torch.isfinite(result.energy).all()
-    initial_repulsion = dict(result.classical)["Repulsion"]
-    calc.classicals.update(
-        "Repulsion",
-        arep=2.0 * custom.arep,
-        extension_value=torch.tensor(2.0, device=DEVICE, dtype=torch.double),
-    )
-    changed = calc.singlepoint(positions.clone())
-    assert custom.get_cache_calls == 3
-    assert not torch.allclose(
-        dict(changed.classical)["Repulsion"], initial_repulsion
-    )
-    calc.classicals.reset("Repulsion")
-    reset = calc.singlepoint(positions.clone())
-    torch.testing.assert_close(
-        dict(reset.classical)["Repulsion"], 2.0 * initial_repulsion
-    )
-    calc.reset()
-    assert custom.extension_value.item() == 2.0
-    assert custom.reset_calls == 2
 
 
 def test_duplicate_repulsion_labels_are_rejected() -> None:

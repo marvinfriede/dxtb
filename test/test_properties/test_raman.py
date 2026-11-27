@@ -139,7 +139,6 @@ def execute(
     assert pytest.approx(numdepol, abs=atol2, rel=rtol2) == depol1
 
     # reset (for vibration) before another AD run
-    calc.reset()
     pos = positions.clone().detach().requires_grad_(True)
 
     # jacrev of energy

@@ -274,24 +274,6 @@ class ES2(Interaction):
 
         self.shell_resolved = shell_resolved and lhubbard is not None
 
-    def update(self, **kwargs: Any) -> None:
-        """ES2 parameters are fixed when the System is set up."""
-        if type(self) is ES2:
-            raise RuntimeError(
-                "ES2 parameters are setup-derived and cannot be updated. "
-                "Create a new Model/System/Calculator with changed parameters."
-            )
-        super().update(**kwargs)
-
-    def reset(self) -> None:
-        """ES2 parameters are fixed when the System is set up."""
-        if type(self) is ES2:
-            raise RuntimeError(
-                "ES2 parameters are setup-derived and cannot be reset. "
-                "Create a new Model/System/Calculator with changed parameters."
-            )
-        super().reset()
-
     # pylint: disable=unused-argument
     @override
     def get_cache(

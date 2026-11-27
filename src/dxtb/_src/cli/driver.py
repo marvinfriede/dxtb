@@ -271,7 +271,6 @@ class Driver:
             positions.requires_grad_(True)
 
             result = calc.forces(positions, chrg, field=field)
-            calc.reset()
 
             timer.print()
             print_grad(result.clone(), numbers)
@@ -282,7 +281,6 @@ class Driver:
             timer.start("Forces")
             result = calc.forces_numerical(positions, chrg, field=field)
             timer.stop("Forces")
-            calc.reset()
 
             print_grad(result.clone(), numbers)
             # io.OutputHandler.dump_warnings()
@@ -294,7 +292,6 @@ class Driver:
             timer.start("Hessian")
             result = calc.hessian(positions, chrg, field=field)
             timer.stop("Hessian")
-            calc.reset()
 
             print(result.clone().detach())
             # io.OutputHandler.dump_warnings()
@@ -306,7 +303,6 @@ class Driver:
             timer.start("Hessian")
             result = calc.hessian_numerical(positions, chrg, field=field)
             timer.stop("Hessian")
-            calc.reset()
 
             print(result.clone())
             # io.OutputHandler.dump_warnings()
@@ -321,7 +317,6 @@ class Driver:
             print("IR Frequencies\n", ir_result.freqs)
             print("IR Intensities\n", ir_result.ints)
             timer.stop("IR")
-            calc.reset()
 
         if args.ir_numerical is True:
             timer.start("IR")

@@ -251,24 +251,6 @@ class Halogen(Classical):
             )
         return halogen_energy(cache, positions)
 
-    def update(self, **kwargs: Any) -> None:
-        """Reject in-place updates for exact setup-migrated halogen terms."""
-        if type(self) is Halogen:
-            raise RuntimeError(
-                "Halogen parameters are setup-derived and cannot be updated. "
-                "Create a new Model/System/Calculator with changed parameters."
-            )
-        super().update(**kwargs)
-
-    def reset(self) -> None:
-        """Reject in-place reset for exact setup-migrated halogen terms."""
-        if type(self) is Halogen:
-            raise RuntimeError(
-                "Halogen parameters are setup-derived and cannot be reset. "
-                "Create a new Model/System/Calculator with changed parameters."
-            )
-        super().reset()
-
 
 def _slice_setup(setup: HalogenSetup, index: int) -> HalogenSetup:
     """Select one Structure of a padded batch for the single-System kernel."""

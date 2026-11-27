@@ -561,82 +561,6 @@ def test_exact_user_halogen_replaces_excluded_builtin() -> None:
     )
 
 
-def test_halogen_subclass_refreshes_call_data_and_stays_mutable() -> None:
-    """A subclass uses custom cache/energy hooks and update/reset calls."""
-
-    class HalogenExtension(Halogen):
-        __slots__ = ("scale", "initial_scale", "cache_calls", "reset_calls")
-
-        def __init__(self, *args, **kwargs) -> None:
-            super().__init__(*args, **kwargs)
-            self.scale = torch.tensor(1.0, **DD)
-            self.initial_scale = self.scale.clone()
-            self.cache_calls = 0
-            self.reset_calls = 0
-
-        def get_cache(self, numbers, ihelp=None, **kwargs):
-            _ = (numbers, ihelp, kwargs)
-            self.cache_calls += 1
-            return self.scale.clone()
-
-        def get_energy(self, positions, cache, **kwargs):
-            _ = kwargs
-            return positions.new_ones(positions.shape[-2]) * cache
-
-        def reset(self) -> None:
-            self.reset_calls += 1
-            self.scale = self.initial_scale.clone()
-            super().reset()
-
-    numbers, positions = _geometry()
-    par = get_param_module("gfn1", **DD)
-    original = new_halogen(torch.unique(numbers), par, **DD)
-    assert original is not None
-    extension = HalogenExtension(
-        original.damp,
-        original.rscale,
-        original.bond_strength,
-        cutoff=original.cutoff,
-        **DD,
-    )
-    extension.label = "Halogen"
-    system = Model(
-        par=par,
-        config=Config.create(exclude=(*_EXCLUDE, "hal")),
-        classical=(extension,),
-    ).setup(numbers)
-    assert system.halogen_setup is None
-    assert extension.cache_calls == 1
-
-    first = _classical_energy(system, positions)
-    assert extension.cache_calls == 1
-    system.classicals.update("Halogen", scale=torch.tensor(2.0, **DD))
-    updated = _classical_energy(system, positions)
-    assert updated == 2.0 * first
-    assert extension.cache_calls == 2
-    system.classicals.reset("Halogen")
-    restored = _classical_energy(system, positions)
-    assert extension.cache_calls == 3
-    torch.testing.assert_close(restored, first)
-    system.classicals.update("Halogen", scale=torch.tensor(2.0, **DD))
-    updated = _classical_energy(system, positions)
-    system.classicals.reset_all()
-    assert extension.reset_calls == 2
-    torch.testing.assert_close(_classical_energy(system, positions), first)
-
-    calc = Calculator(
-        numbers,
-        par,
-        classical=(extension,),
-        opts={"exclude": (*_EXCLUDE, "hal"), "verbosity": 0},
-        dtype=torch.double,
-        auto_int_level=False,
-    )
-    calc.reset()
-    assert extension.reset_calls == 3
-    torch.testing.assert_close(_classical_energy(calc.system, positions), first)
-
-
 @pytest.mark.parametrize("with_subclass", [False, True])
 def test_duplicate_halogen_labels_are_rejected(with_subclass: bool) -> None:
     """Built-in and custom Halogen labels cannot overwrite call data."""
@@ -679,17 +603,8 @@ def test_exact_halogen_update_and_reset_are_rejected() -> None:
     component = system.halogen_classical
     setup = system.halogen_setup
     assert component is not None and setup is not None
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        component.update(damp=torch.tensor(2.0, **DD))
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        component.reset()
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        system.classicals.update("Halogen", damp=torch.tensor(2.0, **DD))
-    with pytest.raises(RuntimeError, match="setup-derived"):
-        system.classicals.reset("Halogen")
 
     before = _classical_energy(system, positions)
-    system.classicals.reset_all()
     assert system.halogen_setup is setup
     torch.testing.assert_close(_classical_energy(system, positions), before)
 
@@ -704,7 +619,6 @@ def test_exact_halogen_update_and_reset_are_rejected() -> None:
     )
     calc_setup = calc.system.halogen_setup
     calc_before = _classical_energy(calc.system, positions)
-    calc.reset()
     calc_after = _classical_energy(calc.system, positions.clone())
     assert calc.system.halogen_setup is calc_setup
     torch.testing.assert_close(calc_before, calc_after)
