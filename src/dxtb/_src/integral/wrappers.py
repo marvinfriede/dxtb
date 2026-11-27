@@ -36,7 +36,7 @@ Conventions (the same for both drivers):
    ``normalize=False``) has been removed from :func:`overlap`, :func:`dipint`,
    and :func:`quadint`. Contracted Gaussian shells are now always normalized to
    unit self-overlap at construction across both backends. Internal xTB
-   evaluations (:func:`~dxtb._src.integral.evaluation.build_integral_matrices`)
+   evaluations (:func:`~dxtb._src.integral.evaluation.evaluate_integrals`)
    retain ket-centered 3-component dipole and 6-component traceless quadrupole
    conventions, whereas these standalone wrappers always return origin-centered
    3-component dipole and 9-component Cartesian quadrupole matrices.
@@ -77,19 +77,23 @@ from tad_mctc.batch import pack
 from dxtb import IndexHelper
 from dxtb._src.constants import labels
 from dxtb._src.param import Param, ParamModule
-from dxtb._src.typing import DD, Literal, Tensor
+from dxtb._src.typing import DD, Callable, Literal, Tensor
 
-from .driver.libcint import build_dipole as build_dipole_libcint
-from .driver.libcint import build_overlap as build_overlap_libcint
-from .driver.libcint import build_quadrupole as build_quadrupole_libcint
-from .driver.pytorch import build_dipole as build_dipole_pytorch
-from .driver.pytorch import build_overlap as build_overlap_pytorch
-from .driver.pytorch import build_quadrupole as build_quadrupole_pytorch
+from .driver import libcint, pytorch
 from .evaluation import setup_integral_evaluation
 
 __all__ = ["dipint", "hcore", "overlap", "quadint"]
 
 _Kind = Literal["overlap", "dipole", "quadrupole"]
+
+_BUILDERS: dict[tuple[int, _Kind], Callable[..., Tensor]] = {
+    (labels.INTDRIVER_PYTORCH, "overlap"): pytorch.build_overlap,
+    (labels.INTDRIVER_PYTORCH, "dipole"): pytorch.build_dipole,
+    (labels.INTDRIVER_PYTORCH, "quadrupole"): pytorch.build_quadrupole,
+    (labels.INTDRIVER_LIBCINT, "overlap"): libcint.build_overlap,
+    (labels.INTDRIVER_LIBCINT, "dipole"): libcint.build_dipole,
+    (labels.INTDRIVER_LIBCINT, "quadrupole"): libcint.build_quadrupole,
+}
 
 
 def overlap(
@@ -322,25 +326,7 @@ def _single(
         device=positions.device,
         dtype=positions.dtype,
     )
-    assert eval_setup is not None
+    assert eval_setup is not None and eval_setup.backend is not None
 
-    if driver == labels.INTDRIVER_PYTORCH:
-        assert eval_setup.pytorch is not None
-        pt_setup = eval_setup.pytorch
-        if kind == "dipole":
-            matrix = build_dipole_pytorch(pt_setup, positions)
-        elif kind == "quadrupole":
-            matrix = build_quadrupole_pytorch(pt_setup, positions)
-        else:
-            matrix = build_overlap_pytorch(pt_setup, positions)
-    else:
-        assert eval_setup.libcint is not None
-        lc_setup = eval_setup.libcint
-        if kind == "dipole":
-            matrix = build_dipole_libcint(lc_setup, positions)
-        elif kind == "quadrupole":
-            matrix = build_quadrupole_libcint(lc_setup, positions)
-        else:
-            matrix = build_overlap_libcint(lc_setup, positions)
-
-    return matrix.to(device=positions.device)
+    build = _BUILDERS[(driver, kind)]
+    return build(eval_setup.backend, positions).to(device=positions.device)

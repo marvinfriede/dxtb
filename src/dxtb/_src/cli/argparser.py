@@ -440,14 +440,6 @@ def parser(name: str = "dxtb", **kwargs: Any) -> argparse.ArgumentParser:
         choices=defaults.INTLEVEL_CHOICES,
         help=("R|Integral level."),
     )
-    p.add_argument(
-        "--int-uplo",
-        "--int_uplo",
-        type=str,
-        default=defaults.INTUPLO,
-        choices=defaults.INTUPLO_CHOICES,
-        help=("R|Shape of the calculated integral (full/triangular matrix)."),
-    )
 
     # printing
     p.add_argument(

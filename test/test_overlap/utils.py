@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import torch
 from tad_mctc.batch import deflate, pack
-from tad_mctc.convert import symmetrize
 
 from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
@@ -32,7 +31,7 @@ from dxtb._src.integral.driver.pytorch import (
     setup_integrals,
 )
 from dxtb._src.param import Param, ParamModule
-from dxtb._src.typing import DD, Literal, Tensor
+from dxtb._src.typing import DD, Tensor
 
 
 def overlap_setup(
@@ -49,13 +48,9 @@ def calc_overlap(
     positions: Tensor,
     par: Param | ParamModule,
     dd: DD,
-    uplo: Literal["n", "N", "u", "U", "l", "L"] = "l",
     mask: Tensor | None = None,
 ) -> Tensor:
-    """
-    Raw (not normalized) PyTorch overlap of a Structure or a padded batch.
-    With ``uplo="n"``, the matrix is symmetrized.
-    """
+    """Raw (not normalized) PyTorch overlap of a Structure or a padded batch."""
     if numbers.ndim == 1:
         s = build_overlap(overlap_setup(numbers, par, dd), positions)
     else:
@@ -71,6 +66,4 @@ def calc_overlap(
             matrices.append(build_overlap(overlap_setup(nums, par, dd), pos))
         s = pack(matrices)
 
-    if uplo.casefold() == "n":
-        return symmetrize(s, force=False)
     return s

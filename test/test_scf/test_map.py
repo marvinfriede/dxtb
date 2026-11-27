@@ -31,7 +31,10 @@ import dxtb._src.scf.map as functional_map
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, labels
 from dxtb._src.basis.indexhelper import IndexHelper
 from dxtb._src.calculators.model import Model
-from dxtb._src.calculators.singlepoint import _interaction_data
+from dxtb._src.calculators.singlepoint import (
+    _interaction_data,
+    build_integral_matrices,
+)
 from dxtb._src.components.base import Component
 from dxtb._src.components.classicals.dispersion.d3 import DispersionD3
 from dxtb._src.components.interactions import Interaction, InteractionList
@@ -46,7 +49,6 @@ from dxtb._src.components.interactions.field.efieldgrad import ElectricFieldGrad
 from dxtb._src.components.interactions.list import InteractionListCache
 from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
 from dxtb._src.constants import defaults
-from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.param import ParamModule
 from dxtb._src.scf import (
     ChargeLayout,

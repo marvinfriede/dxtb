@@ -55,7 +55,7 @@ def test_single(dtype: torch.dtype, name: str) -> None:
     ref = load_from_npz(ref_overlap, name, dtype)
 
     # more granular overlap calculation
-    s = calc_overlap(numbers, positions, GFN1_XTB, uplo="n", dd=dd)
+    s = calc_overlap(numbers, positions, GFN1_XTB, dd=dd)
 
     # convenience wrapper with defaults (but pytorch driver)
     s2 = overlap(numbers, positions, GFN1_XTB, driver=INTDRIVER_PYTORCH)
@@ -95,7 +95,7 @@ def test_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
         )
     )
 
-    s = calc_overlap(numbers, positions, GFN1_XTB, uplo="n", dd=dd)
+    s = calc_overlap(numbers, positions, GFN1_XTB, dd=dd)
 
     assert pytest.approx(s.cpu(), abs=tol) == s.mT.cpu()
     assert pytest.approx(s.cpu(), abs=tol) == ref.cpu()

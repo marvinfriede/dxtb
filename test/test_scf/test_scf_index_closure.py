@@ -44,12 +44,12 @@ from dxtb._src.calculators.packed_result import evaluate_packed_systems
 from dxtb._src.calculators.singlepoint import (
     _interaction_data,
     _PreparedSinglepoint,
+    build_integral_matrices,
     system_singlepoint,
 )
 from dxtb._src.calculators.types.base import _convert_eval_system_dtype
 from dxtb._src.components.interactions import InteractionList
 from dxtb._src.integral.container import IntegralMatrices
-from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.param import ParamModule
 from dxtb._src.scf.data import SCFInputs, setup_scf_inputs
 from dxtb._src.scf.iterator import get_refocc, solve
@@ -437,8 +437,11 @@ def test_standalone_scf_without_system_object_and_metadata_guards() -> None:
     from dxtb._src.components.interactions.coulomb.secondorder import new_es2
     from dxtb._src.integral.driver.pytorch import (
         build_overlap,
-        evaluate_moments,
         setup_integrals,
+    )
+    from dxtb._src.integral.evaluation import (
+        evaluate_integrals,
+        setup_integral_evaluation,
     )
     from dxtb._src.xtb.h0 import build_hcore, setup_h0
 
@@ -517,10 +520,16 @@ def test_standalone_scf_without_system_object_and_metadata_guards() -> None:
     # Standalone GFN2 multipole inputs metadata validation
     par2 = ParamModule(GFN2_XTB, dtype=torch.float64)
     ihelp2 = IndexHelper.from_numbers(nums, par2)
-    bas2 = Basis(nums, par2, ihelp2, dtype=torch.float64)
-    ovlp2, dip2, quad2 = evaluate_moments(
-        setup_integrals(bas2), pos, labels.INTLEVEL_QUADRUPOLE
+    int_setup2 = setup_integral_evaluation(
+        nums,
+        par2,
+        ihelp2,
+        driver_type=labels.INTDRIVER_PYTORCH,
+        intlevel=labels.INTLEVEL_QUADRUPOLE,
+        dtype=torch.float64,
     )
+    assert int_setup2 is not None
+    ovlp2, dip2, quad2 = evaluate_integrals(int_setup2, pos)
     h0_2 = setup_h0(nums, par2, ihelp2, dtype=torch.float64)
     hcore2, _ = build_hcore(h0_2, pos, ovlp2, charge=chrg)
     mats2 = IntegralMatrices(
@@ -1144,8 +1153,11 @@ def _standalone_h2o_bundle(method_label: int, dtype: torch.dtype) -> tuple[
     from dxtb._src.basis.bas import Basis
     from dxtb._src.integral.driver.pytorch import (
         build_overlap,
-        evaluate_moments,
         setup_integrals,
+    )
+    from dxtb._src.integral.evaluation import (
+        evaluate_integrals,
+        setup_integral_evaluation,
     )
     from dxtb._src.xtb.h0 import build_hcore, setup_h0
 
@@ -1164,9 +1176,16 @@ def _standalone_h2o_bundle(method_label: int, dtype: torch.dtype) -> tuple[
     h0 = setup_h0(nums, par, ihelp, dtype=dtype)
     chrg0 = torch.tensor([0.0], dtype=dtype)
     if method_label == labels.GFN2_XTB:
-        ovlp, dip, quad = evaluate_moments(
-            pt_setup, pos, labels.INTLEVEL_QUADRUPOLE
+        int_setup = setup_integral_evaluation(
+            nums,
+            par,
+            ihelp,
+            driver_type=labels.INTDRIVER_PYTORCH,
+            intlevel=labels.INTLEVEL_QUADRUPOLE,
+            dtype=dtype,
         )
+        assert int_setup is not None
+        ovlp, dip, quad = evaluate_integrals(int_setup, pos)
         hcore, _ = build_hcore(h0, pos, ovlp, charge=chrg0)
         mats = IntegralMatrices(
             hcore=hcore, overlap=ovlp, dipole=dip, quadrupole=quad

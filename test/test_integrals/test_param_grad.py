@@ -118,10 +118,8 @@ def test_reused_setup_independent_position_gradients(driver: str) -> None:
         pytest.skip("libcint not available")
 
     from dxtb import GFN2_XTB, IndexHelper, ParamModule, labels
-    from dxtb._src.integral.evaluation import (
-        build_integral_matrices,
-        setup_integral_evaluation,
-    )
+    from dxtb._src.calculators.singlepoint import build_integral_matrices
+    from dxtb._src.integral.evaluation import setup_integral_evaluation
     from dxtb._src.xtb.h0 import setup_h0_core
 
     dd: DD = {"dtype": torch.double, "device": DEVICE}
@@ -188,10 +186,8 @@ def test_reused_setup_second_parameter_backward_contract(driver: str) -> None:
         pytest.skip("libcint not available")
 
     from dxtb import GFN1_XTB, IndexHelper, ParamModule, labels
-    from dxtb._src.integral.evaluation import (
-        build_integral_matrices,
-        setup_integral_evaluation,
-    )
+    from dxtb._src.calculators.singlepoint import build_integral_matrices
+    from dxtb._src.integral.evaluation import setup_integral_evaluation
     from dxtb._src.xtb.h0 import setup_h0_core
 
     dd: DD = {"dtype": torch.double, "device": DEVICE}

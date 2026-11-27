@@ -1027,10 +1027,12 @@ def test_soscf_implicit_geometry_response_matches_cdiis() -> None:
         _initial_state,
     )
 
-    from dxtb._src.calculators.singlepoint import _interaction_data
+    from dxtb._src.calculators.singlepoint import (
+        _interaction_data,
+        build_integral_matrices,
+    )
     from dxtb._src.components.interactions import InteractionList
     from dxtb._src.components.interactions.field.efield import ElectricField
-    from dxtb._src.integral.evaluation import build_integral_matrices
     from dxtb._src.scf import setup_scf_inputs
 
     case = _case(
@@ -1419,10 +1421,12 @@ def test_soscf_no2_tight_implicit_geometry_and_second_order_match_cdiis() -> (
         _initial_state,
     )
 
-    from dxtb._src.calculators.singlepoint import _interaction_data
+    from dxtb._src.calculators.singlepoint import (
+        _interaction_data,
+        build_integral_matrices,
+    )
     from dxtb._src.components.interactions import InteractionList
     from dxtb._src.components.interactions.field.efield import ElectricField
-    from dxtb._src.integral.evaluation import build_integral_matrices
     from dxtb._src.scf import setup_scf_inputs
 
     case = _case(

@@ -15,72 +15,50 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Implementation: Multipole (Libcint)
-===================================
+Implementation: Overlap and Multipoles (Libcint)
+================================================
 
-Standalone origin-centered and internal xTB ket-centered multipole evaluation
-for the `libcint` integral backend.
+Standalone origin-centered and internal xTB ket-centered integrals for the
+`libcint` backend.
 """
 
 from __future__ import annotations
 
 from dxtb._src.constants import labels
-from dxtb._src.integral.types.quadrupole import make_quadrupole_traceless
 from dxtb._src.typing import Tensor
 
 from .driver import LibcintIntegralSetup
 
 __all__ = [
+    "build_overlap",
     "build_dipole",
-    "build_dipole_libcint",
-    "build_multipole_libcint",
     "build_quadrupole",
-    "build_quadrupole_libcint",
     "evaluate_moments",
 ]
 
-ALLOWED_MULTIPOLES = ("r0", "j", "r0r0", "jj", "jjj")
 
-
-def build_multipole_libcint(
-    setup: LibcintIntegralSetup,
-    positions: Tensor,
-    intstring: str,
-    *,
-    packed: bool = True,
-) -> Tensor:
-    """Build a raw libcint multipole matrix for the requested operator."""
+def build_overlap(setup: LibcintIntegralSetup, positions: Tensor) -> Tensor:
+    """Build the normalized overlap matrix of shape ``(nao, nao)``."""
     # pylint: disable=import-outside-toplevel
     from dxtb._src.exlibs import libcint
 
-    if intstring not in ALLOWED_MULTIPOLES:
-        raise ValueError(
-            f"Unknown integral string '{intstring}' provided. "
-            f"Only '{', '.join(ALLOWED_MULTIPOLES)}' are allowed."
-        )
-
-    basis, structure = setup.create_libcint(positions)
-    return libcint.int1e(intstring, basis, structure, packed=packed)
+    return libcint.overlap(*setup.create_libcint(positions))
 
 
-def build_dipole(
-    setup: LibcintIntegralSetup,
-    positions: Tensor,
-) -> Tensor:
-    """Build the standalone origin-centered three-component dipole matrix."""
-    return build_multipole_libcint(setup, positions, "r0")
+def build_dipole(setup: LibcintIntegralSetup, positions: Tensor) -> Tensor:
+    """Build the origin-centered dipole matrix of shape ``(3, nao, nao)``."""
+    # pylint: disable=import-outside-toplevel
+    from dxtb._src.exlibs import libcint
+
+    return libcint.int1e("r0", *setup.create_libcint(positions))
 
 
-def build_quadrupole(
-    setup: LibcintIntegralSetup,
-    positions: Tensor,
-) -> Tensor:
-    """Build the standalone origin-centered nine-component quadrupole matrix."""
-    return build_multipole_libcint(setup, positions, "r0r0", packed=False)
+def build_quadrupole(setup: LibcintIntegralSetup, positions: Tensor) -> Tensor:
+    """Build the origin-centered quadrupole matrix of shape ``(9, nao, nao)``."""
+    # pylint: disable=import-outside-toplevel
+    from dxtb._src.exlibs import libcint
 
-
-build_dipole_libcint = build_dipole
-build_quadrupole_libcint = build_quadrupole
+    return libcint.int1e("r0r0", *setup.create_libcint(positions), packed=False)
 
 
 def evaluate_moments(
@@ -88,7 +66,11 @@ def evaluate_moments(
     positions: Tensor,
     intlevel: int,
 ) -> tuple[Tensor, Tensor | None, Tensor | None]:
-    """Evaluate normalized overlap and internal xTB ket-centered moments."""
+    """
+    Evaluate the normalized overlap and the ket-centered dipole and
+    quadrupole (not yet traceless, see
+    :func:`~dxtb._src.integral.evaluation.evaluate_integrals`).
+    """
     # pylint: disable=import-outside-toplevel
     from dxtb._src.exlibs import libcint
 
@@ -102,7 +84,6 @@ def evaluate_moments(
         # jj is already packed as xx, yx, yy, zx, zy, zz.
         dipole = libcint.int1e("j", basis, structure)
         if intlevel >= labels.INTLEVEL_QUADRUPOLE:
-            raw_quadrupole = libcint.int1e("jj", basis, structure)
-            quadrupole = make_quadrupole_traceless(raw_quadrupole)
+            quadrupole = libcint.int1e("jj", basis, structure)
 
     return overlap, dipole, quadrupole

@@ -26,7 +26,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from dxtb._src.constants import defaults, labels
-from dxtb._src.typing import Literal
 
 __all__ = ["ConfigIntegrals"]
 
@@ -61,9 +60,6 @@ class ConfigIntegrals:
     driver: int = defaults.INTDRIVER
     """Type of integral driver."""
 
-    uplo: Literal["n", "l", "u"] = defaults.INTUPLO  # type: ignore
-    """Integral mode for PyTorch integral calculation."""
-
     algorithm: str | None = None
     """
     1D kernel of the PyTorch integral driver (``None``: the default,
@@ -75,11 +71,6 @@ class ConfigIntegrals:
             raise TypeError(
                 f"The received integral level (`{self.level}`) is not an "
                 f"integer, but {type(self.level)}."
-            )
-
-        if self.uplo not in ("n", "u", "l"):
-            raise ValueError(
-                f"Unknown option for `uplo` chosen: '{self.uplo}'."
             )
 
         if not isinstance(self.driver, int):
@@ -109,7 +100,6 @@ class ConfigIntegrals:
         level: int = defaults.INTLEVEL,
         cutoff: float = defaults.INTCUTOFF,
         driver: str | int = defaults.INTDRIVER,
-        uplo: str = defaults.INTUPLO,
         algorithm: str | None = None,
     ) -> ConfigIntegrals:
         """
@@ -123,10 +113,6 @@ class ConfigIntegrals:
         TypeError
             An option has the wrong type.
         """
-        if uplo not in ("n", "N", "u", "U", "l", "L"):
-            raise ValueError(f"Unknown option for `uplo` chosen: '{uplo}'.")
-        uplo = uplo.casefold()
-
         if isinstance(driver, str):
             if driver.casefold() in labels.INTDRIVER_LIBCINT_STRS:
                 # pylint: disable=import-outside-toplevel
@@ -189,6 +175,5 @@ class ConfigIntegrals:
             level=level,
             cutoff=cutoff,
             driver=driver,
-            uplo=uplo,  # type: ignore
             algorithm=algorithm,
         )

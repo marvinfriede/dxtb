@@ -6,24 +6,25 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 import torch
 from torch.func import jacfwd, jvp, vmap
 
 from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, Calculator, labels
+from dxtb._src.calculators.singlepoint import build_integral_matrices
 from dxtb._src.exlibs.available import has_libcint
+from dxtb._src.integral.driver.pytorch import (
+    build_overlap as build_overlap_pytorch,
+)
 from dxtb._src.integral.driver.pytorch import setup as pytorch_setup_module
 from dxtb._src.integral.driver.pytorch.impls import pairs as pair_builder
 from dxtb._src.integral.driver.pytorch.impls.pairs import PairPlan
-from dxtb._src.integral.driver.pytorch.overlap import (
-    build_overlap as build_overlap_pytorch,
-)
 from dxtb._src.integral.driver.pytorch.setup import PytorchIntegralSetup
-from dxtb._src.integral.evaluation import build_integral_matrices
+from dxtb._src.integral.evaluation import IntegralSetup
 from dxtb._src.typing import Tensor
 
 from .samples import samples
@@ -593,7 +594,7 @@ sys.meta_path.insert(0, BlockLibcint())
 import torch
 import dxtb
 from dxtb.calculators import ChargeResult, Multipoles, PotentialResult, Result
-from dxtb._src.integral.evaluation import build_integral_matrices
+from dxtb._src.calculators.singlepoint import build_integral_matrices
 
 assert dxtb.Result is Result
 assert all((ChargeResult, PotentialResult, Multipoles))
@@ -758,3 +759,12 @@ def test_pure_integral_evaluation_supports_torch_transforms() -> None:
     )
     for mapped_value, looped_value in zip(mapped, looped):
         torch.testing.assert_close(mapped_value, looped_value)
+
+
+@pytest.mark.parametrize(
+    "intlevel", [labels.INTLEVEL_NONE, labels.INTLEVEL_MAX + 1]
+)
+def test_integral_setup_rejects_unsupported_level(intlevel: int) -> None:
+    """IntegralSetup accepts only levels from overlap to quadrupole."""
+    with pytest.raises(ValueError, match="Unsupported integral level"):
+        IntegralSetup(driver_type=labels.INTDRIVER_PYTORCH, intlevel=intlevel)

@@ -21,8 +21,12 @@ Integral Driver: PyTorch
 PyTorch-based integral implementations.
 """
 
-from .multipole import build_dipole, build_quadrupole, evaluate_moments
-from .overlap import build_overlap
+from .multipole import (
+    build_dipole,
+    build_overlap,
+    build_quadrupole,
+    evaluate_moments,
+)
 from .setup import PytorchIntegralSetup, setup_integrals
 
 __all__ = [

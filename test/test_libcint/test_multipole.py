@@ -34,11 +34,12 @@ from dxtb import IndexHelper
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint, has_pyscf
 from dxtb._src.integral.driver.libcint import (
-    build_dipole_libcint,
-    build_multipole_libcint,
-    build_quadrupole_libcint,
-    setup_libcint,
+    build_dipole as build_dipole_libcint,
 )
+from dxtb._src.integral.driver.libcint import (
+    build_quadrupole as build_quadrupole_libcint,
+)
+from dxtb._src.integral.driver.libcint import setup_libcint
 from dxtb._src.integral.driver.pytorch import (
     build_dipole as build_dipole_pytorch,
 )
@@ -46,12 +47,7 @@ from dxtb._src.integral.driver.pytorch import (
     build_quadrupole as build_quadrupole_pytorch,
 )
 from dxtb._src.integral.driver.pytorch import setup_integrals as setup_pytorch
-from dxtb._src.integral.types.quadrupole import (
-    _reduce_9_to_6,
-    make_quadrupole_traceless,
-    reduce_quadrupole_9_to_6,
-    shift_quadrupole_origin,
-)
+from dxtb._src.integral.evaluation import _make_quadrupole_traceless
 from dxtb._src.param import ParamModule
 from dxtb._src.typing import DD, Any, Tensor
 
@@ -67,6 +63,8 @@ from .samples import samples
 
 slist = ["H2", "LiH", "Li2", "H2O", "S"]
 slist_large = ["SiH4", "MB16_43_01", "C60"]
+
+_LOWER_TRIANGLE = [0, 3, 4, 6, 7, 8]  # xx, yx, yy, zx, zy, zz of the 9 raw
 
 
 def snorm(overlap: Tensor) -> Tensor:
@@ -91,7 +89,7 @@ def libcint_moment(
     """Multipole integral from normalized libcint shells."""
     ihelp = IndexHelper.from_numbers(numbers, par)
     setup = setup_libcint(Basis(numbers, par, ihelp, **dd).cpu())
-    return build_multipole_libcint(setup, positions, intstring)
+    return libcint.int1e(intstring, *setup.create_libcint(positions))
 
 
 @pytest.mark.skipif(
@@ -231,7 +229,7 @@ def test_no_shift_r0r0_rjrj(dtype: torch.dtype, name: str, gfn: str) -> None:
         norm,
         norm,
     )
-    pyscf_r0r0 = _reduce_9_to_6(pyscf_r0r0)
+    pyscf_r0r0 = pyscf_r0r0[_LOWER_TRIANGLE]
 
     # Compare with PySCF reference
     assert pyscf_r0r0.shape == quadrupole.shape
@@ -272,7 +270,7 @@ def test_shift_r0r0_rjrj(dtype: torch.dtype, name: str, gfn: str) -> None:
         norm,
         norm,
     )
-    pyscf_qpint = _reduce_9_to_6(pyscf_qpint)
+    pyscf_qpint = pyscf_qpint[_LOWER_TRIANGLE]
 
     torch.testing.assert_close(
         quadrupole.cpu(), pyscf_qpint.cpu(), atol=tol, rtol=0.0
@@ -300,7 +298,7 @@ def test_traceless(dtype: torch.dtype, name: str, gfn: str) -> None:
     ##########################################################################
 
     quadrupole = libcint_moment(numbers, positions, par, dd, "jj")
-    quadrupole = make_quadrupole_traceless(quadrupole)
+    quadrupole = _make_quadrupole_traceless(quadrupole)
 
     # PySCF reference integral, centered at rj
     assert M is not False
@@ -316,7 +314,7 @@ def test_traceless(dtype: torch.dtype, name: str, gfn: str) -> None:
     )
 
     # Remove symmetry-equivalent components
-    pyscf_qp = _reduce_9_to_6(pyscf_qp)
+    pyscf_qp = pyscf_qp[_LOWER_TRIANGLE]
 
     # Make traceless
     tr = 0.5 * (pyscf_qp[0] + pyscf_qp[2] + pyscf_qp[5])
@@ -334,102 +332,6 @@ def test_traceless(dtype: torch.dtype, name: str, gfn: str) -> None:
     # Compare with PySCF reference
     assert pyscf_qp.shape == quadrupole.shape
     assert pytest.approx(pyscf_qp.cpu(), abs=tol) == quadrupole.cpu()
-
-
-@pytest.mark.skipif(
-    has_pyscf is False or has_libcint is False,
-    reason="PySCF or libcint interface not installed",
-)
-@pytest.mark.parametrize("dtype", [torch.float, torch.double])
-@pytest.mark.parametrize("name", slist)
-@pytest.mark.parametrize("gfn", ["gfn1", "gfn2"])
-def test_reduce_9_to_6(dtype: torch.dtype, name: str, gfn: str) -> None:
-    dd: DD = {"dtype": dtype, "device": DEVICE}
-    tol = sqrt(torch.finfo(dtype).eps)
-
-    sample = samples[name]
-    numbers = sample["numbers"].to(DEVICE)
-    positions = sample["positions"].to(**dd)
-
-    assert M is not False
-    mol = M(numbers, positions, xtb_version=gfn, parse_arg=False)
-    pyscf_r0r0 = numpy_to_tensor(mol.intor("int1e_rr"), **dd)
-
-    # 0
-    # 3 4    ->  0, 3, 4, 6, 7, 8
-    # 6 7 8
-    int_l = _reduce_9_to_6(pyscf_r0r0, uplo="L").cpu()
-
-    # 0 1 2
-    #   4 5  ->  0, 1, 2, 4, 5, 8
-    #     8
-    int_u = _reduce_9_to_6(pyscf_r0r0, uplo="U").cpu()
-
-    assert int_l.shape == int_u.shape
-
-    # equivalent indices: l0-u0, l3-u1, l4-l4, u6-l2, u7-l5, u8-l8
-    assert pytest.approx(int_l[0], abs=tol) == int_u[0]  # l0-u0
-    assert pytest.approx(int_l[1], abs=tol) == int_u[1]  # l3-u1
-    assert pytest.approx(int_l[2], abs=tol) == int_u[3]  # l4-l4
-    assert pytest.approx(int_l[3], abs=tol) == int_u[2]  # u6-l2
-    assert pytest.approx(int_l[4], abs=tol) == int_u[4]  # u7-l5
-    assert pytest.approx(int_l[5], abs=tol) == int_u[5]  # u8-l8
-
-
-@pytest.mark.skipif(
-    has_libcint is False, reason="libcint interface not installed"
-)
-@pytest.mark.parametrize("dtype", [torch.float, torch.double])
-def test_fail_shift_shape_pos(dtype: torch.dtype) -> None:
-    dd: DD = {"dtype": dtype, "device": DEVICE}
-
-    fake_dipint = torch.zeros(3, 2, 2, **dd)
-    fake_ovlp = torch.eye(2, **dd)
-    pos = torch.zeros(1, 3, **dd)  # wrong shape
-
-    qpint = reduce_quadrupole_9_to_6(torch.zeros(9, 2, 2, **dd))
-
-    with pytest.raises(RuntimeError) as e:
-        shift_quadrupole_origin(qpint, fake_dipint, fake_ovlp, pos)
-
-    assert "Shape mismatch between positions and overlap" in str(e.value)
-
-
-@pytest.mark.skipif(
-    has_libcint is False, reason="libcint interface not installed"
-)
-@pytest.mark.parametrize("dtype", [torch.float, torch.double])
-def test_fail_shift_shape_qpint(dtype: torch.dtype) -> None:
-    dd: DD = {"dtype": dtype, "device": DEVICE}
-
-    fake_dipint = torch.zeros(3, 2, 2, **dd)
-    fake_ovlp = torch.eye(2, **dd)
-    pos = torch.zeros(2, 3, **dd)
-
-    qpint = torch.zeros(8, 2, 2, **dd)  # wrong shape
-
-    with pytest.raises(RuntimeError) as e:
-        shift_quadrupole_origin(qpint, fake_dipint, fake_ovlp, pos)
-
-    assert "Quadrupole integral must be a tensor of shape" in str(e.value)
-
-
-@pytest.mark.parametrize("dtype", [torch.float, torch.double])
-def test_fail_reduce_shape(dtype: torch.dtype) -> None:
-    dd: DD = {"dtype": dtype, "device": DEVICE}
-
-    qpint = torch.zeros(8, 2, 2, **dd)
-    with pytest.raises(RuntimeError):
-        _reduce_9_to_6(qpint)
-
-
-@pytest.mark.parametrize("dtype", [torch.float, torch.double])
-def test_fail_reduce_uplo(dtype: torch.dtype) -> None:
-    dd: DD = {"dtype": dtype, "device": DEVICE}
-
-    qpint = torch.zeros(9, 2, 2, **dd)
-    with pytest.raises(ValueError):
-        _reduce_9_to_6(qpint, uplo="X")  # type: ignore
 
 
 @pytest.mark.skipif(

@@ -16,10 +16,6 @@ Setup
 Implementations
 ---------------
 
-.. automodule:: dxtb._src.integral.driver.libcint.overlap
-   :members:
-   :show-inheritance:
-
 .. automodule:: dxtb._src.integral.driver.libcint.multipole
    :members:
    :show-inheritance:

@@ -24,10 +24,8 @@ import pytest
 import torch
 
 from dxtb import GFN1_XTB, Calculator, scf
-from dxtb._src.integral.evaluation import (
-    IntegralMatrices,
-    build_integral_matrices,
-)
+from dxtb._src.calculators.singlepoint import build_integral_matrices
+from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.scf.iterator import solve
 from dxtb.config import ConfigSCF
 

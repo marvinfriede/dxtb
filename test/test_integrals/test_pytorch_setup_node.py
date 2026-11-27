@@ -26,6 +26,7 @@ from torch.utils._pytree import tree_flatten, tree_unflatten
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, IndexHelper, labels
 from dxtb._src.basis.bas import Basis
+from dxtb._src.integral.driver.pytorch import build_overlap
 from dxtb._src.integral.driver.pytorch import setup as pytorch_setup_module
 from dxtb._src.integral.driver.pytorch.impls.kernels.os import compute_1d_os
 from dxtb._src.integral.driver.pytorch.impls.pairs import (
@@ -34,7 +35,6 @@ from dxtb._src.integral.driver.pytorch.impls.pairs import (
     assemble_matrix,
     select_pairs,
 )
-from dxtb._src.integral.driver.pytorch.overlap import build_overlap
 from dxtb._src.integral.driver.pytorch.setup import (
     PytorchIntegralSetup,
     setup_integrals,

@@ -14,17 +14,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Pure setup and evaluation of overlap, multipole, and H0 matrices."""
+"""Pure setup and evaluation of the overlap and multipole integrals."""
 
 from __future__ import annotations
 
 import torch
-from tad_mctc.exceptions import DeviceError
 from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper, labels
 from dxtb._src.basis.bas import Basis
-from dxtb._src.integral.container import IntegralMatrices
 from dxtb._src.integral.driver.libcint import (
     LibcintIntegralSetup,
 )
@@ -42,11 +40,10 @@ from dxtb._src.integral.driver.pytorch import setup_integrals
 from dxtb._src.param import ParamModule
 from dxtb._src.typing import Tensor
 from dxtb._src.utils.tensors import normalize_device
-from dxtb._src.xtb.h0 import H0Setup, H0SetupNode, build_hcore
 
 __all__ = [
     "IntegralSetup",
-    "build_integral_matrices",
+    "evaluate_integrals",
     "setup_integral_evaluation",
 ]
 
@@ -74,7 +71,12 @@ class IntegralSetup(Node):
         return {"logical_device": device}
 
     def _validate(self) -> None:
-        """Require the selected backend to match its driver."""
+        """Require a supported level and a backend matching the driver."""
+        if not labels.INTLEVEL_OVERLAP <= self.intlevel <= labels.INTLEVEL_MAX:
+            raise ValueError(
+                f"Unsupported integral level '{self.intlevel}'. The "
+                "quadrupole integral is the highest supported moment."
+            )
         expected_backend = {
             labels.INTDRIVER_PYTORCH: PytorchIntegralSetup,
             labels.INTDRIVER_LIBCINT: LibcintIntegralSetup,
@@ -164,10 +166,7 @@ def setup_integral_evaluation(
             "setup_integral_evaluation requires a single System "
             "(batch_mode == 0)."
         )
-    if driver_type not in (
-        labels.INTDRIVER_PYTORCH,
-        labels.INTDRIVER_LIBCINT,
-    ):
+    if driver_type not in (labels.INTDRIVER_PYTORCH, labels.INTDRIVER_LIBCINT):
         raise ValueError(f"Unknown integral driver '{driver_type}'.")
 
     target_device = (
@@ -205,68 +204,89 @@ def setup_integral_evaluation(
     )
 
 
-def build_integral_matrices(
+def _make_quadrupole_traceless(quadrupole: Tensor) -> Tensor:
+    r"""
+    Convert the ket-centered quadrupole integral into the traceless form used
+    by the xTB methods (as in tblite).
+
+    .. math::
+
+        \Theta_{ab} = \frac{3}{2} Q_{ab} - \frac{1}{2} \delta_{ab}
+                      \left( Q_{xx} + Q_{yy} + Q_{zz} \right)
+
+    Parameters
+    ----------
+    quadrupole : Tensor
+        Six-component quadrupole integral in the order xx, yx, yy, zx, zy, zz
+        (shape: ``(..., 6, nao, nao)``).
+
+    Returns
+    -------
+    Tensor
+        Traceless quadrupole integral in the same order and shape.
+    """
+    # half of the trace: (Q_xx + Q_yy + Q_zz) / 2
+    half_trace = 0.5 * (
+        quadrupole[..., 0, :, :]
+        + quadrupole[..., 2, :, :]
+        + quadrupole[..., 5, :, :]
+    )
+
+    # 3/2 Q_ab, minus the half trace on the diagonal components only
+    return torch.stack(
+        [
+            1.5 * quadrupole[..., 0, :, :] - half_trace,  # xx
+            1.5 * quadrupole[..., 1, :, :],  # yx
+            1.5 * quadrupole[..., 2, :, :] - half_trace,  # yy
+            1.5 * quadrupole[..., 3, :, :],  # zx
+            1.5 * quadrupole[..., 4, :, :],  # zy
+            1.5 * quadrupole[..., 5, :, :] - half_trace,  # zz
+        ],
+        dim=-3,
+    )
+
+
+def evaluate_integrals(
     setup: IntegralSetup,
-    h0_setup: H0Setup | H0SetupNode,
-    ihelp: IndexHelper,
     positions: Tensor,
-    charge: Tensor | float | int,
-) -> tuple[IntegralMatrices, Tensor]:
-    """Build all requested matrices from explicit setup and current inputs."""
-    if not isinstance(ihelp, IndexHelper):
-        raise TypeError(
-            "build_integral_matrices requires a canonical IndexHelper, "
-            f"got {type(ihelp).__name__}."
-        )
-    if setup.intlevel > labels.INTLEVEL_MAX:
-        raise RuntimeError(
-            f"An integral level of '{setup.intlevel}' is requested, "
-            "but the quadrupole integral is the highest supported "
-            "moment."
-        )
+) -> tuple[Tensor, Tensor | None, Tensor | None]:
+    """
+    Evaluate the overlap and the multipole integrals for one geometry.
 
-    target_device = positions.device
-    if not ihelp.has_uniform_device(target_device):
-        child_device = next(
-            getattr(ihelp, name).device
-            for name in ihelp._child_names
-            if getattr(ihelp, name).device != target_device
-        )
-        raise DeviceError(
-            f"Device mismatch: canonical IndexHelper is on "
-            f"'{child_device}', but positions are on '{target_device}'."
-        )
+    Parameters
+    ----------
+    setup : IntegralSetup
+        Backend setup from :func:`setup_integral_evaluation`.
+    positions : Tensor
+        Cartesian coordinates of all atoms (shape: ``(nat, 3)``).
 
-    if setup.driver_type == labels.INTDRIVER_PYTORCH:
-        if setup.pytorch is None:
-            raise RuntimeError("PyTorch integral setup is missing.")
-        overlap, dipole, quadrupole = evaluate_pytorch_moments(
-            setup.pytorch, positions, setup.intlevel
-        )
-    elif setup.driver_type == labels.INTDRIVER_LIBCINT:
-        if setup.libcint is None:
-            raise RuntimeError("libcint integral setup is missing.")
-        overlap, dipole, quadrupole = evaluate_libcint_moments(
-            setup.libcint, positions, setup.intlevel
-        )
+    Returns
+    -------
+    tuple[Tensor, Tensor | None, Tensor | None]
+        Normalized overlap ``(nao, nao)``, ket-centered dipole
+        ``(3, nao, nao)`` and ket-centered traceless quadrupole
+        ``(6, nao, nao)`` on the device of ``positions``. Moments above
+        ``setup.intlevel`` are ``None``.
+    """
+    backend = setup.backend
+    if isinstance(backend, PytorchIntegralSetup):
+        moments = evaluate_pytorch_moments(backend, positions, setup.intlevel)
+    elif isinstance(backend, LibcintIntegralSetup):
+        moments = evaluate_libcint_moments(backend, positions, setup.intlevel)
     else:
-        raise ValueError(f"Unknown integral driver '{setup.driver_type}'.")
+        raise RuntimeError("Integral backend setup is missing.")
 
-    overlap = overlap.to(device=target_device)
-    if dipole is not None:
-        dipole = dipole.to(device=target_device)
+    overlap, dipole, quadrupole = moments
+
+    # both drivers return the plain ket-centered quadrupole; the xTB methods
+    # use its traceless form
     if quadrupole is not None:
-        quadrupole = quadrupole.to(device=target_device)
+        quadrupole = _make_quadrupole_traceless(quadrupole)
 
-    hcore, refocc = build_hcore(
-        h0_setup, positions, overlap, charge=charge, ihelp=ihelp
+    # libcint evaluates on CPU; return to the device of the positions
+    device = positions.device
+    return (
+        overlap.to(device=device),
+        None if dipole is None else dipole.to(device=device),
+        None if quadrupole is None else quadrupole.to(device=device),
     )
-    hcore = hcore.to(device=target_device)
-    refocc = refocc.to(device=target_device)
-    matrices = IntegralMatrices(
-        hcore=hcore,
-        overlap=overlap,
-        dipole=dipole,
-        quadrupole=quadrupole,
-    )
-    return matrices, refocc

@@ -28,7 +28,7 @@ from dataclasses import dataclass
 import torch
 from tad_mctc.exceptions import DeviceError, DtypeError
 
-from dxtb import labels
+from dxtb import IndexHelper, labels
 from dxtb._src import scf
 from dxtb._src.calculators.model import (
     BUILTIN_CLASSICAL_TYPES,
@@ -101,12 +101,14 @@ from dxtb._src.components.interactions.solvation.alpb import (
     build_generalized_born_data,
 )
 from dxtb._src.constants import defaults
-from dxtb._src.integral.evaluation import build_integral_matrices
+from dxtb._src.integral.container import IntegralMatrices
+from dxtb._src.integral.evaluation import IntegralSetup, evaluate_integrals
 from dxtb._src.scf.status import SCFStatus
 from dxtb._src.timing import timer
 from dxtb._src.typing import Any, Tensor
+from dxtb._src.xtb.h0 import H0Setup, H0SetupNode, build_hcore
 
-__all__ = ["singlepoint"]
+__all__ = ["build_integral_matrices", "singlepoint"]
 
 
 def _iteration_tensor(value: int | Tensor, like: Tensor) -> Tensor:
@@ -403,6 +405,50 @@ def _interaction_data(
                 )
             data[interaction.label] = cache
     return data
+
+
+def build_integral_matrices(
+    integral_setup: IntegralSetup,
+    h0_setup: H0Setup | H0SetupNode,
+    ihelp: IndexHelper,
+    positions: Tensor,
+    charge: Tensor | float | int,
+) -> tuple[IntegralMatrices, Tensor]:
+    """
+    Build the one-electron matrices of the SCF for one geometry.
+
+    The overlap and multipole integrals come from the integral backend; the
+    core Hamiltonian is built from the overlap.
+
+    Returns
+    -------
+    tuple[IntegralMatrices, Tensor]
+        One-electron matrices and the reference occupation of the core
+        Hamiltonian.
+    """
+    if not isinstance(ihelp, IndexHelper):
+        raise TypeError(
+            "build_integral_matrices requires a canonical IndexHelper, "
+            f"got {type(ihelp).__name__}."
+        )
+    device = positions.device
+    if not ihelp.has_uniform_device(device):
+        raise DeviceError(
+            "Device mismatch: canonical IndexHelper is not on the device of "
+            f"the positions ('{device}')."
+        )
+
+    overlap, dipole, quadrupole = evaluate_integrals(integral_setup, positions)
+    hcore, refocc = build_hcore(
+        h0_setup, positions, overlap, charge=charge, ihelp=ihelp
+    )
+    matrices = IntegralMatrices(
+        hcore=hcore.to(device=device),
+        overlap=overlap,
+        dipole=dipole,
+        quadrupole=quadrupole,
+    )
+    return matrices, refocc.to(device=device)
 
 
 def _floating_setup_tensor(system: System) -> Tensor | None:

@@ -37,9 +37,9 @@ from dxtb._src.calculators.lane_evaluation import (
     group_lanes,
 )
 from dxtb._src.calculators.model import Model, ModelParameterNode, System
+from dxtb._src.calculators.singlepoint import build_integral_matrices
 from dxtb._src.calculators.types.base import _convert_eval_system_dtype
 from dxtb._src.integral.driver.pytorch import build_overlap, evaluate_moments
-from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.param import ParamModule
 from dxtb._src.typing import Tensor
 from dxtb.config import Config

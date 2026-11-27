@@ -24,23 +24,16 @@ Integral Driver: Libcint
 from .driver import LibcintIntegralSetup, setup_libcint
 from .multipole import (
     build_dipole,
-    build_dipole_libcint,
-    build_multipole_libcint,
+    build_overlap,
     build_quadrupole,
-    build_quadrupole_libcint,
     evaluate_moments,
 )
-from .overlap import build_overlap, build_overlap_libcint
 
 __all__ = [
     "LibcintIntegralSetup",
     "setup_libcint",
     "build_overlap",
-    "build_overlap_libcint",
     "build_dipole",
-    "build_dipole_libcint",
-    "build_multipole_libcint",
     "build_quadrupole",
-    "build_quadrupole_libcint",
     "evaluate_moments",
 ]

@@ -47,7 +47,6 @@ def test_default() -> None:
 
     assert cfg.ints.cutoff == defaults.INTCUTOFF
     assert cfg.ints.level == defaults.INTLEVEL
-    assert cfg.ints.uplo == defaults.INTUPLO
 
     assert cfg.anomaly == False
 

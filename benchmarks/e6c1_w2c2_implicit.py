@@ -62,20 +62,22 @@ from dxtb._src.calculators.result import Result  # noqa: E402
 from dxtb._src.calculators.singlepoint import (  # noqa: E402
     _evaluate_classical_descriptor,
     _interaction_data,
+    build_integral_matrices,
 )
 from dxtb._src.constants import defaults  # noqa: E402
-from dxtb._src.integral.evaluation import build_integral_matrices  # noqa: E402
 from dxtb._src.scf import (  # noqa: E402
     SCFCharges,
     pack_charges,
     setup_scf_inputs,
 )
 from dxtb._src.scf.eager import _prepare_solver  # noqa: E402
+from dxtb._src.scf.guess import get_guess  # noqa: E402
 from dxtb._src.scf.implicit import (  # noqa: E402
     _prepare_scf_root,
     _SCFMapTensorTree,
     implicit_root,
 )
+from dxtb._src.scf.iterator import get_refocc  # noqa: E402
 from dxtb._src.scf.map import scf_map  # noqa: E402
 from dxtb._src.scf.solver import (  # noqa: E402
     SCFTrajectoryStatus,
@@ -84,8 +86,6 @@ from dxtb._src.scf.solver import (  # noqa: E402
     fermi_status_ok,
     finalize_scf,
 )
-from dxtb._src.scf.guess import get_guess  # noqa: E402
-from dxtb._src.scf.iterator import get_refocc  # noqa: E402
 from dxtb._src.typing.exceptions import SCFConvergenceError  # noqa: E402
 from dxtb.config import Config  # noqa: E402
 from dxtb.scf import SCFVariable  # noqa: E402

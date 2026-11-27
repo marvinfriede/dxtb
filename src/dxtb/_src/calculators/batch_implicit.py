@@ -53,6 +53,7 @@ from dxtb._src.calculators.singlepoint import (
     _evaluate_custom_classical_fallback,
     _floating_setup_tensor,
     _interaction_data,
+    build_integral_matrices,
 )
 from dxtb._src.components.base import _NON_TRAVERSABLE_TYPES, _iter_mro_slots
 from dxtb._src.components.classicals.dispersion.d3 import (
@@ -91,7 +92,6 @@ from dxtb._src.components.interactions.list import (
 )
 from dxtb._src.constants import defaults
 from dxtb._src.integral.container import IntegralMatrices
-from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.scf.certification import (
     certify_scf_core_state,
     resolve_certification_thresholds,

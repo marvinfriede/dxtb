@@ -15,7 +15,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Run tests for overlap of atoms.
+The PyTorch overlap is exactly symmetric by construction (the lower triangle
+is computed once and mirrored) and matches the reference.
 References calculated with tblite 0.3.0.
 """
 
@@ -41,7 +42,8 @@ ref_overlap = np.load("test/test_overlap/overlap.npz")
 
 @pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize("name", ["H", "C", "LiH", "SiH4"])
-def test_single(dtype: torch.dtype, name: str):
+def test_single(dtype: torch.dtype, name: str) -> None:
+    """Single structure: bitwise symmetric and equal to the reference."""
     dd: DD = {"dtype": dtype, "device": DEVICE}
     tol = 1e-05
 
@@ -50,22 +52,17 @@ def test_single(dtype: torch.dtype, name: str):
     positions = sample["positions"].to(**dd)
     ref = load_from_npz(ref_overlap, name, dtype)
 
-    s = calc_overlap(numbers, positions, GFN1_XTB, dd, uplo="n")
-    s_lower = calc_overlap(numbers, positions, GFN1_XTB, dd, uplo="l")
-    s_upper = calc_overlap(numbers, positions, GFN1_XTB, dd, uplo="u")
+    s = calc_overlap(numbers, positions, GFN1_XTB, dd)
 
+    assert torch.equal(s, s.mT)
     assert pytest.approx(ref.cpu(), rel=tol, abs=tol) == s.cpu()
-    assert pytest.approx(ref.cpu(), rel=tol, abs=tol) == s_lower.cpu()
-    assert pytest.approx(ref.cpu(), rel=tol, abs=tol) == s_upper.cpu()
-    assert pytest.approx(s.cpu(), rel=tol, abs=tol) == s_lower.cpu()
-    assert pytest.approx(s.cpu(), rel=tol, abs=tol) == s_upper.cpu()
 
 
 @pytest.mark.parametrize("dtype", [torch.float])
 @pytest.mark.parametrize("name1", ["C", "Rn"])
 @pytest.mark.parametrize("name2", ["C", "Rn"])
 def test_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
-    """Batched version."""
+    """Padded batch: bitwise symmetric and equal to the reference."""
     dd: DD = {"dtype": dtype, "device": DEVICE}
     tol = sqrt(torch.finfo(dtype).eps) * 10
 
@@ -90,12 +87,7 @@ def test_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
         )
     )
 
-    s = calc_overlap(numbers, positions, GFN1_XTB, dd, uplo="n")
-    s_lower = calc_overlap(numbers, positions, GFN1_XTB, dd, uplo="l")
-    s_upper = calc_overlap(numbers, positions, GFN1_XTB, dd, uplo="u")
+    s = calc_overlap(numbers, positions, GFN1_XTB, dd)
 
+    assert torch.equal(s, s.mT)
     assert pytest.approx(ref.cpu(), rel=tol, abs=tol) == s.cpu()
-    assert pytest.approx(ref.cpu(), rel=tol, abs=tol) == s_lower.cpu()
-    assert pytest.approx(ref.cpu(), rel=tol, abs=tol) == s_upper.cpu()
-    assert pytest.approx(s.cpu(), rel=tol, abs=tol) == s_lower.cpu()
-    assert pytest.approx(s.cpu(), rel=tol, abs=tol) == s_upper.cpu()

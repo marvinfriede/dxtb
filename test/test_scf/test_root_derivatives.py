@@ -27,10 +27,12 @@ from tad_mctc import storch
 from torch.func import jacrev, jvp
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, ParamModule, labels
-from dxtb._src.calculators.singlepoint import _interaction_data
+from dxtb._src.calculators.singlepoint import (
+    _interaction_data,
+    build_integral_matrices,
+)
 from dxtb._src.components.interactions import InteractionList
 from dxtb._src.components.interactions.field.efield import ElectricField
-from dxtb._src.integral.evaluation import build_integral_matrices
 from dxtb._src.scf import (
     BroydenConverger,
     BroydenConvergerSettings,

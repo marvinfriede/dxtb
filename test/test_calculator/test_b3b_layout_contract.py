@@ -30,7 +30,7 @@ from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, labels
 from dxtb._src.basis.indexhelper import IndexHelper
 from dxtb._src.calculators.model import Model
 from dxtb._src.calculators.singlepoint import _interaction_data, singlepoint
-from dxtb._src.integral.driver.pytorch.overlap import build_overlap
+from dxtb._src.integral.driver.pytorch import build_overlap
 from dxtb._src.param import ParamModule
 from dxtb.config import Config
 
@@ -1709,11 +1709,11 @@ def test_exact_core_conversions_stacking_and_zero_sync_fast_path(
     from torch.utils._pytree import tree_flatten, tree_unflatten
 
     from dxtb import Calculator
+    from dxtb._src.calculators.singlepoint import build_integral_matrices
     from dxtb._src.calculators.types.base import (
         _convert_eval_system_dtype,
         _convert_system_dtype,
     )
-    from dxtb._src.integral.evaluation import build_integral_matrices
 
     numbers = torch.tensor([8, 1, 1])
     positions = mols["H2O"]["positions"].to(device="cpu", dtype=torch.float64)
@@ -2076,7 +2076,7 @@ def test_reviewer_adversarial_tampering_compile_and_dtype_guards(
 
     # 6. [BLOCKER-3] torch.compile preserves structural-tampering rejection & core deactivation.
     if torch._dynamo.is_dynamo_supported():
-        from dxtb._src.integral.evaluation import build_integral_matrices
+        from dxtb._src.calculators.singlepoint import build_integral_matrices
 
         torch._dynamo.reset()
 

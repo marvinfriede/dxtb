@@ -885,8 +885,10 @@ def test_charge_mode_residual_orientation_sensitivity_is_orbital_anisotropy() ->
         )
         par = ParamModule(GFN2_XTB, **dd)
         system = Model(par=par, config=config).setup(sys.numbers, batch_mode=0)
-        from dxtb._src.calculators.singlepoint import _interaction_data
-        from dxtb._src.integral.evaluation import build_integral_matrices
+        from dxtb._src.calculators.singlepoint import (
+            _interaction_data,
+            build_integral_matrices,
+        )
         from dxtb._src.scf.data import setup_scf_inputs
         from dxtb._src.scf.guess import get_guess
         from dxtb._src.scf.iterator import get_refocc

@@ -28,20 +28,22 @@ from torch.utils._pytree import tree_flatten, tree_unflatten
 
 from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, Calculator, IndexHelper, labels
 from dxtb._src.basis.bas import Basis
+from dxtb._src.calculators.singlepoint import build_integral_matrices
 from dxtb._src.exlibs import libcint
 from dxtb._src.exlibs.available import has_libcint, has_pyscf
 from dxtb._src.integral.driver.libcint import (
     LibcintIntegralSetup,
-    build_overlap_libcint,
-    setup_libcint,
 )
+from dxtb._src.integral.driver.libcint import (
+    build_overlap as build_overlap_libcint,
+)
+from dxtb._src.integral.driver.libcint import setup_libcint
 from dxtb._src.integral.driver.pytorch import (
     build_overlap as build_overlap_pytorch,
 )
 from dxtb._src.integral.driver.pytorch import setup_integrals
 from dxtb._src.integral.evaluation import (
     IntegralSetup,
-    build_integral_matrices,
     setup_integral_evaluation,
 )
 from dxtb._src.param import ParamModule

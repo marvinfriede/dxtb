@@ -114,7 +114,6 @@ class Config:
         int_cutoff: float = defaults.INTCUTOFF,
         int_driver: str | int = defaults.INTDRIVER,
         int_level: int = defaults.INTLEVEL,
-        int_uplo: str = defaults.INTUPLO,
         int_algorithm: str | None = None,
         # PyTorch
         anomaly: bool = False,
@@ -206,7 +205,6 @@ class Config:
                 level=int_level,
                 cutoff=int_cutoff,
                 driver=int_driver,
-                uplo=int_uplo,
                 algorithm=int_algorithm,
             ),
             scf=scf,
@@ -237,7 +235,6 @@ class Config:
             int_cutoff=args.int_cutoff,
             int_driver=args.int_driver,
             int_level=args.int_level,
-            int_uplo=args.int_uplo,
             int_algorithm=getattr(args, "int_algorithm", None),
             # PyTorch
             anomaly=args.detect_anomaly,

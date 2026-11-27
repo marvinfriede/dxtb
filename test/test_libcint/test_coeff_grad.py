@@ -30,9 +30,9 @@ from dxtb import GFN1_XTB, GFN2_XTB, IndexHelper, Param, ParamModule
 from dxtb._src.basis.bas import Basis
 from dxtb._src.exlibs.available import has_libcint
 from dxtb._src.integral.driver.libcint import (
-    build_overlap_libcint,
-    setup_libcint,
+    build_overlap as build_overlap_libcint,
 )
+from dxtb._src.integral.driver.libcint import setup_libcint
 from dxtb._src.typing import DD, Callable, Tensor
 
 if has_libcint is True:

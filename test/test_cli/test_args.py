@@ -73,9 +73,6 @@ def test_defaults() -> None:
     assert isinstance(args.int_level, int)
     assert args.int_level == defaults.INTLEVEL
 
-    assert isinstance(args.int_uplo, str)
-    assert args.int_uplo == defaults.INTUPLO
-
 
 @pytest.mark.parametrize(
     "option",

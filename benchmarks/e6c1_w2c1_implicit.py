@@ -99,8 +99,10 @@ def main() -> None:
     from test.test_scf.test_root_derivatives import _case, _run_root
 
     from dxtb import GFN1_XTB
-    from dxtb._src.calculators.singlepoint import _interaction_data
-    from dxtb._src.integral.evaluation import build_integral_matrices
+    from dxtb._src.calculators.singlepoint import (
+        _interaction_data,
+        build_integral_matrices,
+    )
     from dxtb._src.scf import setup_scf_inputs
     from dxtb._src.scf.eager import (
         run_prepared_implicit_scf,

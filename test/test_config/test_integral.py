@@ -31,7 +31,6 @@ def test_default() -> None:
     cfg = Cfg.create()
     assert cfg.cutoff == defaults.INTCUTOFF
     assert cfg.level == defaults.INTLEVEL
-    assert cfg.uplo == defaults.INTUPLO
 
 
 def test_default_driver() -> None:
@@ -77,8 +76,3 @@ def test_fail_driver() -> None:
 def test_fail_level() -> None:
     with pytest.raises(TypeError):
         Cfg.create(level="overlap")  # type: ignore
-
-
-def test_fail_uplo() -> None:
-    with pytest.raises(ValueError):
-        Cfg.create(uplo="symmetric")  # type: ignore

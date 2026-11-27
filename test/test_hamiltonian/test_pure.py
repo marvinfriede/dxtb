@@ -11,8 +11,8 @@ from tad_mctc.batch import pack
 
 from dxtb import GFN0_XTB, GFN1_XTB, GFN2_XTB, IndexHelper, ParamModule
 from dxtb._src.basis.bas import Basis
+from dxtb._src.integral.driver.pytorch import build_overlap
 from dxtb._src.integral.driver.pytorch.multipole import build_dipole
-from dxtb._src.integral.driver.pytorch.overlap import build_overlap
 from dxtb._src.integral.driver.pytorch.setup import setup_integrals
 from dxtb._src.xtb.gfn0 import GFN0Hamiltonian
 from dxtb._src.xtb.gfn1 import GFN1Hamiltonian

@@ -23,11 +23,12 @@ pairs, parameterized over a 1D ``kernel`` matching the ``compute_1d``
 contract (McMurchie-Davidson or Obara-Saika).
 
 ``assemble_multipole_1d`` assembles the overlap (one component), the raw
-dipole (3) and the raw quadrupole (9 components, row-major) integrals about a
-common origin; ``assemble_overlap_1d`` is its single-component form. All consume
-per-class ``(angular, alpha, coeff, vec)`` inputs; the enumeration and
-grouping of the shell pairs, screening, chunking and the scatter into the AO
-matrix are done by ``impls/pairs.py``.
+dipole (3) and the raw quadrupole (9 components, row-major, or the 6
+unique lower-triangle ones) integrals about a common origin;
+``assemble_overlap_1d`` is its single-component form. All consume per-class
+``(angular, alpha, coeff, vec)`` inputs; the enumeration and grouping of the
+shell pairs, screening, chunking and the scatter into the AO matrix are done
+by ``impls/pairs.py``.
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ __all__ = [
     "OVERLAP_COMPONENTS",
     "DIPOLE_COMPONENTS",
     "QUADRUPOLE_COMPONENTS",
+    "QUADRUPOLE_LOWER_COMPONENTS",
     "Kernel1D",
 ]
 
@@ -145,6 +147,20 @@ QUADRUPOLE_COMPONENTS = (
 Per-axis multipole order of each of the 9 raw quadrupole components,
 row-major ``(x, y, z) x (x, y, z)`` (xx, xy, xz, yx, ...), matching
 libcint's ``int1e("r0r0")`` ordering.
+"""
+
+QUADRUPOLE_LOWER_COMPONENTS = (
+    (2, 0, 0),  # xx
+    (1, 1, 0),  # yx
+    (0, 2, 0),  # yy
+    (1, 0, 1),  # zx
+    (0, 1, 1),  # zy
+    (0, 0, 2),  # zz
+)
+"""
+Per-axis multipole order of the 6 unique quadrupole components, the lower
+triangle of :data:`QUADRUPOLE_COMPONENTS` (xx, yx, yy, zx, zy, zz). This is
+the layout of the internal xTB quadrupole and of libcint's ``int1e("jj")``.
 """
 
 

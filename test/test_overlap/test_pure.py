@@ -23,7 +23,7 @@ import torch
 
 from dxtb import GFN1_XTB, GFN2_XTB, IndexHelper
 from dxtb._src.basis.bas import Basis
-from dxtb._src.integral.driver.pytorch.overlap import build_overlap
+from dxtb._src.integral.driver.pytorch import build_overlap
 from dxtb._src.integral.driver.pytorch.setup import setup_integrals
 from dxtb._src.param import Param, ParamModule
 

@@ -140,7 +140,7 @@ def gradchecker_batch(
     pos = positions.clone().requires_grad_(True)
 
     def func(p: Tensor) -> Tensor:
-        return calc_overlap(numbers, p, par, dd, uplo="n", mask=mask)
+        return calc_overlap(numbers, p, par, dd, mask=mask)
 
     return func, pos
 
