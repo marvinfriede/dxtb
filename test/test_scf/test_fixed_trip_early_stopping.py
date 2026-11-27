@@ -350,21 +350,48 @@ def test_meta_device_disables_early_stopping_without_host_sync() -> None:
     assert outcome.root_x.device.type == "meta"
 
 
+# The other solvers add no coverage over the default one and run nightly.
+_SLOW = pytest.mark.slow
+
+
 @pytest.mark.parametrize(
     "sample_name,method,strategy_id,strategy_spec",
     [
-        ("LiH", labels.GFN1_XTB, "charge-anderson", "charge-anderson"),
-        ("LiH", labels.GFN1_XTB, "broyden", "broyden"),
-        ("LiH", labels.GFN1_XTB, "linear", "linear"),
-        ("H2O", labels.GFN2_XTB, "cdiis", "cdiis"),
-        ("H2O", labels.GFN2_XTB, "default", "default"),
-    ],
-    ids=[
-        "lih-gfn1-anderson",
-        "lih-gfn1-broyden",
-        "lih-gfn1-linear",
-        "h2o-gfn2-cdiis",
-        "h2o-gfn2-default",
+        pytest.param(
+            "LiH",
+            labels.GFN1_XTB,
+            "charge-anderson",
+            "charge-anderson",
+            marks=_SLOW,
+            id="lih-gfn1-anderson",
+        ),
+        pytest.param(
+            "LiH",
+            labels.GFN1_XTB,
+            "broyden",
+            "broyden",
+            marks=_SLOW,
+            id="lih-gfn1-broyden",
+        ),
+        pytest.param(
+            "LiH",
+            labels.GFN1_XTB,
+            "linear",
+            "linear",
+            marks=_SLOW,
+            id="lih-gfn1-linear",
+        ),
+        pytest.param(
+            "H2O",
+            labels.GFN2_XTB,
+            "cdiis",
+            "cdiis",
+            marks=_SLOW,
+            id="h2o-gfn2-cdiis",
+        ),
+        pytest.param(
+            "H2O", labels.GFN2_XTB, "default", "default", id="h2o-gfn2-default"
+        ),
     ],
 )
 def test_single_system_transform_derivatives_match_static_schedule(
@@ -475,8 +502,10 @@ def test_float32_single_system_early_stopping_matches_static(
 
 @pytest.mark.parametrize(
     "sample_name,method",
-    [("LiH", labels.GFN1_XTB), ("H2O", labels.GFN2_XTB)],
-    ids=["lih-gfn1", "h2o-gfn2"],
+    [
+        pytest.param("LiH", labels.GFN1_XTB, marks=_SLOW, id="lih-gfn1"),
+        pytest.param("H2O", labels.GFN2_XTB, id="h2o-gfn2"),
+    ],
 )
 def test_system_public_property_methods_stop_early_and_match_static(
     monkeypatch: pytest.MonkeyPatch,

@@ -400,9 +400,15 @@ def test_inference_mode_and_snapshot_tensor_states_invariants() -> None:
     not torch._dynamo.is_dynamo_supported(),
     reason="torch.compile is not supported for this Python/torch combination",
 )
-def test_dynamo_fullgraph_kernels_and_compiled_mutation_rejection() -> None:
-    """Pure integral/multipole kernels compile fullgraph; System checks catch mutations."""
-    model, _, sys_oh2, _, pos, _ = _build_water_systems()
+def test_dynamo_fullgraph_kernels() -> None:
+    """
+    Pure integral/multipole kernels compile fullgraph.
+
+    The compiled ``System.energy`` and its post-compilation mutation check
+    are covered by ``test_scf_index_closure.py::
+    test_scf_dynamo_capture_and_post_compile_mutation_guard``.
+    """
+    _, _, sys_oh2, _, pos, _ = _build_water_systems()
     assert sys_oh2.integral_setup is not None
     assert sys_oh2.integral_setup.pytorch is not None
     assert sys_oh2.h0_setup is not None
@@ -439,16 +445,6 @@ def test_dynamo_fullgraph_kernels_and_compiled_mutation_rejection() -> None:
     ref_mats = fn_int_mats(pos)
     for actual, expected in zip(comp_mats, ref_mats):
         torch.testing.assert_close(actual, expected)
-
-    # System.energy under aot_eager + post-compilation in-place mutation rejection
-    sys_mut = model.setup(sys_oh2.numbers.clone())
-    ref_e = sys_mut.energy(pos)
-    comp_e = torch.compile(sys_mut.energy, backend="aot_eager")
-    torch.testing.assert_close(comp_e(pos), ref_e, atol=1e-12, rtol=1e-12)
-
-    sys_mut.ihelp.shell_index[0] = 99
-    with pytest.raises(ValueError, match="IndexHelper is incompatible"):
-        comp_e(pos)
 
 
 def test_converged_root_batch_and_streaming_eval() -> None:

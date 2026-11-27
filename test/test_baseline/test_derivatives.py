@@ -110,9 +110,18 @@ def _is_slow(cell: Cell) -> bool:
     return STATUS.get(cell.id, {}).get("seconds", 0.0) > 30.0
 
 
+def _is_libcint_duplicate(cell: Cell) -> bool:
+    """
+    The libcint cells repeat the PyTorch-driver cells; the two drivers are
+    compared directly on the integrals. They run nightly, except the cells
+    with a recorded failure, which stay visible in the routine suite.
+    """
+    return cell.driver == "libcint" and _expected_status(cell) == "pass"
+
+
 def _param(cell: Cell):
     marks = [pytest.mark.scf]
-    if _is_slow(cell):
+    if _is_slow(cell) or _is_libcint_duplicate(cell):
         marks.append(pytest.mark.slow)
     if cell.input != "single":
         marks.append(pytest.mark.batch_mode)

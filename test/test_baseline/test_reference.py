@@ -47,6 +47,11 @@ SLOW_GROUPS = {"second", "third"}
 SLOW_SYSTEMS = {"LYS_xao-conformers"}
 SLOW_CASES = {("padded4", "pytorch", "forces")}
 
+# The libcint cases repeat the PyTorch-driver cases (the drivers are compared
+# directly on the integrals) and run nightly. The H2O energies stay in the
+# routine suite as a cross-check of the libcint driver.
+LIBCINT_ROUTINE = {("H2O", "energy")}
+
 
 def _cases() -> list:
     cases = []
@@ -59,6 +64,10 @@ def _cases() -> list:
                         group in SLOW_GROUPS
                         or name in SLOW_SYSTEMS
                         or (name, driver, group) in SLOW_CASES
+                        or (
+                            driver == "libcint"
+                            and (name, group) not in LIBCINT_ROUTINE
+                        )
                     ):
                         marks.append(pytest.mark.slow)
                     if driver == "libcint":

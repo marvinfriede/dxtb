@@ -177,6 +177,7 @@ def test_single(dtype: torch.dtype, name: str) -> None:
     single(name, field_vector, dd=dd)
 
 
+@pytest.mark.slow  # same check as test_single, other driver; no extra coverage
 @pytest.mark.parametrize("dtype", [torch.double])
 def test_single_pytorch_driver(dtype: torch.dtype) -> None:
     """Numerical and analytical hyperpolarizability agree with the PyTorch driver."""

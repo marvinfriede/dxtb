@@ -140,21 +140,18 @@ def _chunked(control, guess, chunks):
 def _chunked_cases() -> list:
     """All (config, physics, maxiter) cases; the long ones run nightly.
 
-    The boundary budgets 0, 1 and 2 run for every case. Of the longer
-    budgets, the routine suite keeps ``maxiter=12`` for every config on the
-    closed-shell case and for every physics case on the default config;
-    ``maxiter=25`` and the remaining ``maxiter=12`` cases are marked `slow`.
+    The routine suite varies one axis at a time: for the budgets 0, 1, 2 and
+    12, every config runs on the closed-shell case and every physics case on
+    the default config. ``maxiter=25`` and the remaining combinations are
+    marked `slow`.
     """
     cases = []
     for maxiter in (0, 1, 2, 12, 25):
         for config in sorted(_CONFIGS):
             for physics in sorted(_PHYSICS):
-                routine = maxiter <= 2 or (
-                    maxiter == 12
-                    and (
-                        physics == "closed-shell-300K"
-                        or config == "gfn1-potential-default"
-                    )
+                routine = maxiter <= 12 and (
+                    physics == "closed-shell-300K"
+                    or config == "gfn1-potential-default"
                 )
                 cases.append(
                     pytest.param(

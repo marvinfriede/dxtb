@@ -120,11 +120,43 @@ def single_medium(
     assert pytest.approx(ref.cpu(), abs=tol, rel=tol) == res.cpu()
 
 
-@pytest.mark.parametrize("dtype", [torch.float, torch.double])
+_MEDIUM = ["PbH4-BiH3", "C6H5I-CH3SH", "MB16_43_01", "LYS_xao"]
+
+
+def _medium_cases(names: list[str], convergers: list[str]) -> list:
+    """
+    Medium-sized systems, varying one axis at a time.
+
+    The routine suite runs float64 with the Anderson converger for every
+    molecule and the other convergers on LYS_xao only. float32 (covered by
+    the small systems above), the remaining converger combinations, the
+    linear converger and C60 run nightly (``slow``).
+    """
+    cases = []
+    for converger in convergers:
+        for name in names:
+            for i, dtype in enumerate((torch.float, torch.double)):
+                routine = (
+                    dtype == torch.double
+                    and converger != "linear"
+                    and name in _MEDIUM
+                    and (converger == "anderson" or name == "LYS_xao")
+                )
+                cases.append(
+                    pytest.param(
+                        dtype,
+                        name,
+                        converger,
+                        marks=() if routine else pytest.mark.slow,
+                        id=f"{converger}-{name}-dtype{i}",
+                    )
+                )
+    return cases
+
+
 @pytest.mark.parametrize(
-    "name", ["PbH4-BiH3", "C6H5I-CH3SH", "MB16_43_01", "LYS_xao"]
+    "dtype,name,converger", _medium_cases(_MEDIUM, ["anderson", "broyden"])
 )
-@pytest.mark.parametrize("converger", ["anderson", "broyden"])
 def test_single_medium_gfn1(
     dtype: torch.dtype, name: str, converger: str
 ) -> None:
@@ -154,24 +186,9 @@ def test_single_medium_2_gfn1(
 
 
 @pytest.mark.skipif(not has_libcint, reason="libcint not available")
-@pytest.mark.parametrize("dtype", [torch.float, torch.double])
 @pytest.mark.parametrize(
-    "name",
-    [
-        "PbH4-BiH3",
-        "C6H5I-CH3SH",
-        "MB16_43_01",
-        "LYS_xao",
-        pytest.param("C60", marks=pytest.mark.slow),
-    ],
-)
-@pytest.mark.parametrize(
-    "converger",
-    [
-        "anderson",
-        "broyden",
-        pytest.param("linear", marks=pytest.mark.slow),
-    ],
+    "dtype,name,converger",
+    _medium_cases([*_MEDIUM, "C60"], ["anderson", "broyden", "linear"]),
 )
 def test_single_medium_gfn2(
     dtype: torch.dtype, name: str, converger: str
