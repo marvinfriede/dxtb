@@ -119,11 +119,15 @@ def _identity_partition(systems) -> list[int]:
 # Lane deduplication
 
 
-def _calculator_with_component_numbers(numbers: torch.Tensor):
+def _calculator_with_component_numbers(
+    numbers: torch.Tensor, component_numbers: torch.Tensor | None = None
+):
     """Batched Calculator whose caller-owned D3 component owns 2D numbers."""
     par = ParamModule(GFN1_XTB, dtype=DTYPE)
     d3 = new_dispersion(numbers, par, dtype=DTYPE)
     assert d3 is not None and d3.numbers.ndim == 2
+    if component_numbers is not None:
+        d3 = d3.replace(numbers=component_numbers)
     calc = Calculator(
         numbers,
         par,
@@ -161,8 +165,9 @@ def test_dedup_key_matches_previous_scalar_key_with_component_numbers() -> None:
 
     # Lanes whose main numbers agree but whose component-owned numbers
     # differ must not share a System.
-    d3.numbers = d3.numbers.clone()
-    d3.numbers[5, 1] = 9
+    lane_numbers = d3.numbers.clone()
+    lane_numbers[5, 1] = 9
+    calc, d3 = _calculator_with_component_numbers(numbers, lane_numbers)
     systems = build_calculator_lane_systems(calc)
     assert _identity_partition(systems) == _old_dedup_partition(calc)
     assert _identity_partition(systems) == [0, 1, 0, 3, 1, 5]

@@ -58,7 +58,7 @@ def gradchecker(dtype: torch.dtype, name: str) -> tuple[
 
     def func(*inputs: Tensor) -> Tensor:
         input_param = {label[i]: input for i, input in enumerate(inputs)}
-        disp = DispersionD3(numbers, input_param, **dd)
+        disp = DispersionD3(numbers=numbers, param=input_param).to(**dd)
         cache = disp.get_cache(numbers)
         return disp.get_energy(positions, cache)
 
@@ -146,7 +146,7 @@ def gradchecker_batch(dtype: torch.dtype, name1: str, name2: str) -> tuple[
 
     def func(*inputs: Tensor) -> Tensor:
         input_param = {label[i]: input for i, input in enumerate(inputs)}
-        disp = DispersionD3(numbers, input_param, **dd)
+        disp = DispersionD3(numbers=numbers, param=input_param).to(**dd)
         cache = disp.get_cache(numbers)
         return disp.get_energy(positions, cache)
 

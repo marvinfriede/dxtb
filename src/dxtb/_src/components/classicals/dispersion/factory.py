@@ -103,7 +103,7 @@ def new_dispersion(
             )
             for key in ("a1", "a2", "s6", "s8", "s9")
         }
-        return DispersionD3(numbers, param, **dd)
+        return DispersionD3(numbers=numbers, param=param)
 
     if not par.is_none("dispersion.d4") and par.is_none("dispersion.d3"):
         param = {
@@ -131,22 +131,16 @@ def new_dispersion(
                 raise ValueError("The total charge is required for DFT-D4.")
 
             return DispersionD4(
-                numbers,
-                param,
+                numbers=numbers,
+                param=param,
                 ref_charges=ref_charges,
                 charge=charge,
-                **dd,
             )
 
         # Classical part of self-consistent D4 is only ATM term
         param["s6"] = torch.tensor(0.0, **dd)
         param["s8"] = torch.tensor(0.0, **dd)
-        return DispersionD4(
-            numbers,
-            param,
-            ref_charges="gfn2",
-            **dd,
-        )
+        return DispersionD4(numbers=numbers, param=param, ref_charges="gfn2")
 
     if not par.is_none("dispersion.d3") and not par.is_none("dispersion.d4"):
         raise ValueError("Parameters for both D3 and D4 found. Please decide.")

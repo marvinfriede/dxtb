@@ -38,11 +38,11 @@ from dxtb._src.typing import (
 from ..list import ComponentList, ComponentListCache
 from .base import Classical
 from .dispersion.d3 import LABEL_DISPERSIOND3, DispersionD3
-from .dispersion.d4 import LABEL_DISPERSIOND4, DispersionD4
+from .dispersion.d4 import LABEL_DISPERSIOND4
 from .halogen import LABEL_HALOGEN, Halogen
-from .ies import IES, LABEL_IES
+from .ies import LABEL_IES
 from .repulsion import LABEL_REPULSION, Repulsion
-from .shortrangebond import LABEL_SRB, ShortRangeBond
+from .shortrangebond import LABEL_SRB
 
 if TYPE_CHECKING:
     from dxtb import IndexHelper
@@ -64,8 +64,6 @@ class ClassicalList(ComponentList[Classical]):
     def __init__(
         self,
         *components: Classical | None,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
     ) -> None:
         """Create a classical list and reject duplicate migrated labels."""
         for component in components:
@@ -113,8 +111,7 @@ class ClassicalList(ComponentList[Classical]):
                 )
             exact_d3[component.label] = component
 
-        super().__init__(*components, device=device, dtype=dtype)
-
+        super().__init__(*components)
 
     @override
     def get_cache(
@@ -226,6 +223,4 @@ class ClassicalList(ComponentList[Classical]):
 
     ###########################################################################
 
-
     ###########################################################################
-

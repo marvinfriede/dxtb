@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import torch
 from tad_mctc import ncoord
+from tad_mctc.convert import any_to_tensor
 from tad_mctc.data import radii
 
 from dxtb._src.param import Param, ParamModule, as_param_module
@@ -73,19 +74,27 @@ def new_srb(
     counting_function = getattr(ncoord, f"{cn}_count")
 
     return ShortRangeBond(
-        r0=par.get_elem_param(torch.unique(numbers), "srb_r0", pad_val=0),
-        cnfak=par.get_elem_param(torch.unique(numbers), "srb_cnfak", pad_val=0),
-        en=par.get_elem_param(torch.unique(numbers), "srb_en", pad_val=0),
-        rcov=radii.COV_D3(**dd),
+        r0=any_to_tensor(
+            par.get_elem_param(torch.unique(numbers), "srb_r0", pad_val=0), **dd
+        ),
+        cnfak=any_to_tensor(
+            par.get_elem_param(torch.unique(numbers), "srb_cnfak", pad_val=0),
+            **dd,
+        ),
+        en=any_to_tensor(
+            par.get_elem_param(torch.unique(numbers), "srb_en", pad_val=0), **dd
+        ),
+        rcov=any_to_tensor(radii.COV_D3(**dd), **dd),
         counting_function=counting_function,
-        shift=par.get("short_range.srb.shift"),
-        prefactor=par.get("short_range.srb.prefactor"),
-        steepness=par.get("short_range.srb.steepness"),
-        enscale=par.get("short_range.srb.enscale"),
-        enpoly=par.get("short_range.srb.enpoly"),
-        pair_cutoff2=par.get("short_range.srb.pair_cutoff2"),
-        cn_cutoff=par.get("short_range.srb.cn_cutoff"),
-        cn_max=par.get("short_range.srb.cn_max"),
-        cn_kcn=par.get("short_range.srb.cn_kcn"),
-        **dd,
+        shift=any_to_tensor(par.get("short_range.srb.shift"), **dd),
+        prefactor=any_to_tensor(par.get("short_range.srb.prefactor"), **dd),
+        steepness=any_to_tensor(par.get("short_range.srb.steepness"), **dd),
+        enscale=any_to_tensor(par.get("short_range.srb.enscale"), **dd),
+        enpoly=any_to_tensor(par.get("short_range.srb.enpoly"), **dd),
+        pair_cutoff2=any_to_tensor(
+            par.get("short_range.srb.pair_cutoff2"), **dd
+        ),
+        cn_cutoff=any_to_tensor(par.get("short_range.srb.cn_cutoff"), **dd),
+        cn_max=any_to_tensor(par.get("short_range.srb.cn_max"), **dd),
+        cn_kcn=any_to_tensor(par.get("short_range.srb.cn_kcn"), **dd),
     )

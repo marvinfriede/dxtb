@@ -90,8 +90,6 @@ class InteractionCache(ComponentCache):
     needed.
     """
 
-    __slots__: list[str] = []
-
 
 class Interaction(Component):
     """
@@ -122,18 +120,6 @@ class Interaction(Component):
     alongside ``get_cache``. Nuclear and parameter derivatives are obtained
     automatically via PyTorch autograd / ``torch.func``.
     """
-
-    # Already defined in `Component` parent class
-    label: str
-    """Label for the interaction."""
-
-    def __init__(
-        self,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ):
-        """Initialize the interaction."""
-        super().__init__(device, dtype)
 
     def get_cache(
         self,

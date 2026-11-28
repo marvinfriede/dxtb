@@ -65,7 +65,7 @@ def gradchecker(dtype: torch.dtype, name: str) -> tuple[
     _xbond.requires_grad_(True)
 
     def func(damp: Tensor, rscale: Tensor, xbond: Tensor) -> Tensor:
-        xb = Halogen(damp, rscale, xbond, **dd)
+        xb = Halogen(damp=damp, rscale=rscale, bond_strength=xbond).to(**dd)
         cache = xb.get_cache(numbers, ihelp)
         return xb.get_energy(positions, cache)
 
@@ -133,7 +133,7 @@ def gradchecker_batch(dtype: torch.dtype, name1: str, name2: str) -> tuple[
     _xbond.requires_grad_(True)
 
     def func(damp: Tensor, rscale: Tensor, xbond: Tensor) -> Tensor:
-        xb = Halogen(damp, rscale, xbond, **dd)
+        xb = Halogen(damp=damp, rscale=rscale, bond_strength=xbond).to(**dd)
         cache = xb.get_cache(numbers, ihelp)
         return xb.get_energy(positions, cache)
 

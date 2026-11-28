@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+from tad_mctc.tree import child, context
 
 from dxtb import GFN1_XTB, ParamModule, labels
 from dxtb._src.calculators.lane_evaluation import (
@@ -64,27 +65,22 @@ def _positions(numbers: list[int], shift: float = 0.0) -> torch.Tensor:
     )
 
 
-class _GeometryInteractionCache(InteractionCache):
-    __slots__ = ["geometry_scale"]
+_CACHE_CALLS: list[str] = []
 
-    def __init__(self, geometry_scale: torch.Tensor) -> None:
-        super().__init__(
-            device=geometry_scale.device, dtype=geometry_scale.dtype
-        )
-        self.geometry_scale = geometry_scale
+
+class _GeometryInteractionCache(InteractionCache):
+    geometry_scale: torch.Tensor = child()
 
 
 class _NonzeroInteraction(Interaction):
-    label = "E6bCustomNonzeroInteraction"
-
-    def __init__(self) -> None:
-        super().__init__(device=DEVICE, dtype=DTYPE)
-        self.calls = 0
+    label: str = context(default="E6bCustomNonzeroInteraction")
 
     def get_cache(self, *, numbers=None, positions=None, ihelp=None):
         _ = (numbers, ihelp)
         assert positions is not None
-        return _GeometryInteractionCache(positions.square().sum() * 1.0e-1)
+        return _GeometryInteractionCache(
+            geometry_scale=positions.square().sum() * 1.0e-1
+        )
 
     def get_monopole_atom_potential(
         self,
@@ -94,7 +90,6 @@ class _NonzeroInteraction(Interaction):
         qqp: torch.Tensor | None = None,
     ) -> torch.Tensor:
         _ = (qdp, qqp)
-        self.calls += 1
         assert isinstance(cache, _GeometryInteractionCache)
         atom_shape = qat.shape[-1]
         pattern = torch.arange(atom_shape, dtype=qat.dtype, device=qat.device)
@@ -104,20 +99,16 @@ class _NonzeroInteraction(Interaction):
         self, cache: InteractionCache, qat: torch.Tensor, **kwargs
     ) -> torch.Tensor:
         _ = kwargs
-        self.calls += 1
         assert isinstance(cache, _GeometryInteractionCache)
         return 0.5 * cache.geometry_scale * qat.square()
 
 
 class _CacheClassical(Classical):
-    def __init__(self) -> None:
-        super().__init__(device=DEVICE, dtype=DTYPE)
-        self.label = "E6bCacheClassical"
-        self.cache_calls = 0
+    label: str = context(default="E6bCacheClassical")
 
     def get_cache(self, numbers, ihelp=None, **kwargs):
         _ = (ihelp, kwargs)
-        self.cache_calls += 1
+        _CACHE_CALLS.append(self.label)
         return numbers.to(dtype=DTYPE).sum()
 
     def get_energy(self, positions, cache, **kwargs):
@@ -135,7 +126,7 @@ def _extra_d3(numbers: list[int], label: str) -> DispersionD3:
         dtype=DTYPE,
     )
     assert type(component) is DispersionD3
-    component.label = label
+    component = component.replace(label=label)
     return component
 
 
@@ -246,7 +237,7 @@ def test_libcint_independent_evaluation_preserves_model_parameter_gradient() -> 
 def test_field_label_conflict_is_not_silently_replaced() -> None:
     """Explicit field= rejects Systems carrying a same-label custom Interaction."""
     custom = _NonzeroInteraction()
-    custom.label = LABEL_EFIELD
+    custom = custom.replace(label=LABEL_EFIELD)
     numbers = [1, 1]
     system = _system(numbers, interaction=(custom,))
     with pytest.raises(ValueError, match="ElectricField"):
@@ -270,22 +261,16 @@ def test_custom_interaction_independent_and_vmap_eligibility() -> None:
         expected = system.singlepoint(pos)
         torch.testing.assert_close(actual.energy, expected.energy)
 
-    class _OpaqueInteraction(_NonzeroInteraction):
-        def __init__(self) -> None:
-            super().__init__()
-            self.opaque = object()
-
-    assert not can_vmap_system(_system(na, interaction=(_OpaqueInteraction(),)))
-
 
 def test_custom_classical_cache_and_non_component_rejection() -> None:
     """Tensor-only custom Classicals are vmap-eligible while opaque caches fall back."""
+    _CACHE_CALLS.clear()
     component = _CacheClassical()
     numbers = [1, 1]
     system = _system(numbers, classical=(component,))
     positions = _positions(numbers)
     assert can_vmap_system(system)
-    assert component.cache_calls == 1
+    assert len(_CACHE_CALLS) == 1
     first = evaluate_systems_independently((system,), (positions,))[0]
     second = evaluate_systems_independently((system,), (positions,))[0]
     first_classicals = dict(first.classical)
@@ -306,10 +291,9 @@ def test_custom_classical_cache_and_non_component_rejection() -> None:
             _ = (cache, kwargs)
             return positions.new_zeros(positions.shape[-2])
 
-    opaque_sys = _system(
-        numbers, classical=(_OpaqueClassical(device=DEVICE, dtype=DTYPE),)
-    )
-    assert not can_vmap_system(opaque_sys)
+    # setup data must be a Node, a tensor, None, or a container of them
+    with pytest.raises(TypeError, match="'_OpaqueClassical.get_cache'"):
+        _system(numbers, classical=(_OpaqueClassical(),))
 
     with pytest.raises(TypeError, match="Classical"):
         _system([1, 1], classical=(object(),))  # type: ignore[arg-type]

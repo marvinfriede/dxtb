@@ -24,6 +24,7 @@ from typing import Callable
 
 import pytest
 import torch
+from tad_mctc.tree import context
 from tad_mctc import storch
 from torch.func import jacfwd, jacrev, jvp, vmap
 
@@ -171,10 +172,7 @@ def _prepare_case(
     interactions = system.interactions
     if field is not None:
         interactions = InteractionList(
-            *system.interactions.components,
-            ElectricField(field),
-            device=positions.device,
-            dtype=positions.dtype,
+            *system.interactions.components, ElectricField(field=field)
         )
     interaction_data = _interaction_data(system, positions, interactions)
     guess = get_guess(
@@ -1129,12 +1127,11 @@ def test_gfn2_potential_map_uses_each_packed_row(row: int) -> None:
             )
 
 
-class _MutatingPotentialInteraction(Interaction):
-    label = "MutatingPotentialInteraction"
+_POTENTIAL_CALLS: list[str] = []
 
-    def __init__(self) -> None:
-        super().__init__(device=torch.device("cpu"), dtype=torch.float64)
-        self.calls = 0
+
+class _MutatingPotentialInteraction(Interaction):
+    label: str = context(default="MutatingPotentialInteraction")
 
     def get_monopole_atom_potential(
         self,
@@ -1143,7 +1140,7 @@ class _MutatingPotentialInteraction(Interaction):
         qdp: torch.Tensor | None = None,
         qqp: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        self.calls += 1
+        _POTENTIAL_CALLS.append(self.label)
         return torch.zeros_like(qat)
 
 
@@ -1152,17 +1149,13 @@ def test_eligibility_accepts_custom_interactions_and_rejects_non_interactions() 
 ):
     """Custom Interaction subclasses are eligible for SCF while non-Interactions fail."""
     case = _prepare_case(GFN1_XTB)
+    _POTENTIAL_CALLS.clear()
     custom = _MutatingPotentialInteraction()
-    interactions = InteractionList(
-        *case.interactions.components,
-        custom,
-        device="cpu",
-        dtype=torch.float64,
-    )
+    interactions = InteractionList(*case.interactions.components, custom)
     eligible, names = scf_interactions_eligible(interactions)
     assert eligible is True and names == ""
     validate_scf_interactions(interactions)
-    assert custom.calls == 0
+    assert len(_POTENTIAL_CALLS) == 0
 
     interaction_data = InteractionListCache()
     for key, val in case.interaction_data.items():
@@ -1184,9 +1177,9 @@ def test_eligibility_accepts_custom_interactions_and_rejects_non_interactions() 
         case.system.config.scf,
     )
     scf_map(case.x, inputs)
-    assert custom.calls >= 1
+    assert len(_POTENTIAL_CALLS) >= 1
 
-    invalid = InteractionList(device="cpu", dtype=torch.float64)
+    invalid = InteractionList()
     invalid.components.append(object())  # type: ignore[arg-type]
     eligible_bad, names_bad = scf_interactions_eligible(invalid)
     assert eligible_bad is False and "object" in names_bad
@@ -1408,7 +1401,9 @@ def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
         config=case.system.config,
         classical=(d3_component,),
         interaction=(
-            GeneralizedBorn(numbers, 78.9, device="cpu", dtype=torch.float64),
+            GeneralizedBorn.create(
+                numbers, 78.9, device="cpu", dtype=torch.float64
+            ),
         ),
         auto_int_level=False,
     )
@@ -1427,8 +1422,8 @@ def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
         ElectricFieldGrad,
     }
     call_fields = (
-        ElectricField(torch.zeros(3, dtype=torch.float64)),
-        ElectricFieldGrad(torch.zeros((3, 3), dtype=torch.float64)),
+        ElectricField(field=torch.zeros(3, dtype=torch.float64)),
+        ElectricFieldGrad(field_grad=torch.zeros((3, 3), dtype=torch.float64)),
     )
     interactions = InteractionList(
         *system.interactions.components, *call_fields
@@ -1462,8 +1457,8 @@ def test_b6a_functional_interaction_boundary_is_history_independent() -> None:
         field_grad = field_grad.clone().requires_grad_(True)
         local_interactions = InteractionList(
             *current_system.interactions.components,
-            ElectricField(field),
-            ElectricFieldGrad(field_grad),
+            ElectricField(field=field),
+            ElectricFieldGrad(field_grad=field_grad),
         )
         integrals, _ = build_integral_matrices(
             current_system.integral_setup,
@@ -1583,16 +1578,18 @@ def test_interaction_aggregates_match_legacy() -> None:
         config=case.system.config,
         classical=(d3_component,),
         interaction=(
-            GeneralizedBorn(numbers, 78.9, device="cpu", dtype=torch.float64),
+            GeneralizedBorn.create(
+                numbers, 78.9, device="cpu", dtype=torch.float64
+            ),
         ),
         auto_int_level=False,
     )
     system = model.setup(numbers)
     field = ElectricField(
-        torch.tensor([0.001, -0.0005, 0.00025], dtype=torch.float64)
+        field=torch.tensor([0.001, -0.0005, 0.00025], dtype=torch.float64)
     )
     field_grad = ElectricFieldGrad(
-        torch.full((3, 3), 0.0001, dtype=torch.float64)
+        field_grad=torch.full((3, 3), 0.0001, dtype=torch.float64)
     )
     all_interactions = InteractionList(
         *system.interactions.components, field, field_grad

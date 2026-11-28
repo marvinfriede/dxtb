@@ -23,21 +23,14 @@ Base class for all collections (lists) of tight-binding components.
 
 from __future__ import annotations
 
+import copy
 from abc import ABC, abstractmethod
 
 import torch
 
-from dxtb._src.typing import (
-    Any,
-    Generic,
-    Self,
-    Tensor,
-    TensorLike,
-    TypeVar,
-    override,
-)
+from dxtb._src.typing import Any, Generic, Self, Tensor, TypeVar
 
-from .base import Component, ConversionMemo, _convert_component_value
+from .base import Component
 
 __all__ = ["ComponentList", "ComponentListCache"]
 
@@ -94,9 +87,13 @@ class ComponentListABC(ABC):
 C = TypeVar("C", bound=Component)
 
 
-class ComponentList(ComponentListABC, Generic[C], TensorLike):
+class ComponentList(ComponentListABC, Generic[C]):
     """
     List of tight-binding components.
+
+    A plain container: the components themselves are immutable
+    :class:`~tad_mctc.tree.Node` objects, and :meth:`to`/:meth:`type` return
+    a new list of converted components.
     """
 
     components: list[C]
@@ -104,31 +101,19 @@ class ComponentList(ComponentListABC, Generic[C], TensorLike):
 
     __slots__ = ("components",)
 
-    def __init__(
-        self,
-        *components: C | None,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> None:
+    def __init__(self, *components: C | None) -> None:
         """
         Instantiate a collection of tight-binding components.
 
         Parameters
         ----------
-        compontents : tuple[Component | None, ...] | list[Component | None]
-            List or tuple of compontent classes.
-
-        Note
-        ----
-        Duplicate hash/equality-equivalent components are removed
-        automatically, retaining the first occurrence and input order.
+        components : C | None
+            Components; ``None`` entries are skipped and repeated objects are
+            kept once, in input order.
         """
-        # FIXME: I doubt that moving a list of classes works in TensorLike...
-        super().__init__(device, dtype)
         self.components = list(
             dict.fromkeys(c for c in components if c is not None)
         )
-
 
     @property
     def labels(self) -> list[str]:
@@ -137,17 +122,17 @@ class ComponentList(ComponentListABC, Generic[C], TensorLike):
 
     def get_interaction(self, name: str) -> C:
         """
-        Obtain an component from the list of components by its class name.
+        Obtain an component from the list of components by its label.
 
         Parameters
         ----------
         name : str
-            Name of the component.
+            Label of the component.
 
         Returns
         -------
-        Interaction
-            Instance of the component as present in the `InteractionList`.
+        Component
+            Instance of the component as present in the list.
 
         Raises
         ------
@@ -157,8 +142,23 @@ class ComponentList(ComponentListABC, Generic[C], TensorLike):
         for component in self.components:
             if name == component.label:
                 return component
-
         raise ValueError(f"The component named '{name}' is not in the list.")
+
+    def to(
+        self,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> Self:
+        """Return a new list with all components converted."""
+        new = copy.copy(self)
+        new.components = [
+            c.to(device=device, dtype=dtype) for c in self.components
+        ]
+        return new
+
+    def type(self, dtype: torch.dtype) -> Self:
+        """Return a new list with all components converted to ``dtype``."""
+        return self.to(dtype=dtype)
 
     def __len__(self) -> int:
         return len(self.components)
@@ -168,22 +168,3 @@ class ComponentList(ComponentListABC, Generic[C], TensorLike):
 
     def __repr__(self) -> str:  # pragma: no cover
         return str(self)
-
-    def _type_with_memo(self, dtype: torch.dtype, memo: ConversionMemo) -> Self:
-        """Convert all components in this list to ``dtype`` sharing ``memo``."""
-        converted: list[C] = []
-        for comp in self.components:
-            if dtype not in comp.allowed_dtypes:
-                converted_c = comp.type(dtype)
-            else:
-                converted_c = _convert_component_value(
-                    comp, device=None, dtype=dtype, memo=memo
-                )
-            converted.append(converted_c)
-        self.components = list(dict.fromkeys(converted))
-        self.override_dtype(dtype)
-        return self
-
-    @override
-    def type(self, dtype: torch.dtype) -> Self:
-        return self._type_with_memo(dtype, {})

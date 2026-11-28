@@ -22,6 +22,7 @@ from dataclasses import replace
 
 import pytest
 import torch
+from tad_mctc.tree import child
 from tad_mctc.exceptions import DeviceError, DtypeError
 from torch.func import jacfwd, jacrev, jvp, vmap
 from torch.utils._python_dispatch import TorchDispatchMode
@@ -199,7 +200,7 @@ def test_classical_descriptors_drive_exact_evaluation(
     for position, component in enumerate(system.classicals.components):
         if core.classical_term_at(position) is not None:
             monkeypatch.setattr(
-                component,
+                type(component),
                 "get_energy",
                 lambda *args, **kwargs: pytest.fail(
                     "exact classical descriptor called component.get_energy"
@@ -287,7 +288,7 @@ def test_additional_classical_keeps_global_result_order() -> None:
     par = ParamModule(GFN1_XTB, dtype=torch.float64)
     extra = new_dispersion(numbers, par, dtype=torch.float64)
     assert type(extra) is DispersionD3
-    extra.label = "D3:extra"
+    extra = extra.replace(label="D3:extra")
     system = Model(
         par=par,
         config=Config.create(
@@ -320,12 +321,9 @@ def test_mixed_classical_extension_keeps_global_result_order() -> None:
     from dxtb._src.components.classicals import Classical
 
     class ClassicalExtension(Classical):
-        __slots__ = ("scale",)
-
-        def __init__(self) -> None:
-            super().__init__(device="cpu", dtype=torch.float64)
-            self.label = "ClassicalExtension"
-            self.scale = torch.tensor(0.125, dtype=torch.float64)
+        scale: torch.Tensor = child(
+            default_factory=lambda: torch.tensor(0.125, dtype=torch.float64)
+        )
 
         def get_cache(self, numbers, ihelp=None, **kwargs):
             _ = (numbers, ihelp, kwargs)
@@ -494,7 +492,9 @@ def test_exact_core_checks_generalized_born_setup_coherency() -> None:
     from dxtb._src.components.interactions.solvation.alpb import GeneralizedBorn
 
     numbers = torch.tensor([1, 1])
-    gb = GeneralizedBorn(numbers, 78.9, device="cpu", dtype=torch.float64)
+    gb = GeneralizedBorn.create(
+        numbers, 78.9, device="cpu", dtype=torch.float64
+    )
     system = Model(
         par=ParamModule(GFN2_XTB, dtype=torch.float64),
         config=Config.create(method=labels.GFN2_XTB),
@@ -518,10 +518,14 @@ def test_exact_core_checks_ordered_d3_setup_coherency() -> None:
         "a1": torch.tensor(0.5, dtype=torch.float64),
         "a2": torch.tensor(5.7, dtype=torch.float64),
     }
-    first = DispersionD3(numbers, parameters, dtype=torch.float64)
-    first.label = "D3:first"
-    second = DispersionD3(numbers, parameters, dtype=torch.float64)
-    second.label = "D3:second"
+    first = DispersionD3(numbers=numbers, param=parameters).to(
+        dtype=torch.float64
+    )
+    first = first.replace(label="D3:first")
+    second = DispersionD3(numbers=numbers, param=parameters).to(
+        dtype=torch.float64
+    )
+    second = second.replace(label="D3:second")
     model = Model(
         par=ParamModule(GFN1_XTB, dtype=torch.float64),
         config=Config.create(method=labels.GFN1_XTB, exclude=("disp",)),

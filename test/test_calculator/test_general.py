@@ -48,8 +48,8 @@ def test_fail(dtype: torch.dtype) -> None:
 def run_asserts(c: Calculator, dtype: torch.dtype) -> None:
     """Helper function to run asserts on the calculator."""
     assert c.dtype == dtype
-    assert c.classicals.dtype == dtype
-    assert c.interactions.dtype == dtype
+    assert all(comp.dtype == dtype for comp in c.classicals.components)
+    assert all(comp.dtype == dtype for comp in c.interactions.components)
     assert not hasattr(c, "integrals")
     assert c.system.integral_setup is not None
     assert c.system.h0_setup is not None

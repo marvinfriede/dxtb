@@ -28,7 +28,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import partial
 
-import torch
 from tad_mctc import Structure
 from tad_mctc.convert import any_to_tensor
 from tad_mctc.ncoord import CNModel, erf_count
@@ -37,6 +36,7 @@ from tad_multicharge.model.base import SolveMode
 from tad_multicharge.model.eeq import EEQModel
 
 from dxtb import IndexHelper
+from dxtb._src.components.base import numbers_to_tensors
 from dxtb._src.typing import Any, Tensor, override
 from dxtb._src.utils.tensors import structure_charge
 
@@ -180,63 +180,37 @@ class IES(Classical):
     Isotropic electrostatics (IES) Classical of a tight-binding Method.
     """
 
-    chi: Tensor
+    chi: Tensor = child()
     """Element-resolved electronegativity lookup table."""
 
-    eeq_kcn: Tensor
+    eeq_kcn: Tensor = child()
     """Element-resolved coordination-number dependence."""
 
-    eta: Tensor
+    eta: Tensor = child()
     """Element-resolved chemical hardness."""
 
-    rad: Tensor
+    rad: Tensor = child()
     """Element-resolved Gaussian charge width."""
 
-    rcov: Tensor
+    rcov: Tensor = child()
     """D3 covalent-radius lookup table from tad-mctc."""
 
-    cutoff: Tensor
+    cutoff: Tensor = child()
     """Coordination-number real-space cutoff."""
 
-    cn_max: Tensor
+    cn_max: Tensor = child()
     """Smooth coordination-number cap."""
 
-    cn_kcn: Tensor
+    cn_kcn: Tensor = child()
     """Steepness of the erf counting function."""
 
-    __slots__ = [
-        "chi",
-        "eeq_kcn",
-        "eta",
-        "rad",
-        "rcov",
-        "cutoff",
-        "cn_max",
-        "cn_kcn",
-    ]
-
-    def __init__(
-        self,
-        chi: Tensor,
-        eeq_kcn: Tensor,
-        eta: Tensor,
-        rad: Tensor,
-        rcov: Tensor,
-        cutoff: Tensor | float | int,
-        cn_max: Tensor | float | int,
-        cn_kcn: Tensor | float | int,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> None:
-        super().__init__(device, dtype)
-        self.chi = chi.to(**self.dd)
-        self.eeq_kcn = eeq_kcn.to(**self.dd)
-        self.eta = eta.to(**self.dd)
-        self.rad = rad.to(**self.dd)
-        self.rcov = rcov.to(**self.dd)
-        self.cutoff = any_to_tensor(cutoff, **self.dd)
-        self.cn_max = any_to_tensor(cn_max, **self.dd)
-        self.cn_kcn = any_to_tensor(cn_kcn, **self.dd)
+    def _normalize(self) -> dict[str, Any]:
+        return {
+            **super()._normalize(),
+            **numbers_to_tensors(
+                self, ("cutoff", "cn_max", "cn_kcn"), self.chi
+            ),
+        }
 
     @override
     def get_cache(

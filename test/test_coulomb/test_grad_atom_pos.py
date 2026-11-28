@@ -66,7 +66,9 @@ def gradcheck_pos(
     # variables to be differentiated
     pos = positions.clone().requires_grad_(True)
 
-    es2 = ES2(hubbard, None, gexp=gexp, shell_resolved=False, **dd)
+    es2 = ES2(
+        hubbard=hubbard, lhubbard=None, gexp=gexp, shell_resolved=False
+    ).to(**dd)
 
     def func(p: Tensor) -> Tensor:
         return es2.get_atom_coulomb_matrix(numbers, p, ihelp)
@@ -136,7 +138,9 @@ def gradcheck_pos_batch(
     # variables to be differentiated
     pos = positions.clone().requires_grad_(True)
 
-    es2 = ES2(hubbard, None, gexp=gexp, shell_resolved=False, **dd)
+    es2 = ES2(
+        hubbard=hubbard, lhubbard=None, gexp=gexp, shell_resolved=False
+    ).to(**dd)
 
     def func(p: Tensor) -> Tensor:
         return es2.get_atom_coulomb_matrix(numbers, p, ihelp)

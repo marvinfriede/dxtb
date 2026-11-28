@@ -301,12 +301,11 @@ def test_duplicate_repulsion_labels_are_rejected() -> None:
         pass
 
     extension = RepulsionExtension(
-        custom.arep,
-        custom.zeff,
-        custom.kexp,
+        arep=custom.arep,
+        zeff=custom.zeff,
+        kexp=custom.kexp,
         cutoff=custom.cutoff,
-        dtype=torch.double,
-    )
-    extension.label = "Repulsion"
+    ).to(dtype=torch.double)
+    extension = extension.replace(label="Repulsion")
     with pytest.raises(ValueError, match="Duplicate repulsion labels"):
         Model(par=par, classical=(extension,)).setup(numbers)

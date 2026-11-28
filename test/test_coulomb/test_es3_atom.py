@@ -118,7 +118,7 @@ def test_grad_param(name: str) -> None:
     hd.requires_grad_(True)
 
     def func(hubbard_derivs: Tensor):
-        es = es3.ES3(hubbard_derivs, **dd)
+        es = es3.ES3(hubbard_derivs=hubbard_derivs).to(**dd)
         cache = es.get_cache(numbers=numbers, ihelp=ihelp)
         return es.get_monopole_atom_energy(cache, qat)
 

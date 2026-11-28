@@ -56,11 +56,6 @@ from dxtb._src.calculators.singlepoint import (
     _singlepoint_impl,
     system_singlepoint,
 )
-from dxtb._src.components.custom import (
-    CustomClassicalCoreSetup,
-    is_tensor_only_object,
-    snapshot_component_state,
-)
 from dxtb._src.components.interactions.base import (
     validate_unique_interaction_labels,
 )
@@ -234,11 +229,6 @@ def can_vmap_system(system: System) -> bool:
         or system._active_exact_core() is None
         or scf_config.differentiation.value == "implicit"
         or eager_only
-        or any(
-            type(inter) not in BUILTIN_INTERACTION_TYPES
-            and not is_tensor_only_object(inter)
-            for inter in system.interactions.components
-        )
     ):
         return False
 
@@ -462,35 +452,13 @@ def evaluate_lane_group(
         stacked_fields,
         stacked_field_grads,
     )
-    core = group.system.exact_core
-    core_cache_by_pos = (
-        {
-            term.position: term.setup.template.cache
-            for term in core.classical_terms
-            if isinstance(term.setup, CustomClassicalCoreSetup)
-        }
-        if core is not None
-        else {}
+    has_custom_components = any(
+        type(comp) not in BUILTIN_CLASSICAL_TYPES
+        for comp in group.system.classicals.components
+    ) or any(
+        type(inter) not in BUILTIN_INTERACTION_TYPES
+        for inter in group.system.interactions.components
     )
-    pre_vmap_snapshots = [
-        *(
-            (
-                comp,
-                (
-                    snapshot_component_state(comp, core_cache_by_pos[pos])
-                    if pos in core_cache_by_pos
-                    else snapshot_component_state(comp)
-                ),
-            )
-            for pos, comp in enumerate(group.system.classicals.components)
-            if type(comp) not in BUILTIN_CLASSICAL_TYPES
-        ),
-        *(
-            (inter, snapshot_component_state(inter))
-            for inter in group.system.interactions.components
-            if type(inter) not in BUILTIN_INTERACTION_TYPES
-        ),
-    ]
     mapped_kernel = torch.func.vmap(
         partial(system_singlepoint, group.system), in_dims=in_dims
     )
@@ -503,22 +471,7 @@ def evaluate_lane_group(
             )
             _attach_source_id(ihelp_err, ids[0])
             raise ihelp_err from exc
-        if pre_vmap_snapshots and _is_torch_vmap_limitation(exc):
-            mutated_labels = [
-                repr(comp.label)
-                for comp, snap in pre_vmap_snapshots
-                if not snap.matches(comp)
-            ]
-            if mutated_labels:
-                err = RuntimeError(
-                    "Cannot fall back from torch.func.vmap to independent "
-                    "lane evaluation because custom component(s) "
-                    f"({', '.join(mutated_labels)}) mutated state during the "
-                    "mapped attempt. Keep custom component hooks pure without "
-                    "side effects."
-                )
-                _attach_source_id(err, ids[0])
-                raise err from exc
+        if has_custom_components and _is_torch_vmap_limitation(exc):
             if _ran_mapped is not None:
                 _ran_mapped.append(False)
             return _evaluate_prevalidated(

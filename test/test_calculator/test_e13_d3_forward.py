@@ -303,7 +303,7 @@ def test_zero_trainable_s9_derivative_matches_finite_difference() -> None:
         "a2": torch.tensor(5.73083694, **dd),
         "s9": torch.tensor(0.0, requires_grad=True, **dd),
     }
-    dispersion = DispersionD3(numbers, params, **dd)
+    dispersion = DispersionD3(numbers=numbers, param=params).to(**dd)
     cache = dispersion.get_cache(numbers)
     core = core_dispersion_d3_setup(cache, numbers, numbers, params)
 

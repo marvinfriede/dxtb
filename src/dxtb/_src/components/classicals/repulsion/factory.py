@@ -105,12 +105,11 @@ def new_repulsion(
     cutoff = any_to_tensor(cutoff, **dd)
 
     return Repulsion(
-        arep,
-        zeff,
-        kexp,
-        klight=klight,
+        arep=arep.to(**dd),
+        zeff=zeff.to(**dd),
+        kexp=kexp.to(**dd),
+        klight=None if klight is None else klight.to(**dd),
         cutoff=cutoff,
-        en=en,
-        enscale=enscale,
-        **dd,
+        en=None if en is None else en.to(**dd),
+        enscale=None if enscale is None else enscale.to(**dd),
     )

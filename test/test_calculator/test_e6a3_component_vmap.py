@@ -363,7 +363,7 @@ def test_mapped_classical_and_es2_parameters_keep_model_gradients() -> None:
 def test_gfn1_alpb_public_vmap_matches_serial_and_position_gradients() -> None:
     """Exact GeneralizedBorn setup data survives mapped public evaluation."""
     numbers = torch.tensor([8, 1, 1], dtype=torch.int64)
-    solvation = GeneralizedBorn(numbers, 78.9, dtype=torch.float64)
+    solvation = GeneralizedBorn.create(numbers, 78.9, dtype=torch.float64)
     model, _ = _model(interactions=(solvation,))
     system = model.setup(numbers)
     positions = _water_positions(count=2)

@@ -162,11 +162,7 @@ def prepare_scf_interactions(
                 )
             )
         elif isinstance(component, Interaction):
-            entries.append(
-                prepare_custom_interaction_entry(
-                    component, cache, target_dtype=target_dtype
-                )
-            )
+            entries.append(prepare_custom_interaction_entry(component, cache))
         else:
             raise TypeError(f"Unsupported interaction {type(component)!r}.")
     return SCFInteractionSet(tuple(entries))

@@ -59,13 +59,7 @@ from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
 from dxtb._src.param import Param, ParamModule, as_param_module
-from dxtb._src.typing import (
-    DD,
-    Any,
-    Tensor,
-    TensorLike,
-    override,
-)
+from dxtb._src.typing import DD, Any, Tensor, override
 from dxtb._src.utils.tensors import normalize_device
 
 from ..base import Interaction, InteractionCache
@@ -108,32 +102,16 @@ def core_es3_setup(setup: ES3Setup) -> ES3CoreSetup:
     )
 
 
-class ES3Cache(InteractionCache, TensorLike):
+class ES3Cache(InteractionCache):
     """
     Restart data for the :class:`.ES3` interaction.
     """
 
-    hd: Tensor
+    hd: Tensor = child()
     """Spread Hubbard derivatives of all atoms (not only unique)."""
 
-    shell_resolved: bool
+    shell_resolved: bool = context(default=False)
     """Whether the third-order electrostatics are shell-resolved."""
-
-    __slots__ = ["hd", "shell_resolved"]
-
-    def __init__(
-        self,
-        hd: Tensor,
-        shell_resolved: bool = False,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ):
-        super().__init__(
-            device=device if device is None else hd.device,
-            dtype=dtype if dtype is None else hd.dtype,
-        )
-        self.hd = hd
-        self.shell_resolved = shell_resolved
 
 
 class ES3(Interaction):
@@ -141,10 +119,10 @@ class ES3(Interaction):
     On-site third-order electrostatic energy (:class:`.ES3`).
     """
 
-    hubbard_derivs: Tensor
+    hubbard_derivs: Tensor = child()
     """Hubbard derivatives of all atoms."""
 
-    shell_scale: Tensor | None
+    shell_scale: Tensor | None = child(default=None)
     """
     Scaling factors for shell-resolved third-order electrostatics.
 
@@ -153,21 +131,6 @@ class ES3(Interaction):
 
     :default: ``None``
     """
-
-    __slots__ = ["hubbard_derivs", "shell_scale"]
-
-    def __init__(
-        self,
-        hubbard_derivs: Tensor,
-        shell_scale: Tensor | None = None,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> None:
-        super().__init__(device, dtype)
-        self.hubbard_derivs = hubbard_derivs.to(**self.dd)
-        self.shell_scale = (
-            shell_scale if shell_scale is None else shell_scale.to(**self.dd)
-        )
 
     # pylint: disable=unused-argument
     @override
@@ -210,9 +173,7 @@ class ES3(Interaction):
             self.hubbard_derivs, ihelp, shell_scale=self.shell_scale
         )
         return ES3Cache(
-            setup.hubbard_derivs,
-            shell_resolved=setup.shell_resolved,
-            **self.dd,
+            hd=setup.hubbard_derivs, shell_resolved=setup.shell_resolved
         )
 
     @override
@@ -395,4 +356,7 @@ def new_es3(
         )
     )
 
-    return ES3(hubbard_derivs, shell_scale=shell_scale, **dd)
+    return ES3(
+        hubbard_derivs=hubbard_derivs.to(**dd),
+        shell_scale=None if shell_scale is None else shell_scale.to(**dd),
+    )

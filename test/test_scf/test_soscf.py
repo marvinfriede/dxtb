@@ -1081,9 +1081,7 @@ def test_soscf_implicit_geometry_response_matches_cdiis() -> None:
         )
         interactions = InteractionList(
             *case.system.interactions.components,
-            ElectricField(positions.new_zeros(3)),
-            device=positions.device,
-            dtype=positions.dtype,
+            ElectricField(field=positions.new_zeros(3)),
         )
         cache = _interaction_data(case.system, positions, interactions)
         return setup_scf_inputs(
@@ -1518,9 +1516,7 @@ def test_soscf_no2_tight_implicit_geometry_and_second_order_match_cdiis() -> (
         )
         interactions = InteractionList(
             *case.system.interactions.components,
-            ElectricField(positions.new_zeros(3)),
-            device=positions.device,
-            dtype=positions.dtype,
+            ElectricField(field=positions.new_zeros(3)),
         )
         interaction_data = _interaction_data(
             case.system, positions, interactions

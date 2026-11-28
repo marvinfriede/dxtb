@@ -218,10 +218,7 @@ def _case(
     )
     n0, occupation, nel = get_refocc(refocc, charge, spin, system.ihelp)
     interactions = InteractionList(
-        *system.interactions.components,
-        ElectricField(field),
-        device=positions.device,
-        dtype=positions.dtype,
+        *system.interactions.components, ElectricField(field=field)
     )
     interaction_data = _interaction_data(system, positions, interactions)
     inputs = setup_scf_inputs(
@@ -264,10 +261,7 @@ def _case(
 def _inputs_at_field(case, field_parameter: Tensor):
     field = field_parameter * _FIELD_AXIS
     interactions = InteractionList(
-        *case.system.interactions.components,
-        ElectricField(field),
-        device=case.positions.device,
-        dtype=case.positions.dtype,
+        *case.system.interactions.components, ElectricField(field=field)
     )
     interaction_data = _interaction_data(
         case.system, case.positions, interactions
@@ -891,9 +885,7 @@ def _no2_trajectory_energy(
     )
     interactions = InteractionList(
         *model_system.interactions.components,
-        ElectricField(field_value * _FIELD_AXIS),
-        device=positions.device,
-        dtype=positions.dtype,
+        ElectricField(field=field_value * _FIELD_AXIS),
     )
     data = _interaction_data(model_system, positions, interactions)
     inputs = setup_scf_inputs(

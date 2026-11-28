@@ -110,7 +110,7 @@ def test_qat_single(dtype: torch.dtype, name: str) -> None:
     assert es is not None
 
     # atom-resolved charge test
-    es.shell_scale = None
+    es = es.replace(shell_scale=None)
 
     cache = es.get_cache(numbers=numbers, ihelp=ihelp)
     e = es.get_monopole_atom_energy(cache, qat)
@@ -149,7 +149,7 @@ def test_qat_batch(dtype: torch.dtype, name1: str, name2: str) -> None:
     assert es is not None
 
     # atom-resolved charge test
-    es.shell_scale = None
+    es = es.replace(shell_scale=None)
 
     cache = es.get_cache(numbers=numbers, ihelp=ihelp)
     e = es.get_monopole_atom_energy(cache, qat)
@@ -179,7 +179,7 @@ def test_grad_param_atom(name: str) -> None:
     hd.requires_grad_(True)
 
     def func(hubbard_derivs: Tensor):
-        es = es3.ES3(hubbard_derivs, **dd)
+        es = es3.ES3(hubbard_derivs=hubbard_derivs).to(**dd)
         cache = es.get_cache(numbers=numbers, ihelp=ihelp)
         return es.get_monopole_atom_energy(cache, qat)
 
@@ -221,7 +221,9 @@ def test_grad_param_shell(name: str) -> None:
     hd.requires_grad_(True)
 
     def func(hubbard_derivs: Tensor):
-        es = es3.ES3(hubbard_derivs, shell_scale=shell_scale, **dd)
+        es = es3.ES3(hubbard_derivs=hubbard_derivs, shell_scale=shell_scale).to(
+            **dd
+        )
         cache = es.get_cache(numbers=numbers, ihelp=ihelp)
         return es.get_monopole_shell_energy(cache, qsh)
 

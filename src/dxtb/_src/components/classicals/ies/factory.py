@@ -25,6 +25,7 @@ class.
 from __future__ import annotations
 
 import torch
+from tad_mctc.convert import any_to_tensor
 from tad_mctc.data import radii
 
 from dxtb._src.param import Param, ParamModule, as_param_module
@@ -80,13 +81,20 @@ def new_ies(
     )
 
     return IES(
-        chi=par.get_elem_param(elements, "eeq_chi", pad_val=0),
-        eeq_kcn=par.get_elem_param(elements, "eeq_kcn", pad_val=0),
-        eta=par.get_elem_param(elements, "eeq_eta", pad_val=0),
-        rad=par.get_elem_param(elements, "eeq_rad", pad_val=0),
-        rcov=radii.COV_D3(**dd),
-        cutoff=par.get("eeq.cutoff"),
-        cn_max=par.get("eeq.cn_max"),
-        cn_kcn=par.get("eeq.kcn"),
-        **dd,
+        chi=any_to_tensor(
+            par.get_elem_param(elements, "eeq_chi", pad_val=0), **dd
+        ),
+        eeq_kcn=any_to_tensor(
+            par.get_elem_param(elements, "eeq_kcn", pad_val=0), **dd
+        ),
+        eta=any_to_tensor(
+            par.get_elem_param(elements, "eeq_eta", pad_val=0), **dd
+        ),
+        rad=any_to_tensor(
+            par.get_elem_param(elements, "eeq_rad", pad_val=0), **dd
+        ),
+        rcov=any_to_tensor(radii.COV_D3(**dd), **dd),
+        cutoff=any_to_tensor(par.get("eeq.cutoff"), **dd),
+        cn_max=any_to_tensor(par.get("eeq.cn_max"), **dd),
+        cn_kcn=any_to_tensor(par.get("eeq.kcn"), **dd),
     )

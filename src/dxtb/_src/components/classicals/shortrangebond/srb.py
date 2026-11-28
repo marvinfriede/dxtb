@@ -30,12 +30,12 @@ from functools import partial
 import torch
 from tad_mctc import Structure, storch
 from tad_mctc.batch import real_pairs
-from tad_mctc.convert import any_to_tensor
 from tad_mctc.data import en as element_en
 from tad_mctc.ncoord import CNModel
 from tad_mctc.tree import Node, child, context
 
 from dxtb import IndexHelper
+from dxtb._src.components.base import numbers_to_tensors
 from dxtb._src.typing import Any, CountingFunction, Tensor, override
 
 from ..base import Classical, ComponentCache
@@ -237,57 +237,66 @@ def short_range_bond_energy(
 class ShortRangeBond(Classical):
     """Short-range correction for heteronuclear B--F pairs."""
 
-    __slots__ = [
-        "r0",
-        "cnfak",
-        "en",
-        "rcov",
-        "counting_function",
-        "shift",
-        "prefactor",
-        "steepness",
-        "enscale",
-        "enpoly",
-        "pair_cutoff2",
-        "cn_cutoff",
-        "cn_max",
-        "cn_kcn",
-    ]
+    r0: Tensor = child()
+    """Reference bond lengths of the unique elements."""
 
-    def __init__(
-        self,
-        r0: Tensor,
-        cnfak: Tensor,
-        en: Tensor,
-        rcov: Tensor,
-        counting_function: CountingFunction,
-        shift: Tensor | float | int,
-        prefactor: Tensor | float | int,
-        steepness: Tensor | float | int,
-        enscale: Tensor | float | int,
-        enpoly: Tensor,
-        pair_cutoff2: Tensor | float | int,
-        cn_cutoff: Tensor | float | int,
-        cn_max: Tensor | float | int,
-        cn_kcn: Tensor | float | int,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> None:
-        super().__init__(device, dtype)
-        self.r0 = r0.to(**self.dd)
-        self.cnfak = cnfak.to(**self.dd)
-        self.en = en.to(**self.dd)
-        self.rcov = rcov.to(**self.dd)
-        self.counting_function = counting_function
-        self.shift = any_to_tensor(shift, **self.dd)
-        self.prefactor = any_to_tensor(prefactor, **self.dd)
-        self.steepness = any_to_tensor(steepness, **self.dd)
-        self.enscale = any_to_tensor(enscale, **self.dd)
-        self.enpoly = enpoly.to(**self.dd)
-        self.pair_cutoff2 = any_to_tensor(pair_cutoff2, **self.dd)
-        self.cn_cutoff = any_to_tensor(cn_cutoff, **self.dd)
-        self.cn_max = any_to_tensor(cn_max, **self.dd)
-        self.cn_kcn = any_to_tensor(cn_kcn, **self.dd)
+    cnfak: Tensor = child()
+    """Coordination-number scaling of the reference bond lengths."""
+
+    en: Tensor = child()
+    """Electronegativities of the unique elements."""
+
+    rcov: Tensor = child()
+    """Covalent radii of all elements."""
+
+    counting_function: CountingFunction = context()
+    """Counting function of the coordination number."""
+
+    shift: Tensor = child()
+    """Shift of the bond-length correction."""
+
+    prefactor: Tensor = child()
+    """Prefactor of the correction energy."""
+
+    steepness: Tensor = child()
+    """Steepness of the correction potential."""
+
+    enscale: Tensor = child()
+    """Electronegativity scaling."""
+
+    enpoly: Tensor = child()
+    """Polynomial coefficients of the electronegativity scaling."""
+
+    pair_cutoff2: Tensor = child()
+    """Squared cutoff of the atom pairs."""
+
+    cn_cutoff: Tensor = child()
+    """Cutoff of the coordination number."""
+
+    cn_max: Tensor = child()
+    """Maximum coordination number."""
+
+    cn_kcn: Tensor = child()
+    """Steepness of the coordination-number counting function."""
+
+    def _normalize(self) -> dict[str, Any]:
+        return {
+            **super()._normalize(),
+            **numbers_to_tensors(
+                self,
+                (
+                    "shift",
+                    "prefactor",
+                    "steepness",
+                    "enscale",
+                    "pair_cutoff2",
+                    "cn_cutoff",
+                    "cn_max",
+                    "cn_kcn",
+                ),
+                self.r0,
+            ),
+        }
 
     @override
     def get_cache(

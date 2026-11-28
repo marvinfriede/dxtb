@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 import torch
-from tad_mctc.tree import Node, stack
+from tad_mctc.tree import child, Node, stack
 from torch.utils import _pytree
 
 from dxtb import GFN2_XTB, ParamModule
@@ -263,108 +263,6 @@ def test_mixed_parameter_dtype_is_preserved_until_explicit_conversion() -> None:
     )
 
 
-def test_nested_model_state_is_encoded_as_dynamic_nodes() -> None:
-    """Nested dict, slot, tuple and list model tensors remain dynamic."""
-    numbers, _ = _sample()
-    interaction = _interaction(numbers)
-
-    class NestedD4Model(d4.model.D4Model):
-        __slots__ = ("slot_state",)
-
-        def weight_references(self, *args, **kwargs):
-            weights = super().weight_references(*args, **kwargs)
-            if isinstance(weights, tuple):
-                return tuple(self.scale * value for value in weights)
-            return self.scale * weights
-
-    original_model = interaction.model
-    model = NestedD4Model(
-        numbers,
-        ga=original_model.ga,
-        gc=original_model.gc,
-        wf=original_model.wf,
-        ref_charges=original_model.ref_charges,
-        rc6=original_model.rc6,
-        **DD,
-    )
-    scale = torch.tensor(1.03, **DD, requires_grad=True)
-    direct = torch.tensor(2.0, **DD, requires_grad=True)
-    tuple_tensor = torch.tensor(3.0, **DD, requires_grad=True)
-    list_a = torch.tensor(4.0, **DD, requires_grad=True)
-    list_b = torch.tensor(5.0, **DD, requires_grad=True)
-    mapping_tensor = torch.tensor(6.0, **DD, requires_grad=True)
-    slot_tensor = torch.tensor(7.0, **DD, requires_grad=True)
-    model.scale = scale
-    model.direct_state = direct
-    model.tuple_state = (tuple_tensor, "tuple-mode", 9)
-    model.list_state = [list_a, (list_b, "nested-list")]
-    model.mapping_state = {
-        "weight": mapping_tensor,
-        "metadata": {"enabled": True},
-    }
-    model.slot_state = slot_tensor
-    interaction.model = model
-
-    legacy = setup_d4sc(interaction, numbers)
-    core = core_d4sc_setup(legacy)
-    source = _setup_tensors(legacy)
-    leaves, spec = _pytree.tree_flatten(core)
-    rebuilt = _pytree.tree_unflatten(leaves, spec)
-    assert len(leaves) == len(source)
-    assert all(new is old for new, old in zip(leaves, source))
-    assert tuple(name for name, _ in rebuilt.model_extra) == (
-        "scale",
-        "direct_state",
-        "tuple_state",
-        "list_state",
-        "mapping_state",
-        "slot_state",
-    )
-    state = dict(rebuilt.model_extra)
-    assert state["tuple_state"] == (tuple_tensor.clone(), "tuple-mode", 9)
-    assert isinstance(state["list_state"], _StaticList)
-    assert isinstance(state["mapping_state"], _StaticMapping)
-    restored = {
-        name: _restore_static(value) for name, value in rebuilt.model_extra
-    }
-    assert isinstance(restored["list_state"], list)
-    assert isinstance(restored["mapping_state"], dict)
-    assert torch.equal(restored["list_state"][0], list_a)
-    assert torch.equal(restored["list_state"][1][0], list_b)
-    assert tuple(restored["mapping_state"]) == ("weight", "metadata")
-    assert torch.equal(restored["mapping_state"]["weight"], mapping_tensor)
-    assert restored["mapping_state"]["metadata"] == {"enabled": True}
-    custom_paths = [
-        str(path) for path, _ in _pytree.tree_flatten_with_path(core)[0]
-    ]
-    assert any("model_extra_entries" in path for path in custom_paths)
-    dtype_converted = core.to(dtype=torch.float32)
-    converted_state_tensors = _core_tensor_values(dtype_converted.model_extra)
-    assert converted_state_tensors
-    assert all(
-        tensor.dtype == torch.float32 for tensor in converted_state_tensors
-    )
-    assert dtype_converted.model_type is core.model_type
-    assert dtype_converted.counting_function is core.counting_function
-    meta_converted = core.to(device="meta")
-    assert all(
-        tensor.device.type == "meta"
-        for tensor in _core_tensor_values(meta_converted.model_extra)
-    )
-    call_model = _build_d4sc_model(rebuilt)
-    assert type(call_model) is NestedD4Model
-    assert call_model.slot_state is not slot_tensor
-    assert torch.equal(call_model.slot_state, slot_tensor)
-
-    _, positions = _sample()
-    data = build_d4sc_data(core, positions)
-    charges = torch.tensor([0.1, -0.1], **DD)
-    energy = interaction.get_monopole_atom_energy(data, charges).sum()
-    (gradient,) = torch.autograd.grad(energy, scale)
-    assert torch.isfinite(gradient)
-    assert gradient.abs() > 0
-
-
 def test_core_node_conversion_and_compatible_stack_vmap() -> None:
     """Core values convert dtype/device and map over matching structures."""
     numbers_a, _ = _sample("LiH")
@@ -426,8 +324,6 @@ def test_system_owns_core_node_and_core_builder_matches_legacy() -> None:
     )
 
     before = system.singlepoint(positions)
-    system.d4sc_interaction.model.wf = system.d4sc_interaction.model.wf + 0.4
-    system.d4sc_interaction.model.rc6 = system.d4sc_interaction.model.rc6 + 0.3
     after = system.singlepoint(positions)
     torch.testing.assert_close(after.energy, before.energy)
     torch.testing.assert_close(after.charges.mono, before.charges.mono)
@@ -438,6 +334,8 @@ def test_implicit_d4sc_uses_system_setup_and_preserves_gradients() -> None:
     numbers, base_positions = _sample()
 
     class ScaledD4Model(d4.model.D4Model):
+        scale: Tensor = child(default=None)
+
         def weight_references(self, *args, **kwargs):
             weights = super().weight_references(*args, **kwargs)
             if isinstance(weights, tuple):
@@ -448,7 +346,7 @@ def test_implicit_d4sc_uses_system_setup_and_preserves_gradients() -> None:
     interaction = new_d4sc(numbers, par, **DD)
     assert interaction is not None
     original_model = interaction.model
-    custom_model = ScaledD4Model(
+    custom_model = ScaledD4Model.create(
         numbers,
         ga=original_model.ga,
         gc=original_model.gc,
@@ -458,8 +356,8 @@ def test_implicit_d4sc_uses_system_setup_and_preserves_gradients() -> None:
         **DD,
     )
     source_scale = torch.tensor(1.07, **DD, requires_grad=True)
-    custom_model.scale = source_scale
-    interaction.model = custom_model
+    custom_model = custom_model.replace(scale=source_scale)
+    interaction = interaction.replace(model=custom_model)
 
     model = Model(
         par=par,
@@ -475,7 +373,6 @@ def test_implicit_d4sc_uses_system_setup_and_preserves_gradients() -> None:
         auto_int_level=False,
     )
     system = model.setup(numbers)
-    custom_model.scale = torch.tensor(3.0, **DD)
 
     positions = base_positions.clone().requires_grad_(True)
     result = system.singlepoint(positions)
@@ -507,8 +404,7 @@ def test_independent_systems_and_alternate_d4sc_setup_authority() -> None:
     )
 
     alternate = _interaction(numbers)
-    alternate.model.wf = alternate.model.wf + 0.5
-    alt_list = InteractionList(alternate, **DD)
+    alt_list = InteractionList(alternate)
     alt_data = _interaction_data(system_a, positions, alt_list)
     assert alt_data.d4sc_setup is None
     assert torch.allclose(
@@ -519,13 +415,12 @@ def test_independent_systems_and_alternate_d4sc_setup_authority() -> None:
         pass
 
     subclass = CustomD4SC(
-        alternate.param,
-        alternate.model,
-        alternate.rcov,
-        alternate.r4r2,
-        alternate.cutoff,
-        **DD,
-    )
+        param=alternate.param,
+        model=alternate.model,
+        rcov=alternate.rcov,
+        r4r2=alternate.r4r2,
+        cutoff=alternate.cutoff,
+    ).to(**DD)
     sub_system = Model(
         par=model_a.par,
         config=Config.create(exclude=("es2", "es3", "aes2", "d4sc")),

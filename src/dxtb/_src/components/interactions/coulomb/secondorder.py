@@ -48,13 +48,7 @@ Example
 
     ihelp = IndexHelper.from_numbers(numbers, GFN1_XTB)
     base = new_es2(torch.unique(numbers), GFN1_XTB)
-    es = ES2(
-        base.hubbard,
-        base.lhubbard,
-        average=base.average,
-        gexp=base.gexp,
-        shell_resolved=False,
-    )
+    es = base.replace(shell_resolved=False)
     cache = es.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
     e = es.get_monopole_atom_energy(cache, qat)
 
@@ -76,14 +70,7 @@ from tad_mctc.tree import Node, child, context
 from dxtb import IndexHelper
 from dxtb._src.constants import xtb
 from dxtb._src.param import Param, ParamModule, as_param_module
-from dxtb._src.typing import (
-    DD,
-    Any,
-    Tensor,
-    TensorLike,
-    TensorOrTensors,
-    override,
-)
+from dxtb._src.typing import DD, Any, Tensor, TensorOrTensors, override
 from dxtb._src.utils.scattergather import wrap_gather
 from dxtb._src.utils.tensors import normalize_device
 
@@ -137,6 +124,9 @@ class _UnhashableAveragingContext:
             and self.function is other.function
         )
 
+    def __call__(self, *args: Any, **kwargs: Any) -> Tensor:
+        return self.function(*args, **kwargs)
+
 
 class ES2CoreSetup(Node):
     """Immutable Node values used by single-System ES2 evaluation."""
@@ -183,32 +173,16 @@ def core_es2_setup(setup: ES2Setup) -> ES2CoreSetup:
     )
 
 
-class ES2Cache(InteractionCache, TensorLike):
+class ES2Cache(InteractionCache):
     """
     Cache for Coulomb matrix in ES2.
     """
 
-    mat: Tensor
+    mat: Tensor = child()
     """Coulomb matrix."""
 
-    shell_resolved: bool
+    shell_resolved: bool = context(default=True)
     """Electrostatics is shell-resolved (default: ``True``)."""
-
-    __slots__ = ["mat", "shell_resolved"]
-
-    def __init__(
-        self,
-        mat: Tensor,
-        shell_resolved: bool = True,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> None:
-        super().__init__(
-            device=device if device is None else mat.device,
-            dtype=dtype if dtype is None else mat.dtype,
-        )
-        self.mat = mat
-        self.shell_resolved = shell_resolved
 
 
 class ES2(Interaction):
@@ -216,63 +190,54 @@ class ES2(Interaction):
     Isotropic second-order electrostatic energy (ES2).
     """
 
-    hubbard: Tensor
+    hubbard: Tensor = child()
     """Hubbard parameters of all elements."""
 
-    lhubbard: Tensor | None
+    lhubbard: Tensor | None = child(default=None)
     """
     Shell-resolved scaling factors for Hubbard parameters.
 
     :default: ``None`` (i.e., no shell resolution).
     """
 
-    average: AveragingFunction
+    average: AveragingFunction = context(default=harmonic_average)
     """
     Function to use for averaging the Hubbard parameters.
 
     :default: :func:`dxtb._src.components.interactions.average.harmonic_average`
     """
 
-    gexp: Tensor
+    gexp: Tensor = child(default=None)
     """
     Exponent of the second-order Coulomb interaction.
 
-    :default: 2.0
+    :default: 2.0 (filled in on construction)
     """
 
-    shell_resolved: bool
+    shell_resolved: bool = context(default=True)
     """
-    Whether electrostatics is shell-resolved.
+    Whether electrostatics is shell-resolved; always ``False`` without
+    ``lhubbard``.
 
     :default: ``True``
     """
 
-    __slots__ = [
-        "hubbard",
-        "lhubbard",
-        "average",
-        "gexp",
-        "shell_resolved",
-    ]
-
-    def __init__(
-        self,
-        hubbard: Tensor,
-        lhubbard: Tensor | None = None,
-        average: AveragingFunction = harmonic_average,
-        gexp: Tensor = torch.tensor(xtb.DEFAULT_ES2_GEXP),
-        shell_resolved: bool = True,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> None:
-        super().__init__(device, dtype)
-
-        self.hubbard = hubbard.to(**self.dd)
-        self.lhubbard = lhubbard if lhubbard is None else lhubbard.to(**self.dd)
-        self.gexp = gexp.to(**self.dd)
-        self.average = average
-
-        self.shell_resolved = shell_resolved and lhubbard is not None
+    def _normalize(self) -> dict[str, Any]:
+        updates = super()._normalize()
+        if self.gexp is None:
+            updates["gexp"] = torch.tensor(
+                xtb.DEFAULT_ES2_GEXP,
+                device=self.hubbard.device,
+                dtype=self.hubbard.dtype,
+            )
+        if self.shell_resolved and self.lhubbard is None:
+            updates["shell_resolved"] = False
+        try:
+            hash(self.average)
+        except TypeError:
+            # context fields must be hashable; hash a plain callable by identity
+            updates["average"] = _UnhashableAveragingContext(self.average)
+        return updates
 
     # pylint: disable=unused-argument
     @override
@@ -322,7 +287,7 @@ class ES2(Interaction):
             shell_resolved=self.shell_resolved,
         )
         return ES2Cache(
-            build_es2_coulomb(setup, positions),
+            mat=build_es2_coulomb(setup, positions),
             shell_resolved=setup.shell_resolved,
         )
 
@@ -773,9 +738,8 @@ def new_es2(
     )
 
     return ES2(
-        hubbard,
-        lhubbard,
+        hubbard=hubbard.to(**dd),
+        lhubbard=None if lhubbard is None else lhubbard.to(**dd),
         average=averaging_function[par.get("charge.effective.average")],
-        gexp=par.get("charge.effective.gexp"),
-        **dd,
+        gexp=par.get("charge.effective.gexp").to(**dd),
     )

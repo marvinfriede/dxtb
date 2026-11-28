@@ -176,69 +176,44 @@ class BaseRepulsion(Classical):
     Representation of the classical repulsion.
     """
 
-    arep: Tensor
+    arep: Tensor = child()
     """Atom-specific screening parameters for unique species."""
 
-    zeff: Tensor
+    zeff: Tensor = child()
     """Effective nuclear charges for unique species."""
 
-    kexp: Tensor
+    kexp: Tensor = child()
     """
     Scaling of the interatomic distance in the exponential damping function of
     the repulsion energy.
     """
 
-    klight: Tensor | None
+    klight: Tensor | None = child(default=None)
     """
     Scaling of the interatomic distance in the exponential damping function of
     the repulsion energy for light elements, i.e., H and He (only GFN2).
     """
 
-    en: Tensor | None
+    en: Tensor | None = child(default=None)
     """Element-specific electronegativities used by optional EN scaling."""
 
-    enscale: Tensor | None
+    enscale: Tensor | None = child(default=None)
     """Optional electronegativity-difference scaling of pair screening."""
 
-    cutoff: Tensor | float | int
+    cutoff: Tensor = child(default=xtb.DEFAULT_REPULSION_CUTOFF)
     """
     Real space cutoff for repulsion interactions.
 
     :default: :data:`xtb.DEFAULT_REPULSION_CUTOFF`
     """
 
-    __slots__ = [
-        "arep",
-        "zeff",
-        "kexp",
-        "klight",
-        "en",
-        "enscale",
-        "cutoff",
-    ]
-
-    def __init__(
-        self,
-        arep: Tensor,
-        zeff: Tensor,
-        kexp: Tensor,
-        klight: Tensor | None = None,
-        cutoff: Tensor | float | int = xtb.DEFAULT_REPULSION_CUTOFF,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-        *,
-        en: Tensor | None = None,
-        enscale: Tensor | None = None,
-    ) -> None:
-        super().__init__(device, dtype)
-
-        self.arep = arep.to(**self.dd)
-        self.zeff = zeff.to(**self.dd)
-        self.kexp = kexp.to(**self.dd)
-        self.cutoff = any_to_tensor(cutoff, **self.dd)
-        self.klight = None if klight is None else klight.to(**self.dd)
-        self.en = None if en is None else en.to(**self.dd)
-        self.enscale = None if enscale is None else enscale.to(**self.dd)
+    def _normalize(self) -> dict[str, Any]:
+        updates = super()._normalize()
+        if not isinstance(self.cutoff, Tensor):
+            updates["cutoff"] = torch.tensor(
+                self.cutoff, device=self.arep.device, dtype=self.arep.dtype
+            )
+        return updates
 
     @override
     def get_cache(

@@ -432,9 +432,11 @@ def test_exact_call_local_field_interactions_remain_functional_eligible(
     """Exact built-in call-local field terms keep the functional route."""
     case = _prepare_case(GFN1_XTB)
     call_local = (
-        ElectricField(torch.zeros(3, dtype=torch.float64))
+        ElectricField(field=torch.zeros(3, dtype=torch.float64))
         if field_kind == "field"
-        else ElectricFieldGrad(torch.zeros((3, 3), dtype=torch.float64))
+        else ElectricFieldGrad(
+            field_grad=torch.zeros((3, 3), dtype=torch.float64)
+        )
     )
     interactions = InteractionList(
         *case.system.interactions.components, call_local
@@ -618,24 +620,17 @@ def test_custom_interaction_extension_is_supported_and_non_interaction_rejected(
         """A custom field subclass evaluated through the custom Interaction path."""
 
     field = ExtendedField(
-        torch.zeros(3, dtype=case.positions.dtype, device=case.positions.device)
+        field=torch.zeros(
+            3, dtype=case.positions.dtype, device=case.positions.device
+        )
     )
-    interactions = InteractionList(
-        *case.interactions.components,
-        field,
-        device=case.positions.device,
-        dtype=case.positions.dtype,
-    )
+    interactions = InteractionList(*case.interactions.components, field)
     plan = resolve_scf_plan(
         case.system.config.scf, interactions, case.system.ihelp
     )
     assert plan is not None
 
-    invalid = InteractionList(
-        *case.interactions.components,
-        device=case.positions.device,
-        dtype=case.positions.dtype,
-    )
+    invalid = InteractionList(*case.interactions.components)
     invalid.components.append(object())  # type: ignore[arg-type]
     with pytest.raises(NotImplementedError, match="interaction extension"):
         resolve_scf_plan(case.system.config.scf, invalid, case.system.ihelp)

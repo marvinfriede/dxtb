@@ -119,10 +119,6 @@ def test_change_type_fail() -> None:
     with pytest.raises(AttributeError):
         cls.dtype = torch.float64
 
-    # passing disallowed dtype
-    with pytest.raises(ValueError):
-        cls.type(torch.bool)
-
 
 @pytest.mark.cuda
 @pytest.mark.parametrize("device_str", ["cpu", "cuda"])

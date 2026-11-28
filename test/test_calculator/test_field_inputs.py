@@ -415,20 +415,10 @@ def test_field_subclasses_work_as_custom_interactions_and_guard_label_conflicts(
     """Field subclasses evaluate as custom Interactions and reject same-label conflicts."""
 
     class FieldExtension(ElectricField):
-        def __init__(
-            self, field: torch.Tensor, *, same_label: bool = False
-        ) -> None:
-            super().__init__(field)
-            if same_label:
-                self.label = LABEL_EFIELD
+        pass
 
     class FieldGradExtension(ElectricFieldGrad):
-        def __init__(
-            self, field_grad: torch.Tensor, *, same_label: bool = False
-        ) -> None:
-            super().__init__(field_grad)
-            if same_label:
-                self.label = LABEL_EFIELD_GRAD
+        pass
 
     numbers = torch.tensor([8, 1, 1])
     positions = torch.tensor(
@@ -440,11 +430,13 @@ def test_field_subclasses_work_as_custom_interactions_and_guard_label_conflicts(
 
     ref_calc = _calc(numbers)
     ext_field_calc = _calc(
-        numbers, interaction=FieldExtension(field_vec, same_label=True)
+        numbers, interaction=FieldExtension(field=field_vec, label=LABEL_EFIELD)
     )
     ext_grad_calc = _calc(
         numbers,
-        interaction=FieldGradExtension(field_grad_mat, same_label=True),
+        interaction=FieldGradExtension(
+            field_grad=field_grad_mat, label=LABEL_EFIELD_GRAD
+        ),
     )
     torch.testing.assert_close(
         ext_field_calc.energy(positions),
@@ -469,7 +461,7 @@ def test_field_subclasses_work_as_custom_interactions_and_guard_label_conflicts(
     sys_f = Model(
         par=par,
         config=Config.create(int_driver="pytorch"),
-        interaction=(FieldExtension(field_vec, same_label=True),),
+        interaction=(FieldExtension(field=field_vec, label=LABEL_EFIELD),),
         auto_int_level=True,
     ).setup(numbers)
     assert sys_f.config.ints.level >= labels.INTLEVEL_DIPOLE
@@ -477,7 +469,11 @@ def test_field_subclasses_work_as_custom_interactions_and_guard_label_conflicts(
     sys_fg = Model(
         par=par,
         config=Config.create(int_driver="pytorch"),
-        interaction=(FieldGradExtension(field_grad_mat, same_label=True),),
+        interaction=(
+            FieldGradExtension(
+                field_grad=field_grad_mat, label=LABEL_EFIELD_GRAD
+            ),
+        ),
         auto_int_level=True,
     ).setup(numbers)
     assert sys_fg.config.ints.level >= labels.INTLEVEL_QUADRUPOLE

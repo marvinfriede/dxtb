@@ -40,8 +40,6 @@ energy = calc.get_energy(pos)
 (g,) = torch.autograd.grad(energy, pos)
 
 # Alternatively, forces can directly be requested from the calculator.
-# (Don't forget to reset the calculator manually when the inputs are identical.)
-calc.reset()
 pos = positions.clone().requires_grad_(True)
 forces = calc.get_forces(pos)
 

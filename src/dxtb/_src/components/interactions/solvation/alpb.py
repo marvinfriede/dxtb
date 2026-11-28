@@ -44,7 +44,7 @@ Example
     ])
 
     # Initialize the GeneralizedBorn model with a solvent dielectric constant
-    gb = GeneralizedBorn(numbers, torch.tensor(78.9), kernel="still")
+    gb = GeneralizedBorn.create(numbers, torch.tensor(78.9), kernel="still")
 
     # Build cache and use it for energy calculation
     cache = gb.get_cache(numbers=numbers, positions=positions)
@@ -73,8 +73,8 @@ from dxtb._src.typing import (
     DD,
     Any,
     Tensor,
-    TensorLike,
     TensorOrTensors,
+    get_default_dtype,
     override,
 )
 from dxtb._src.typing.exceptions import DeviceError
@@ -197,27 +197,13 @@ def get_adet(positions: Tensor, rad: Tensor) -> Tensor:
     return torch.sqrt(5 * torch.pow(adet, 1 / 3) / (2 * vol.sum(-1)))
 
 
-class GeneralizedBornCache(InteractionCache, TensorLike):
+class GeneralizedBornCache(InteractionCache):
     """
     Restart data for the generalized Born solvation model.
     """
 
-    __slots__ = ["mat"]
-
-    mat: Tensor
+    mat: Tensor = child()
     """Coulomb matrix."""
-
-    def __init__(
-        self,
-        mat: Tensor,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ):
-        super().__init__(
-            device=device if device is None else mat.device,
-            dtype=dtype if dtype is None else mat.dtype,
-        )
-        self.mat = mat
 
 
 @dataclass(frozen=True, eq=False)
@@ -308,9 +294,9 @@ def setup_generalized_born(
 ) -> GeneralizedBornSetup:
     """Gather immutable static settings for one solvation System."""
     dd = component.dd
-    rvdw = any_to_tensor(component.born_kwargs["rvdw"], **dd).clone()
-    born_scale = component.born_kwargs["born_scale"]
-    born_offset = component.born_kwargs["born_offset"]
+    rvdw = component.rvdw.clone()
+    born_scale = component.born_scale
+    born_offset = component.born_offset
     if isinstance(born_scale, Tensor):
         born_scale = born_scale.clone()
     if isinstance(born_offset, Tensor):
@@ -358,7 +344,7 @@ def build_generalized_born_data(
         )
         mat = mat + correction
 
-    return GeneralizedBornCache(mat)
+    return GeneralizedBornCache(mat=mat)
 
 
 class GeneralizedBorn(Interaction):
@@ -366,51 +352,59 @@ class GeneralizedBorn(Interaction):
     Implicit solvation model for describing the interaction with a dielectric continuum.
     """
 
-    kernel: str
+    kernel: str = context()
     """Interaction kernel."""
 
-    alpbet: Tensor
+    alpbet: Tensor = child()
     """Finite dielectric constant correction."""
 
-    keps: Tensor
+    keps: Tensor = child()
     """Dielectric function."""
 
-    born_kwargs: dict[str, Any]
-    """Parameters for Born radii integration."""
+    rvdw: Tensor = child()
+    """Van der Waals radii of all atoms for the Born radii integration."""
 
-    def __init__(
-        self,
+    born_scale: Tensor | float = child(keep_dtype=True)
+    """Scaling factor of the Born radii."""
+
+    born_offset: Tensor | float = child(keep_dtype=True)
+    """Offset of the Born radii."""
+
+    @classmethod
+    def create(
+        cls,
         numbers: Tensor,
         dielectric_constant: Tensor | float | int,
         alpb: bool = DEFAULT_ALPB,
         kernel: str | None = None,
         born_scale: float | Tensor = DEFAULT_BORN_SCALE,
         born_offset: float | Tensor = DEFAULT_BORN_OFFSET,
+        rvdw: Tensor | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(device, dtype)
-
-        dielectric_constant = any_to_tensor(dielectric_constant, **self.dd)
-
-        self.alpbet = (
-            alpha / dielectric_constant
-            if alpb
-            else torch.tensor(0.0, **self.dd)
-        )
-        self.keps = (1 / dielectric_constant - 1) / (1 + self.alpbet)
-        self.kernel = (
-            kernel if kernel is not None else ("p16" if alpb else "still")
-        )
-
-        self.born_kwargs = {
-            "rvdw": any_to_tensor(
-                kwargs.get("rvdw", VDW_D3(**self.dd)[numbers]), **self.dd
-            ),
-            "born_scale": born_scale,
-            "born_offset": born_offset,
+    ) -> GeneralizedBorn:
+        """
+        Create the solvation model for ``numbers`` in a solvent with the
+        given dielectric constant.
+        """
+        dd: DD = {
+            "device": numbers.device if device is None else device,
+            "dtype": get_default_dtype() if dtype is None else dtype,
         }
+        eps = any_to_tensor(dielectric_constant, **dd)
+        alpbet = alpha / eps if alpb else torch.tensor(0.0, **dd)
+        return cls(
+            kernel=(
+                kernel if kernel is not None else ("p16" if alpb else "still")
+            ),
+            alpbet=alpbet,
+            keps=(1 / eps - 1) / (1 + alpbet),
+            rvdw=any_to_tensor(
+                VDW_D3(**dd)[numbers] if rvdw is None else rvdw, **dd
+            ),
+            born_scale=born_scale,
+            born_offset=born_offset,
+        )
 
     # pylint: disable=unused-argument
     @override
@@ -521,7 +515,7 @@ def new_solvation(
                 f"({numbers.device}) do not match."
             )
 
-    return GeneralizedBorn(
+    return GeneralizedBorn.create(
         numbers,
         dielectric_constant=any_to_tensor(dielectric_constant, **dd),
         alpb=par.get("solvation.alpb.alpb"),

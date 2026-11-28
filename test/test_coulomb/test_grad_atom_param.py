@@ -62,7 +62,9 @@ def gradcheck_param(dtype: torch.dtype, name: str) -> tuple[
     )
 
     def func(hubbard: Tensor, gexp: Tensor) -> Tensor:
-        es2 = ES2(hubbard, None, gexp=gexp, shell_resolved=False, **dd)
+        es2 = ES2(
+            hubbard=hubbard, lhubbard=None, gexp=gexp, shell_resolved=False
+        ).to(**dd)
         return es2.get_atom_coulomb_matrix(numbers, positions, ihelp)
 
     return func, (_hubbard, _gexp)
@@ -128,7 +130,9 @@ def gradcheck_param_batch(dtype: torch.dtype, name1: str, name2: str) -> tuple[
     )
 
     def func(hubbard: Tensor, gexp: Tensor) -> Tensor:
-        es2 = ES2(hubbard, None, gexp=gexp, shell_resolved=False, **dd)
+        es2 = ES2(
+            hubbard=hubbard, lhubbard=None, gexp=gexp, shell_resolved=False
+        ).to(**dd)
         return es2.get_atom_coulomb_matrix(numbers, positions, ihelp)
 
     return func, (_hubbard, _gexp)

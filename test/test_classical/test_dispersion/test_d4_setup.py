@@ -167,12 +167,7 @@ def test_gfn2_d4_classical_list_compatibility_view_parity() -> None:
 def test_setup_q_override_is_rejected() -> None:
     """Setup-time charges on D4.get_cache are no longer accepted."""
     numbers, _ = _geometry()
-    dispersion = DispersionD4(
-        numbers,
-        {"a1": torch.tensor(0.5, **DD), "a2": torch.tensor(5.0, **DD)},
-        charge=torch.tensor(0.0, **DD),
-        **DD,
-    )
+    dispersion = DispersionD4(numbers=numbers, param={'a1': torch.tensor(0.5, **DD), 'a2': torch.tensor(5.0, **DD)}, charge=torch.tensor(0.0, **DD)).to(**DD)
     q = torch.linspace(-0.2, 0.2, numbers.numel(), **DD)
     with pytest.raises(TypeError, match="q"):
         dispersion.get_cache(numbers, q=q)
@@ -186,13 +181,8 @@ def test_direct_compatibility_preserves_d4_model_subclass() -> None:
         def get_atomic_c6(self, gw: Tensor) -> Tensor:
             return 2.0 * super().get_atomic_c6(gw)
 
-    dispersion = DispersionD4(
-        numbers,
-        {"a1": torch.tensor(0.5, **DD), "a2": torch.tensor(5.0, **DD)},
-        charge=torch.tensor(0.0, **DD),
-        **DD,
-    )
-    model = CustomD4Model(numbers, ref_charges="eeq", **DD)
+    dispersion = DispersionD4(numbers=numbers, param={'a1': torch.tensor(0.5, **DD), 'a2': torch.tensor(5.0, **DD)}, charge=torch.tensor(0.0, **DD)).to(**DD)
+    model = CustomD4Model.create(numbers, ref_charges='eeq', **DD)
     setup = dispersion.get_cache(numbers, model=model)
     assert isinstance(setup.model, CustomD4Model)
     assert type(setup.model) is CustomD4Model
@@ -492,20 +482,7 @@ def test_exact_user_d4_replaces_excluded_builtin() -> None:
     """The setup is constructed from the active user-provided D4 term."""
     numbers, positions = _geometry()
     par = _parameters(self_consistent=False)
-    dispersion = DispersionD4(
-        numbers,
-        {
-            "a1": torch.tensor(0.2, **DD),
-            "a2": torch.tensor(5.0, **DD),
-            "s6": torch.tensor(1.0, **DD),
-            "s8": torch.tensor(2.7, **DD),
-            "s9": torch.tensor(5.0, **DD),
-            "s10": torch.tensor(0.0, **DD),
-        },
-        charge=torch.tensor(0.0, **DD),
-        ref_charges="eeq",
-        **DD,
-    )
+    dispersion = DispersionD4(numbers=numbers, param={'a1': torch.tensor(0.2, **DD), 'a2': torch.tensor(5.0, **DD), 's6': torch.tensor(1.0, **DD), 's8': torch.tensor(2.7, **DD), 's9': torch.tensor(5.0, **DD), 's10': torch.tensor(0.0, **DD)}, charge=torch.tensor(0.0, **DD), ref_charges='eeq').to(**DD)
     system = Model(
         par=par,
         config=Config.create(exclude=("disp", "scf")),
@@ -523,26 +500,15 @@ def test_duplicate_classical_d4_labels_are_rejected() -> None:
     """Active D4 labels cannot overwrite one another in classical call data."""
     numbers, _ = _geometry()
     par = _parameters(self_consistent=False)
-    user = DispersionD4(
-        numbers,
-        {"a1": torch.tensor(0.5, **DD), "a2": torch.tensor(5.0, **DD)},
-        charge=torch.tensor(0.0, **DD),
-        **DD,
-    )
+    user = DispersionD4(numbers=numbers, param={'a1': torch.tensor(0.5, **DD), 'a2': torch.tensor(5.0, **DD)}, charge=torch.tensor(0.0, **DD)).to(**DD)
     with pytest.raises(ValueError, match="Duplicate DispersionD4 labels"):
         Model(par=par, classical=(user,)).setup(numbers)
 
     class D4Extension(DispersionD4):
         pass
 
-    subclass = D4Extension(
-        numbers,
-        user.param,
-        charge=user.charge,
-        ref_charges=user.ref_charges,
-        **DD,
-    )
-    subclass.label = "DispersionD4"
+    subclass = D4Extension(numbers=numbers, param=user.param, charge=user.charge, ref_charges=user.ref_charges).to(**DD)
+    subclass = subclass.replace(label="DispersionD4")
     with pytest.raises(ValueError, match="Duplicate DispersionD4 labels"):
         Model(par=par, classical=(subclass,)).setup(numbers)
     with pytest.raises(ValueError, match="Duplicate DispersionD4 labels"):
@@ -551,12 +517,7 @@ def test_duplicate_classical_d4_labels_are_rejected() -> None:
             config=Config.create(exclude=("disp", "scf")),
             classical=(
                 user,
-                DispersionD4(
-                    numbers,
-                    {"a1": torch.tensor(0.6, **DD)},
-                    charge=torch.tensor(0.0, **DD),
-                    **DD,
-                ),
+                DispersionD4(numbers=numbers, param={'a1': torch.tensor(0.6, **DD)}, charge=torch.tensor(0.0, **DD)).to(**DD),
             ),
         ).setup(numbers)
 
@@ -577,8 +538,8 @@ def test_core_node_call_q_model_gradients_and_unsupported_types() -> None:
 
     wf = torch.tensor(6.0, **DD, requires_grad=True)
     rc6 = base_core.model_rc6.detach().clone().requires_grad_(True)
-    model = d4.model.D4Model(numbers, wf=wf, rc6=rc6, ref_charges="eeq", **DD)
-    cutoff = d4.Cutoff(disp2=torch.tensor(2.0, **DD), **DD)
+    model = d4.model.D4Model.create(numbers, wf=wf, rc6=rc6, ref_charges='eeq', **DD)
+    cutoff = d4.Cutoff.create(disp2=torch.tensor(2.0, **DD), **DD)
     core = core_dispersion_d4_setup(
         dispersion.get_cache(numbers, model=model, cutoff=cutoff)
     )
@@ -595,7 +556,7 @@ def test_core_node_call_q_model_gradients_and_unsupported_types() -> None:
 
     with pytest.raises(TypeError, match="built-in D4Model"):
         core_dispersion_d4_setup(
-            dispersion.get_cache(numbers, model=CustomD4Model(numbers, **DD))
+            dispersion.get_cache(numbers, model=CustomD4Model.create(numbers, **DD))
         )
     with pytest.raises(TypeError, match="RationalDamping"):
         core_dispersion_d4_setup(

@@ -28,7 +28,6 @@ lane is never evaluated on a padded or remapped structure.
 
 from __future__ import annotations
 
-import copy
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any
@@ -48,21 +47,11 @@ from dxtb._src.calculators.model import (
     BUILTIN_INTERACTION_TYPES,
     Model,
     System,
+    replace_system_components,
 )
 from dxtb._src.calculators.result import ChargeResult, PotentialResult, Result
 from dxtb._src.calculators.singlepoint import _call_tensor
-from dxtb._src.calculators.types.base import (
-    _convert_eval_system_dtype,
-    _convert_system_dtype,
-    _valid_custom_classical_setups,
-)
 from dxtb._src.calculators.types.energy import check_singlepoint_options
-from dxtb._src.components.custom import (
-    CustomClassicalCoreSetup,
-    build_custom_classical_core_setup,
-    build_invalidated_custom_classical_core_setup,
-    snapshot_component_state,
-)
 from dxtb._src.components.interactions.base import (
     validate_unique_interaction_labels,
 )
@@ -1134,174 +1123,44 @@ def _sync_lane_system_labels(
     lane_sys: System,
     source_classicals: Sequence[Any],
     source_interactions: Sequence[Any],
-    caller_owned_ids: set[int],
 ) -> System:
-    """Restore source classical/interaction labels on a lane System without mutating caller components."""
-    classical_changed = False
-    interaction_changed = False
-    old_classical_comps = list(lane_sys.classicals.components)
-    old_classical_labels = [c.label for c in old_classical_comps]
-    valid_old_setups = _valid_custom_classical_setups(lane_sys)
-    if len(old_classical_comps) == len(source_classicals):
-        new_classicals = list(old_classical_comps)
+    """
+    Restore the labels of the source components on a lane System.
+
+    Components are immutable, so a relabelled copy replaces each component
+    whose label differs, and every reference to it in the System follows.
+    """
+    old_classicals = list(lane_sys.classicals.components)
+    new_classicals = list(old_classicals)
+    if len(old_classicals) == len(source_classicals):
         for idx, (lane_comp, orig_comp) in enumerate(
-            zip(new_classicals, source_classicals)
+            zip(old_classicals, source_classicals)
         ):
             if lane_comp.label != orig_comp.label and (
                 type(lane_comp) is type(orig_comp)
                 or lane_comp.label.startswith("__dxtb_lane_setup_")
             ):
-                if id(lane_comp) in caller_owned_ids:
-                    lane_comp = copy.copy(lane_comp)
-                    new_classicals[idx] = lane_comp
-                lane_comp.label = orig_comp.label
-                classical_changed = True
-        if classical_changed:
-            lane_sys.classicals.components = new_classicals
+                new_classicals[idx] = lane_comp.replace(label=orig_comp.label)
 
-    if len(lane_sys.interactions.components) == len(source_interactions):
-        new_interactions = list(lane_sys.interactions.components)
+    old_interactions = list(lane_sys.interactions.components)
+    new_interactions = list(old_interactions)
+    if len(old_interactions) == len(source_interactions):
         for idx, (lane_inter, orig_inter) in enumerate(
-            zip(new_interactions, source_interactions)
+            zip(old_interactions, source_interactions)
         ):
             if lane_inter.label != orig_inter.label and type(
                 lane_inter
             ) is type(orig_inter):
-                if id(lane_inter) in caller_owned_ids:
-                    lane_inter = copy.copy(lane_inter)
-                    new_interactions[idx] = lane_inter
-                lane_inter.label = orig_inter.label
-                interaction_changed = True
-        if interaction_changed:
-            validate_unique_interaction_labels(new_interactions)
-            lane_sys.interactions.components = new_interactions
-    validate_unique_interaction_labels(lane_sys.interactions.components)
-
-    if not (classical_changed or interaction_changed):
-        return lane_sys
-
-    packed_setups = lane_sys._packed_classical_setups
-    custom_snapshots = lane_sys._custom_classical_snapshots
-    auto_classical_ids = lane_sys._auto_classical_ids
-    snap_by_pos: dict[int, Any] = {}
-    if classical_changed:
-        old_to_new_cls = {
-            id(old_c): id(new_c)
-            for old_c, new_c in zip(
-                old_classical_comps, lane_sys.classicals.components
-            )
-        }
-        auto_classical_ids = {
-            old_to_new_cls.get(cid, cid): tok
-            for cid, tok in auto_classical_ids.items()
-        }
-        rebound_snapshots: list[tuple[Any, Any, Any]] = []
-        invalid_custom_labels: set[str] = set()
-        for pos, (old_c, old_lbl, new_c) in enumerate(
-            zip(
-                old_classical_comps,
-                old_classical_labels,
-                lane_sys.classicals.components,
-            )
-        ):
-            if type(new_c) in BUILTIN_CLASSICAL_TYPES:
-                continue
-            if id(old_c) in valid_old_setups and old_lbl == new_c.label:
-                cap_setup = valid_old_setups[id(old_c)]
-                snap_entry = (
-                    new_c,
-                    snapshot_component_state(new_c, cap_setup),
-                    cap_setup,
+                new_interactions[idx] = lane_inter.replace(
+                    label=orig_inter.label
                 )
-                rebound_snapshots.append(snap_entry)
-                snap_by_pos[pos] = snap_entry
-            else:
-                invalid_custom_labels.add(old_lbl)
-                invalid_custom_labels.add(new_c.label)
-        custom_snapshots = tuple(rebound_snapshots)
+    validate_unique_interaction_labels(new_interactions)
 
-        if packed_setups or snap_by_pos:
-            from dxtb._src.components.classicals.list import ClassicalListCache
-
-            old_custom_setup_ids = {
-                id(s)
-                for _, _, s in lane_sys._custom_classical_snapshots
-                if s is not None
-            }
-            remapped = ClassicalListCache()
-            if packed_setups:
-                for old_lbl, comp in zip(
-                    old_classical_labels, lane_sys.classicals.components
-                ):
-                    if (
-                        type(comp) in BUILTIN_CLASSICAL_TYPES
-                        and old_lbl in packed_setups
-                        and old_lbl not in invalid_custom_labels
-                        and comp.label not in invalid_custom_labels
-                        and id(packed_setups[old_lbl])
-                        not in old_custom_setup_ids
-                    ):
-                        remapped[comp.label] = packed_setups[old_lbl]
-            for new_c, _, cap_setup in snap_by_pos.values():
-                if new_c.label not in invalid_custom_labels:
-                    remapped[new_c.label] = cap_setup
-            packed_setups = remapped
-
-    exact_core = lane_sys.exact_core
-    if exact_core is not None:
-        new_c_terms = tuple(
-            replace(
-                term,
-                label=(
-                    lane_sys.classicals.components[term.position].label
-                    if term.position < len(lane_sys.classicals.components)
-                    else term.label
-                ),
-                setup=(
-                    (
-                        build_custom_classical_core_setup(
-                            snap_by_pos[term.position][0],
-                            snap_by_pos[term.position][2],
-                            {
-                                "device": term.setup.anchor.device,
-                                "dtype": term.setup.anchor.dtype,
-                            },
-                            mutation_snapshot=snap_by_pos[term.position][1],
-                        )
-                        if term.position in snap_by_pos
-                        else build_invalidated_custom_classical_core_setup(
-                            {
-                                "device": term.setup.anchor.device,
-                                "dtype": term.setup.anchor.dtype,
-                            }
-                        )
-                    )
-                    if classical_changed
-                    and isinstance(term.setup, CustomClassicalCoreSetup)
-                    else term.setup
-                ),
-            )
-            for term in exact_core.classical_terms
-        )
-        new_i_terms = tuple(
-            replace(
-                term,
-                label=lane_sys.interactions.components[term.position].label,
-            )
-            for term in exact_core.interaction_terms
-        )
-        exact_core = exact_core.replace(
-            classical_terms=new_c_terms,
-            interaction_terms=new_i_terms,
-        )
-
-    return replace(
-        lane_sys,
-        exact_core=exact_core,
-        _packed_classical_setups=packed_setups,
-        _custom_classical_snapshots=custom_snapshots,
-        _auto_classical_ids=auto_classical_ids,
-    )
+    if all(a is b for a, b in zip(new_classicals, old_classicals)) and all(
+        a is b for a, b in zip(new_interactions, old_interactions)
+    ):
+        return lane_sys
+    return replace_system_components(lane_sys, new_classicals, new_interactions)
 
 
 def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
@@ -1346,16 +1205,6 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
         if removed_tokens
         else calc.opts
     )
-
-    caller_owned_ids = {
-        id(c)
-        for c in (
-            *calc.model.classical,
-            *calc.model.interaction,
-            *source_classicals,
-            *source_interactions,
-        )
-    }
 
     current_labels = [c.label for c in source_classicals]
     has_label_collision = len(set(current_labels)) < len(current_labels)
@@ -1412,25 +1261,23 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                     and comp.numbers.ndim == 2
                 )
                 if has_2d_nums or type(comp) in BUILTIN_CLASSICAL_TYPES:
-                    # Caller-owned Components are never mutated in place.
-                    c_copy = (
-                        comp.type(setup_dd["dtype"])
-                        if type(comp) in BUILTIN_CLASSICAL_TYPES
-                        and comp.dtype != setup_dd["dtype"]
-                        else copy.copy(comp)
-                    )
+                    c_copy = comp.type(setup_dd["dtype"])
                     if has_2d_nums:
-                        c_copy.numbers = comp.numbers[idx].index_select(
-                            0, slots.to(comp.numbers.device)
+                        c_copy = c_copy.replace(
+                            numbers=comp.numbers[idx].index_select(
+                                0, slots.to(comp.numbers.device)
+                            )
                         )
                     if (
                         has_label_collision
                         and type(comp) in BUILTIN_CLASSICAL_TYPES
                     ):
-                        c_copy.label = f"__dxtb_lane_setup_{c_idx}_{comp.label}"
+                        c_copy = c_copy.replace(
+                            label=f"__dxtb_lane_setup_{c_idx}_{comp.label}"
+                        )
                     lane_classical_list.append(c_copy)
                 else:
-                    lane_classical_list.append(comp)
+                    lane_classical_list.append(comp.type(setup_dd["dtype"]))
 
             lane_interaction_list = []
             for inter in explicit_interactions:
@@ -1443,19 +1290,16 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                     inter_has_2d_nums
                     or type(inter) in BUILTIN_INTERACTION_TYPES
                 ):
-                    i_copy = (
-                        inter.type(setup_dd["dtype"])
-                        if type(inter) in BUILTIN_INTERACTION_TYPES
-                        and inter.dtype != setup_dd["dtype"]
-                        else copy.copy(inter)
-                    )
+                    i_copy = inter.type(setup_dd["dtype"])
                     if inter_has_2d_nums:
-                        i_copy.numbers = inter.numbers[idx].index_select(
-                            0, slots.to(inter.numbers.device)
+                        i_copy = i_copy.replace(
+                            numbers=inter.numbers[idx].index_select(
+                                0, slots.to(inter.numbers.device)
+                            )
                         )
                     lane_interaction_list.append(i_copy)
                 else:
-                    lane_interaction_list.append(inter)
+                    lane_interaction_list.append(inter.type(setup_dd["dtype"]))
 
             lane_model = Model(
                 par=calc.model.par,
@@ -1471,10 +1315,7 @@ def build_calculator_lane_systems(calc: Any) -> tuple[System, ...]:
                 _allow_duplicate_custom_classical_labels=True,
             )
             lane_sys = _sync_lane_system_labels(
-                lane_sys,
-                source_classicals,
-                source_interactions,
-                caller_owned_ids,
+                lane_sys, source_classicals, source_interactions
             )
             if calc.dtype != calc.model.par.dtype:
                 lane_sys = _convert_eval_system_dtype(lane_sys, calc.dtype)

@@ -1191,7 +1191,7 @@ def test_functional_setup_preserves_additional_classical_component() -> None:
     numbers = torch.tensor([1, 1], dtype=torch.int64)
     extension = new_dispersion(numbers, par, dtype=torch.float64)
     assert type(extension) is DispersionD3
-    extension.label = "D3:extra"
+    extension = extension.replace(label="D3:extra")
     model = Model(
         par=par,
         config=Config.create(
@@ -1241,15 +1241,14 @@ def test_functional_setup_preserves_custom_classical_component() -> None:
             return super().get_cache(numbers, ihelp=ihelp, **kwargs)
 
     custom = CustomRepulsion(
-        builtin.arep,
-        builtin.zeff,
-        builtin.kexp,
+        arep=builtin.arep,
+        zeff=builtin.zeff,
+        kexp=builtin.kexp,
         klight=builtin.klight,
         cutoff=builtin.cutoff,
         en=builtin.en,
         enscale=builtin.enscale,
-        dtype=torch.float64,
-    )
+    ).to(dtype=torch.float64)
     model = Model(
         par=par,
         config=Config.create(

@@ -96,10 +96,10 @@ def test_batch(dtype: torch.dtype) -> None:
         assert False
 
     # Add kwargs explicitly for coverage
-    model = d4.model.D4Model(numbers, **dd)
+    model = d4.model.D4Model.create(numbers, **dd)
     rcov = radii.COV_D3(**dd)[numbers]
     r4r2 = d4.data.R4R2(**dd)[numbers]
-    cutoff = d4.cutoff.Cutoff(**dd)
+    cutoff = d4.cutoff.Cutoff.create(**dd)
 
     cache = disp.get_cache(
         numbers, model=model, rcov=rcov, r4r2=r4r2, cutoff=cutoff
@@ -159,7 +159,7 @@ def test_grad_param() -> None:
         input_param = d4.Param(
             **{label[i]: input for i, input in enumerate(inputs)}
         )
-        disp = DispersionD4(numbers, input_param, charge, **dd)
+        disp = DispersionD4(numbers=numbers, param=input_param, charge=charge).to(**dd)
         cache = disp.get_cache(numbers)
         return disp.get_energy(positions, cache)
 
@@ -190,7 +190,7 @@ def test_three_way_d4_parity_values_and_gradients() -> None:
         "s10": torch.tensor(0.25, **dd, requires_grad=True),
         "alp": torch.tensor(16.0, **dd, requires_grad=True),
     }
-    disp = DispersionD4(numbers, p_dxtb, charge=chrg_dxtb, **dd)
+    disp = DispersionD4(numbers=numbers, param=p_dxtb, charge=chrg_dxtb).to(**dd)
     cache = disp.get_cache(numbers)
     e_dxtb = disp.get_energy(pos_dxtb, cache, charge=chrg_dxtb)
 
@@ -217,9 +217,7 @@ def test_three_way_d4_parity_values_and_gradients() -> None:
         q=q_eeq,
         qmodel="gfn2",
     )
-    disp_gfn2 = DispersionD4(
-        numbers, gfn2_param, charge=torch.tensor(0.0, **dd), ref_charges="gfn2", **dd
-    )
+    disp_gfn2 = DispersionD4(numbers=numbers, param=gfn2_param, charge=torch.tensor(0.0, **dd), ref_charges='gfn2').to(**dd)
     e_gfn2_dxtb = disp_gfn2.get_energy(positions, disp_gfn2.get_cache(numbers))
     torch.testing.assert_close(e_gfn2_dxtb, e_gfn2_native, atol=1e-13, rtol=1e-13)
 
@@ -253,7 +251,7 @@ def test_d4_trainable_zero_s9_and_weight_derivatives() -> None:
         "a2": torch.tensor(4.5, **dd),
         "s9": s9_zero,
     }
-    disp = DispersionD4(numbers, param_zero, charge=torch.tensor(0.0, **dd), **dd)
+    disp = DispersionD4(numbers=numbers, param=param_zero, charge=torch.tensor(0.0, **dd)).to(**dd)
     e_zero = disp.get_energy(positions, disp.get_cache(numbers)).sum()
     (grad_s9_dxtb,) = torch.autograd.grad(e_zero, s9_zero)
 
@@ -267,7 +265,7 @@ def test_d4_trainable_zero_s9_and_weight_derivatives() -> None:
     torch.testing.assert_close(grad_s9_dxtb, grad_s9_nat, atol=1e-13, rtol=1e-13)
 
     # Check analytical dgwdcn and dgwdq against autograd
-    model = d4.model.D4Model(numbers, **dd)
+    model = d4.model.D4Model.create(numbers, **dd)
     cn = torch.linspace(0.5, 3.5, numbers.numel(), **dd, requires_grad=True)
     q = torch.linspace(-0.3, 0.3, numbers.numel(), **dd, requires_grad=True)
     gw, dgwdcn, dgwdq = model.weight_references(

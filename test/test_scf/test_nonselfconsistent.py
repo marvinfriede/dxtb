@@ -260,7 +260,7 @@ def test_gfn0_generalized_eigensolve_has_position_gradient() -> None:
 
 def test_charge_dependent_interaction_is_rejected() -> None:
     """Reject density-dependent interactions instead of applying one pass."""
-    interactions = InteractionList(Interaction(dtype=torch.float64))
+    interactions = InteractionList(Interaction())
 
     with pytest.raises(
         ValueError,

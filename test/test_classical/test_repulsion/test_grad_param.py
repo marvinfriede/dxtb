@@ -68,7 +68,7 @@ def gradchecker(dtype: torch.dtype, name: str) -> tuple[
     )
 
     def func(arep: Tensor, zeff: Tensor, kexp: Tensor) -> Tensor:
-        rep = Repulsion(arep, zeff, kexp, **dd)
+        rep = Repulsion(arep=arep, zeff=zeff, kexp=kexp).to(**dd)
         cache = rep.get_cache(numbers, ihelp)
         return rep.get_energy(positions, cache)
 
@@ -139,7 +139,7 @@ def gradchecker_batch(dtype: torch.dtype, name1: str, name2: str) -> tuple[
     )
 
     def func(arep: Tensor, zeff: Tensor, kexp: Tensor) -> Tensor:
-        rep = Repulsion(arep, zeff, kexp, **dd)
+        rep = Repulsion(arep=arep, zeff=zeff, kexp=kexp).to(**dd)
         cache = rep.get_cache(numbers, ihelp)
         return rep.get_energy(positions, cache)
 

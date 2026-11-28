@@ -23,6 +23,7 @@ Self-consistent D4 dispersion correction.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from typing import Any
 
@@ -38,13 +39,7 @@ from tad_mctc.data import PAULING
 from tad_mctc.exceptions import DeviceError
 from tad_mctc.ncoord import erf_count
 from tad_mctc.tree import Node, child, context
-from tad_mctc.typing import (
-    DD,
-    CountingFunction,
-    Tensor,
-    TensorLike,
-    override,
-)
+from tad_mctc.typing import DD, CountingFunction, Tensor, override
 
 from dxtb import IndexHelper
 from dxtb._src.components.classicals.dispersion import _d4_adapter as d4
@@ -319,29 +314,13 @@ def _clone_static(value: Any) -> Any:
 
 
 def _extra_model_state(model: d4.model.D4Model) -> tuple[tuple[str, Any], ...]:
-    """Capture immutable extension state added by a D4Model subclass."""
+    """Capture the extra fields declared by a D4Model subclass."""
     base_fields = {"numbers", "ga", "gc", "wf", "ref_charges", "rc6"}
-    state: dict[str, Any] = {}
-    if hasattr(model, "__dict__"):
-        state.update(
-            {
-                key: value
-                for key, value in vars(model).items()
-                if key not in base_fields
-            }
-        )
-
-    for cls in type(model).__mro__:
-        if cls is d4.model.D4Model or cls is d4.model.BaseModel:
-            break
-        slots = cls.__dict__.get("__slots__", ())
-        if isinstance(slots, str):
-            slots = (slots,)
-        for name in slots:
-            if name not in base_fields and hasattr(model, name):
-                state[name] = getattr(model, name)
-
-    return tuple((key, _clone_static(value)) for key, value in state.items())
+    return tuple(
+        (f.name, _clone_static(getattr(model, f.name)))
+        for f in dataclasses.fields(model)
+        if f.name not in base_fields
+    )
 
 
 def setup_d4sc(component: DispersionD4SC, numbers: Tensor) -> D4SCSetup:
@@ -387,7 +366,7 @@ def _build_d4sc_model(
 ) -> d4.model.D4Model:
     """Construct a model object owned by one call-data value."""
     try:
-        model = setup.model_type(
+        model = setup.model_type.create(
             setup.numbers.clone(),
             ga=setup.model_ga,
             gc=setup.model_gc,
@@ -396,15 +375,17 @@ def _build_d4sc_model(
             rc6=setup.model_rc6.clone(),
             device=setup.numbers.device,
             dtype=setup.model_wf.dtype,
+            **{
+                name: _restore_static(value)
+                for name, value in setup.model_extra
+            },
         )
     except TypeError as exc:
         raise TypeError(
-            "A custom D4Model used by D4SC must accept the standard D4Model "
-            "constructor arguments to support call-local evaluation."
+            "A custom D4Model used by D4SC must be creatable with "
+            "D4Model.create and its extra fields."
         ) from exc
 
-    for name, value in setup.model_extra:
-        setattr(model, name, _restore_static(value))
     return model
 
 
@@ -443,10 +424,10 @@ def build_d4sc_data(
         model.rc6,
         cutoff=d4_defaults.D4_DISP2_CUTOFF,
     )
-    return DispersionD4SCCache(cn, dispmat, model)
+    return DispersionD4SCCache(cn=cn, dispmat=dispmat, model=model)
 
 
-class DispersionD4SCCache(InteractionCache, TensorLike):
+class DispersionD4SCCache(InteractionCache):
     """
     Restart data for the :class:`.DispersionD4SC` interaction.
 
@@ -456,38 +437,17 @@ class DispersionD4SCCache(InteractionCache, TensorLike):
     class constructor.
     """
 
-    cn: Tensor
+    cn: Tensor = child()
     """Coordination number of every atom."""
 
-    dispmat: Tensor
+    dispmat: Tensor = child()
     """
     Dispersion matrix. This quantity is almost equal to the dispersion energy,
     except for multiplication with C6 and C8.
     """
 
-    model: d4.model.D4Model
+    model: d4.model.D4Model = child()
     """Fresh model instance owned by this one call-data object."""
-
-    __slots__ = ["cn", "dispmat", "model"]
-
-    def __init__(
-        self,
-        cn: Tensor,
-        dispmat: Tensor,
-        model: d4.model.D4Model,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> None:
-        super().__init__(
-            device=device if device is None else cn.device,
-            dtype=dtype if dtype is None else cn.dtype,
-        )
-
-        self.cn = cn
-        self.dispmat = dispmat
-
-        # The model is constructed for this call-data object only.
-        self.model = model
 
 
 class DispersionD4SC(Interaction):
@@ -495,65 +455,36 @@ class DispersionD4SC(Interaction):
     Self-consistent D4 dispersion correction (:class:`.DispersionD4SC`).
     """
 
-    param: d4.Param
+    param: d4.Param = child()
     """Dispersion parameters."""
 
-    model: d4.model.D4Model
+    model: d4.model.D4Model = child()
     """Model for the D4 dispersion correction."""
 
-    rcov: Tensor
+    rcov: Tensor = child()
     """Covalent radii of all atoms."""
 
-    r4r2: Tensor
+    r4r2: Tensor = child()
     """R4/R2 ratio of all atoms."""
 
-    cutoff: d4.cutoff.Cutoff
+    cutoff: d4.cutoff.Cutoff = child()
     """Real-space cutoff for the D4 dispersion correction."""
 
-    counting_function: CountingFunction
+    counting_function: CountingFunction = context(default=erf_count)
     """
     Counting function for the coordination number.
 
     :default: :func:`tad_mctc.ncoord.erf_count`
     """
 
-    damping_function: d4.damping.Damping
+    damping_function: d4.damping.Damping = context(
+        default=d4.damping.RationalDamping()
+    )
     """
     Damping function for the dispersion correction.
 
     :default: :func:`d4.damping.RationalDamping`
     """
-
-    __slots__ = [
-        "param",
-        "model",
-        "rcov",
-        "r4r2",
-        "cutoff",
-        "counting_function",
-        "damping_function",
-    ]
-
-    def __init__(
-        self,
-        param: d4.Param,
-        model: d4.model.D4Model,
-        rcov: Tensor,
-        r4r2: Tensor,
-        cutoff: d4.cutoff.Cutoff,
-        counting_function: CountingFunction = erf_count,
-        damping_function: d4.damping.Damping = d4.damping.RationalDamping(),
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> None:
-        super().__init__(device, dtype)
-        self.param = param
-        self.model = model
-        self.rcov = rcov
-        self.r4r2 = r4r2
-        self.cutoff = cutoff
-        self.counting_function = counting_function
-        self.damping_function = damping_function
 
     # pylint: disable=unused-argument
     @override
@@ -709,9 +640,9 @@ def new_d4sc(
 
     rcov = d4.data.COV_D3(**dd)[numbers]
     r4r2 = d4.data.R4R2(**dd)[numbers]
-    model = d4.model.D4Model(numbers, ref_charges="gfn2", **dd)
-    cutoff = d4.cutoff.Cutoff(disp2=50.0, disp3=25.0, **dd)
+    model = d4.model.D4Model.create(numbers, ref_charges="gfn2", **dd)
+    cutoff = d4.cutoff.Cutoff.create(disp2=50.0, disp3=25.0, **dd)
 
     return DispersionD4SC(
-        param, model=model, rcov=rcov, r4r2=r4r2, cutoff=cutoff, **dd
+        param=param, model=model, rcov=rcov, r4r2=r4r2, cutoff=cutoff
     )

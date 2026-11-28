@@ -24,7 +24,7 @@ from typing import Any
 import torch
 from tad_mctc.batch import pack
 from tad_mctc.data.radii import ATOMIC_RADII
-from tad_mctc.tree import Node, child
+from tad_mctc.tree import Node, child, context
 from tad_mctc.typing import Tensor, override
 
 from dxtb import IndexHelper
@@ -181,38 +181,20 @@ def halogen_energy(
 class Halogen(Classical):
     """Representation of the halogen bond correction."""
 
-    halogens: list[int]
-    bases: list[int]
-    damp: Tensor
-    rscale: Tensor
-    bond_strength: Tensor
-    cutoff: Tensor
+    halogens: tuple[int, ...] = context(default=(17, 35, 53, 85))
+    bases: tuple[int, ...] = context(default=(7, 8, 15, 16))
+    damp: Tensor = child()
+    rscale: Tensor = child()
+    bond_strength: Tensor = child()
+    cutoff: Tensor = child(default=xtb.DEFAULT_XB_CUTOFF)
 
-    __slots__ = [
-        "halogens",
-        "bases",
-        "damp",
-        "rscale",
-        "bond_strength",
-        "cutoff",
-    ]
-
-    def __init__(
-        self,
-        damp: Tensor,
-        rscale: Tensor,
-        bond_strength: Tensor,
-        cutoff: Tensor | float | int = xtb.DEFAULT_XB_CUTOFF,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> None:
-        super().__init__(device, dtype)
-        self.damp = damp.to(**self.dd)
-        self.rscale = rscale.to(**self.dd)
-        self.bond_strength = bond_strength.to(**self.dd)
-        self.cutoff = torch.as_tensor(cutoff, **self.dd)
-        self.halogens = [17, 35, 53, 85]
-        self.bases = [7, 8, 15, 16]
+    def _normalize(self) -> dict[str, Any]:
+        updates = super()._normalize()
+        if not isinstance(self.cutoff, Tensor):
+            updates["cutoff"] = torch.tensor(
+                self.cutoff, device=self.damp.device, dtype=self.damp.dtype
+            )
+        return updates
 
     @override
     def get_cache(

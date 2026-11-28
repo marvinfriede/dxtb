@@ -222,10 +222,10 @@ def test_es3_core_node_roundtrip_and_formula_parity(
         dtype=core.hubbard_derivs.dtype,
     )
     legacy_cache = ES3Cache(
-        legacy.hubbard_derivs, shell_resolved=legacy.shell_resolved
+        hd=legacy.hubbard_derivs, shell_resolved=legacy.shell_resolved
     )
     core_cache = ES3Cache(
-        core.hubbard_derivs, shell_resolved=core.shell_resolved
+        hd=core.hubbard_derivs, shell_resolved=core.shell_resolved
     )
     energy_fn = (
         interaction.get_monopole_shell_energy
@@ -343,7 +343,7 @@ def test_unhashable_average_keeps_identity_and_legacy_cache_support() -> None:
 
     numbers, positions, ihelp, interaction, _, _ = _es2_setup(False)
     average = CustomAverage()
-    interaction.average = average
+    interaction = interaction.replace(average=average)
     legacy = setup_es2(
         numbers,
         interaction.hubbard,

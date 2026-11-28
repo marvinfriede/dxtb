@@ -214,7 +214,7 @@ def test_three_way_d3_parity_values_and_gradients() -> None:
         param_dxtb = dict(disp.param, s9=s9_dxtb)
         param_native = dict(disp.param, s9=s9_native)
 
-        comp_atm = DispersionD3(numbers, param_dxtb, **dd)
+        comp_atm = DispersionD3(numbers=numbers, param=param_dxtb).to(**dd)
         cache_atm = comp_atm.get_cache(numbers)
         core_atm = core_dispersion_d3_setup(
             cache_atm, numbers, comp_atm.numbers, comp_atm.param
@@ -314,7 +314,7 @@ def test_grad_param() -> None:
 
     def func(*inputs):
         input_param = {label[i]: input for i, input in enumerate(inputs)}
-        disp = DispersionD3(numbers, input_param, **dd)
+        disp = DispersionD3(numbers=numbers, param=input_param).to(**dd)
         cache = disp.get_cache(numbers)
         return disp.get_energy(positions, cache)
 

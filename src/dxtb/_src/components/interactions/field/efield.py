@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import torch
 from tad_mctc.math import einsum
+from tad_mctc.tree import child
 
 from dxtb import IndexHelper
 from dxtb._src.typing import Any, Tensor, TensorOrTensors, override
@@ -51,7 +52,7 @@ def build_electric_field_data(
     """Build fresh field call data without retaining either input."""
     vat = einsum("...ik,k->...i", positions, field)
     vdp = field.expand_as(positions)
-    return ElectricFieldCache(vat, vdp)
+    return ElectricFieldCache(vat=vat, vdp=vdp)
 
 
 class ElectricFieldCache(InteractionCache):
@@ -59,31 +60,15 @@ class ElectricFieldCache(InteractionCache):
     Restart data for the electric field interaction.
     """
 
-    vat: Tensor
+    vat: Tensor = child()
     """
     Atom-resolved monopolar potental from instantaneous electric field.
     """
 
-    vdp: Tensor
+    vdp: Tensor = child()
     """
     Atom-resolved dipolar potential from instantaneous electric field.
     """
-
-    __slots__ = ["vat", "vdp"]
-
-    def __init__(
-        self,
-        vat: Tensor,
-        vdp: Tensor,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> None:
-        super().__init__(
-            device=device if device is None else vat.device,
-            dtype=dtype if dtype is None else vat.dtype,
-        )
-        self.vat = vat
-        self.vdp = vdp
 
 
 class ElectricField(Interaction):
@@ -96,22 +81,8 @@ class ElectricField(Interaction):
     ``InteractionList`` construction and internal evaluation plumbing.
     """
 
-    field: Tensor
+    field: Tensor = child()
     """Instantaneous electric field vector."""
-
-    __slots__ = ["field"]
-
-    def __init__(
-        self,
-        field: Tensor,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ):
-        super().__init__(
-            device=device if device is None else field.device,
-            dtype=dtype if dtype is None else field.dtype,
-        )
-        self.field = field
 
     # pylint: disable=unused-argument
     @override
@@ -326,8 +297,4 @@ def new_efield(
                 f"({field.dtype}) do not match."
             )
 
-    return ElectricField(
-        field,
-        device=device if device is None else field.device,
-        dtype=dtype if dtype is None else field.dtype,
-    )
+    return ElectricField(field=field)

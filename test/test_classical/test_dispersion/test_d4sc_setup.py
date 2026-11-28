@@ -220,15 +220,7 @@ def test_custom_model_subclass_is_reconstructed_for_direct_compatibility() -> (
                 return tuple(1.05 * value for value in result)
             return 1.05 * result
 
-    interaction.model = ScaledD4Model(
-        numbers,
-        ga=interaction.model.ga,
-        gc=interaction.model.gc,
-        wf=interaction.model.wf,
-        ref_charges=interaction.model.ref_charges,
-        rc6=interaction.model.rc6,
-        **DD,
-    )
+    interaction = interaction.replace(model=ScaledD4Model.create(numbers, ga=interaction.model.ga, gc=interaction.model.gc, wf=interaction.model.wf, ref_charges=interaction.model.ref_charges, rc6=interaction.model.rc6, **DD))
     data = interaction.get_cache(numbers=numbers, positions=positions)
     assert type(data.model) is ScaledD4Model
     q = torch.tensor([0.0, 0.0], **DD)
@@ -389,8 +381,6 @@ def test_stale_component_mutation_does_not_change_existing_setup() -> None:
         interaction.param["a1"] = interaction.param["a1"] + 0.2
         interaction.model.wf.add_(0.5)
         interaction.model.rc6.mul_(1.1)
-        interaction.model.numbers = interaction.model.numbers.clone()
-        interaction.model.numbers[0] = 8
     torch.testing.assert_close(original_leaf, leaf_before)
     torch.testing.assert_close(energy(setup), before)
 
@@ -549,17 +539,8 @@ def test_duplicate_d4sc_labels_are_rejected() -> None:
     class D4SCExtension(DispersionD4SC):
         __slots__ = ()
 
-    extension = D4SCExtension(
-        first.param,
-        first.model,
-        first.rcov,
-        first.r4r2,
-        first.cutoff,
-        first.counting_function,
-        first.damping_function,
-        **DD,
-    )
-    extension.label = first.label
+    extension = D4SCExtension(param=first.param, model=first.model, rcov=first.rcov, r4r2=first.r4r2, cutoff=first.cutoff, counting_function=first.counting_function, damping_function=first.damping_function).to(**DD)
+    extension = extension.replace(label=first.label)
     with pytest.raises(ValueError, match="Duplicate"):
         InteractionList(first, extension)
 
@@ -688,7 +669,7 @@ def test_setup_d4sc_rejects_non_rational_damping() -> None:
     class CustomDamping:
         pass
 
-    interaction.damping_function = CustomDamping()  # type: ignore[assignment]
+    interaction = interaction.replace(damping_function=CustomDamping())
     with pytest.raises(TypeError, match="RationalDamping"):
         setup_d4sc(interaction, numbers)
     with pytest.raises(TypeError, match="RationalDamping"):

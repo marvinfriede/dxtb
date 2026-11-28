@@ -55,12 +55,9 @@ from tad_mctc.convert import any_to_tensor
 from tad_mctc.data import VDW_PAIRWISE
 from tad_mctc.math import einsum
 from tad_mctc.ncoord import CNModel, cn_d4, erf_count
-from tad_mctc.typing import (
-    DD,
-    CountingFunction,
-    Tensor,
-    TensorLike,
-)
+from tad_mctc.tree import Node, child, context
+from tad_mctc.typing import DD, CountingFunction, Tensor, get_default_dtype
+from typing_extensions import Self
 from tad_multicharge import get_eeq_charges
 
 
@@ -98,30 +95,39 @@ __all__ = [
 _MISSING = object()
 
 
-class Cutoff(TensorLike):
+class Cutoff(Node):
     """Collection of real-space cutoffs for D4 in dxtb."""
 
-    disp2: Tensor
-    disp3: Tensor
-    cn: Tensor
-    cn_eeq: Tensor
+    disp2: Tensor = child()
+    """Cutoff of the two-body dispersion."""
 
-    __slots__ = ("disp2", "disp3", "cn", "cn_eeq")
+    disp3: Tensor = child()
+    """Cutoff of the three-body dispersion."""
 
-    def __init__(
-        self,
+    cn: Tensor = child()
+    """Cutoff of the coordination number."""
+
+    cn_eeq: Tensor = child()
+    """Cutoff of the coordination number of the EEQ model."""
+
+    @classmethod
+    def create(
+        cls,
         disp2: int | float | Tensor = defaults.D4_DISP2_CUTOFF,
         disp3: int | float | Tensor = defaults.D4_DISP3_CUTOFF,
         cn: int | float | Tensor = defaults.D4_CN_CUTOFF,
         cn_eeq: int | float | Tensor = defaults.D4_CN_EEQ_CUTOFF,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
-    ) -> None:
-        super().__init__(device, dtype)
-        self.disp2 = any_to_tensor(disp2, device=device, dtype=dtype)
-        self.disp3 = any_to_tensor(disp3, device=device, dtype=dtype)
-        self.cn = any_to_tensor(cn, device=device, dtype=dtype)
-        self.cn_eeq = any_to_tensor(cn_eeq, device=device, dtype=dtype)
+    ) -> Cutoff:
+        """Create cutoffs from numbers or tensors on ``device``/``dtype``."""
+        dd = {"device": device, "dtype": dtype}
+        return cls(
+            disp2=any_to_tensor(disp2, **dd),
+            disp3=any_to_tensor(disp3, **dd),
+            cn=any_to_tensor(cn, **dd),
+            cn_eeq=any_to_tensor(cn_eeq, **dd),
+        )
 
 
 class Damping(ABC):
@@ -252,6 +258,9 @@ class Damping(ABC):
             return False
         return self.__class__ is other.__class__
 
+    def __hash__(self) -> int:
+        return hash(self.__class__)
+
 
 class RationalDamping(Damping):
     """Becke-Johnson rational damping for D4."""
@@ -367,24 +376,38 @@ class _CallableThreeBodyD4(ThreeBodyDamping):
         return self.value(param, "s9") * fdamp
 
 
-class _BaseD4Model(TensorLike):
-    """Base slot container for per-system D4 models."""
-
-    __slots__ = ("numbers", "ga", "gc", "wf", "ref_charges", "rc6")
+class _BaseD4Model(Node):
+    """Base class for per-system D4 models."""
 
 
 class D4Model(_BaseD4Model):
     """Per-system D4 model adapter backed by ``tad_dftd`` reference tables."""
 
-    numbers: Tensor
-    ga: float
-    gc: float
-    wf: Tensor
-    ref_charges: Literal["eeq", "gfn2"]
-    rc6: Tensor
+    numbers: Tensor = child()
+    """Atomic numbers of the system."""
 
-    def __init__(
-        self,
+    wf: Tensor = child()
+    """Weighting factor of the coordination number in the references."""
+
+    rc6: Tensor = child()
+    """Reference C6 coefficients of all atom pairs."""
+
+    ga: float = context(default=defaults.D4_GA)
+    """Maximum charge scaling height."""
+
+    gc: float = context(default=defaults.D4_GC)
+    """Charge scaling steepness."""
+
+    ref_charges: Literal["eeq", "gfn2"] = context(default="eeq")
+    """Reference charges of the model."""
+
+    def _validate(self) -> None:
+        if self.ref_charges not in ("eeq", "gfn2"):
+            raise ValueError(f"Unknown reference charges: {self.ref_charges}")
+
+    @classmethod
+    def create(
+        cls,
         numbers: Tensor,
         ga: float = defaults.D4_GA,
         gc: float = defaults.D4_GC,
@@ -393,18 +416,32 @@ class D4Model(_BaseD4Model):
         rc6: Tensor | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
-    ) -> None:
-        super().__init__(device, dtype)
+        **kwargs: Any,
+    ) -> Self:
+        """
+        Create a model for ``numbers``, loading the reference C6
+        coefficients unless ``rc6`` is given. Further keyword arguments fill
+        the fields of a subclass.
+        """
         _validate_d4_numbers(numbers)
-        self.numbers = numbers
-        self.ga = ga
-        self.gc = gc
-        self.ref_charges = ref_charges
-        self.wf = self._get_wf() if wf is None else any_to_tensor(wf, **self.dd)
-        self.rc6 = self._get_refc6() if rc6 is None else rc6
-
-    def _get_wf(self) -> Tensor:
-        return torch.tensor(defaults.D4_WF, **self.dd)
+        dd = {
+            "device": numbers.device if device is None else device,
+            "dtype": get_default_dtype() if dtype is None else dtype,
+        }
+        if ref_charges not in ("eeq", "gfn2"):
+            raise ValueError(f"Unknown reference charges: {ref_charges}")
+        if rc6 is None:
+            reference = load_d4(qmod=ref_charges, ga=ga, gc=gc, **dd)
+            rc6 = reference.c6[numbers.unsqueeze(-1), numbers.unsqueeze(-2)]
+        return cls(
+            numbers=numbers,
+            wf=any_to_tensor(defaults.D4_WF if wf is None else wf, **dd),
+            rc6=rc6,
+            ga=ga,
+            gc=gc,
+            ref_charges=ref_charges,
+            **kwargs,
+        )
 
     def _reference(self) -> D4Reference:
         if self.ref_charges not in ("eeq", "gfn2"):
@@ -495,11 +532,6 @@ class D4Model(_BaseD4Model):
 
     def _get_alpha(self) -> Tensor:
         return self._reference().aiw[self.numbers]
-
-    def _get_refc6(self) -> Tensor:
-        return self._reference().c6[
-            self.numbers.unsqueeze(-1), self.numbers.unsqueeze(-2)
-        ]
 
     def __str__(self) -> str:  # pragma: no cover
         return (
@@ -658,12 +690,12 @@ def dftd4(
         )
 
     if cutoff is None:
-        cutoff = Cutoff(**dd)
+        cutoff = Cutoff.create(**dd)
 
     if isinstance(model, str):
         if model.casefold() != "d4":
             raise ValueError(f"Unsupported model key '{model}'.")
-        model_inst = D4Model(numbers=numbers, **dd)
+        model_inst = D4Model.create(numbers, **dd)
     else:
         model_inst = model
 

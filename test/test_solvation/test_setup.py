@@ -62,7 +62,7 @@ def _component(
     alpb: bool = True,
     **kwargs,
 ) -> GeneralizedBorn:
-    return GeneralizedBorn(
+    return GeneralizedBorn.create(
         numbers, dielectric, kernel=kernel, alpb=alpb, **DD, **kwargs
     )
 
@@ -327,8 +327,8 @@ def test_system_setup_bypasses_cache_and_freezes_configuration(
     assert torch.isfinite(data[component.label].mat).all()
     baseline_energy = system.singlepoint(positions).energy.clone()
 
-    component.kernel = "still"
-    component.keps = component.keps + 0.5
+    component = component.replace(kernel="still")
+    component = component.replace(keps=component.keps + 0.5)
     same_system_data = _interaction_data(system, positions)
     torch.testing.assert_close(
         data[component.label].mat, same_system_data[component.label].mat
@@ -505,7 +505,7 @@ def test_exact_mutation_rejected_and_duplicates_rejected() -> None:
 def test_python_dielectric_uses_requested_dtype() -> None:
     """Python numeric dielectric values follow the requested tensor dtype."""
     numbers, _ = _geometry()
-    component = GeneralizedBorn(numbers, 78.9, dtype=torch.double)
+    component = GeneralizedBorn.create(numbers, 78.9, dtype=torch.double)
     assert component.alpbet.dtype == torch.double
     assert component.keps.dtype == torch.double
 

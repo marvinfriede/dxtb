@@ -67,7 +67,7 @@ def execute(name: str, dtype: torch.dtype) -> None:
 
         pos = positions.clone().requires_grad_(True)
 
-        rep = Repulsion(arep, zeff, kexp, **dd)
+        rep = Repulsion(arep=arep, zeff=zeff, kexp=kexp).to(**dd)
         cache = rep.get_cache(numbers, ihelp)
 
         energy = rep.get_energy(pos, cache).sum()

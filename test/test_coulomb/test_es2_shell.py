@@ -171,7 +171,9 @@ def test_grad_param(name: str) -> None:
     hubbard.requires_grad_(True)
 
     def func(gexp: Tensor, hubbard: Tensor):
-        es = es2.ES2(hubbard, lhubbard, average=average, gexp=gexp, **dd)
+        es = es2.ES2(
+            hubbard=hubbard, lhubbard=lhubbard, average=average, gexp=gexp
+        ).to(**dd)
         cache = es.get_cache(numbers=numbers, positions=positions, ihelp=ihelp)
         return es.get_monopole_shell_energy(cache, qsh)
 

@@ -25,6 +25,7 @@ from math import sqrt
 
 import pytest
 import torch
+from tad_mctc.tree import context
 from tad_mctc.batch import pack
 
 from dxtb import Calculator
@@ -228,7 +229,7 @@ def test_h3_7_d4sc_casimir_polder_derivatives_and_compatibility() -> None:
 
     # Custom D4Model subclass preserved; non-RationalDamping rejected
     class _ScaledD4Model(d4_compat.model.D4Model):
-        scale: float = 1.25
+        scale: float = context(default=1.25)
 
         def weight_references(self, cn, q, with_dgwdcn=False, with_dgwdq=False):
             res = super().weight_references(
@@ -238,14 +239,7 @@ def test_h3_7_d4sc_casimir_polder_derivatives_and_compatibility() -> None:
                 return tuple(r * self.scale for r in res)
             return res * self.scale
 
-    comp_custom_mod = DispersionD4SC(
-        comp.param,
-        model=_ScaledD4Model(numbers, ref_charges="gfn2", **dd),
-        rcov=comp.rcov,
-        r4r2=comp.r4r2,
-        cutoff=comp.cutoff,
-        **dd,
-    )
+    comp_custom_mod = DispersionD4SC(param=comp.param, model=_ScaledD4Model.create(numbers, ref_charges='gfn2', **dd), rcov=comp.rcov, r4r2=comp.r4r2, cutoff=comp.cutoff).to(**dd)
     setup_custom = core_d4sc_setup(setup_d4sc(comp_custom_mod, numbers))
     cache_custom = build_d4sc_data(setup_custom, positions)
     e_custom = comp_custom_mod.get_monopole_atom_energy(cache_custom, q0).sum()
@@ -253,14 +247,6 @@ def test_h3_7_d4sc_casimir_polder_derivatives_and_compatibility() -> None:
         e_custom, (1.25**2) * energy_fn(positions, q0), rtol=1e-13, atol=1e-14
     )
 
-    comp_bad_damp = DispersionD4SC(
-        comp.param,
-        model=comp.model,
-        rcov=comp.rcov,
-        r4r2=comp.r4r2,
-        cutoff=comp.cutoff,
-        damping_function=d4_compat.ZeroDamping(),
-        **dd,
-    )
+    comp_bad_damp = DispersionD4SC(param=comp.param, model=comp.model, rcov=comp.rcov, r4r2=comp.r4r2, cutoff=comp.cutoff, damping_function=d4_compat.ZeroDamping()).to(**dd)
     with pytest.raises(TypeError, match="RationalDamping"):
         setup_d4sc(comp_bad_damp, numbers)

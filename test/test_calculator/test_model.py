@@ -25,6 +25,8 @@ import dataclasses
 
 import pytest
 import torch
+from tad_mctc.tree import child
+from torch import Tensor
 
 from dxtb import GFN1_XTB, GFN2_XTB, Calculator, OutputHandler, ParamModule
 from dxtb._src.calculators.model import Model, System
@@ -127,12 +129,7 @@ def test_classical_cache_view_includes_custom_extension_data() -> None:
     """The view combines family Nodes with setup-time custom Classical values."""
 
     class ClassicalExtension(Classical):
-        __slots__ = ["scale"]
-
-        def __init__(self) -> None:
-            super().__init__(device=DEVICE, dtype=torch.double)
-            self.scale = torch.tensor(0.125, device=DEVICE, dtype=torch.double)
-            self.label = "ClassicalExtension"
+        scale: Tensor = child()
 
         def get_cache(self, numbers, ihelp=None, **kwargs):
             _ = (numbers, ihelp, kwargs)
@@ -144,7 +141,9 @@ def test_classical_cache_view_includes_custom_extension_data() -> None:
 
     numbers = torch.tensor([3, 1], device=DEVICE)
     positions = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.6]], **DD)
-    extension = ClassicalExtension()
+    extension = ClassicalExtension(
+        scale=torch.tensor(0.125, device=DEVICE, dtype=torch.double)
+    )
     system = Model(
         par=ParamModule(GFN1_XTB, **DD),
         config=Config.create(exclude="scf"),
@@ -205,18 +204,16 @@ def test_custom_components_succeed_and_non_components_are_rejected() -> None:
     assert repulsion is not None and es2 is not None and es3 is not None
 
     for classical in (
-        CustomClassical(device=DEVICE, dtype=torch.double),
+        CustomClassical(),
         RepulsionExtension(
-            repulsion.arep,
-            repulsion.zeff,
-            repulsion.kexp,
-            repulsion.klight,
-            repulsion.cutoff,
-            device=DEVICE,
-            dtype=torch.double,
+            arep=repulsion.arep,
+            zeff=repulsion.zeff,
+            kexp=repulsion.kexp,
+            klight=repulsion.klight,
+            cutoff=repulsion.cutoff,
             en=repulsion.en,
             enscale=repulsion.enscale,
-        ),
+        ).to(device=DEVICE, dtype=torch.double),
     ):
         sys_c = Model(
             par=par,
@@ -227,18 +224,15 @@ def test_custom_components_succeed_and_non_components_are_rejected() -> None:
 
     for interaction in (
         ES2Extension(
-            es2.hubbard,
-            es2.lhubbard,
+            hubbard=es2.hubbard,
+            lhubbard=es2.lhubbard,
             average=es2.average,
             gexp=es2.gexp,
             shell_resolved=es2.shell_resolved,
-            dtype=torch.double,
-        ),
+        ).to(dtype=torch.double),
         ES3Extension(
-            es3.hubbard_derivs,
-            shell_scale=es3.shell_scale,
-            dtype=torch.double,
-        ),
+            hubbard_derivs=es3.hubbard_derivs, shell_scale=es3.shell_scale
+        ).to(dtype=torch.double),
     ):
         calc = Calculator(
             numbers,
@@ -272,7 +266,8 @@ def test_single_system_rejects_ambiguous_labels() -> None:
     )
     assert type(first_d3) is DispersionD3
     assert type(second_d3) is DispersionD3
-    first_d3.label = second_d3.label = "D3:shared"
+    first_d3 = first_d3.replace(label="D3:shared")
+    second_d3 = second_d3.replace(label="D3:shared")
 
     with pytest.raises(ValueError, match="D3:shared"):
         Model(
@@ -284,10 +279,11 @@ def test_single_system_rejects_ambiguous_labels() -> None:
     class D3Extension(DispersionD3):
         pass
 
-    extension = D3Extension(
-        first_d3.numbers, first_d3.param, dtype=torch.double, device=DEVICE
+    extension = D3Extension(numbers=first_d3.numbers, param=first_d3.param).to(
+        dtype=torch.double, device=DEVICE
     )
-    first_d3.label = extension.label = "D3:shared-ext"
+    first_d3 = first_d3.replace(label="D3:shared-ext")
+    extension = extension.replace(label="D3:shared-ext")
     with pytest.raises(ValueError, match="D3:shared-ext"):
         Model(
             par=par,
@@ -298,7 +294,8 @@ def test_single_system_rejects_ambiguous_labels() -> None:
     repulsion_a = new_repulsion(numbers.unique(), par, **DD)
     repulsion_b = new_repulsion(numbers.unique(), par, **DD)
     assert repulsion_a is not None and repulsion_b is not None
-    repulsion_a.label = repulsion_b.label = "Repulsion:extension"
+    repulsion_a = repulsion_a.replace(label="Repulsion:extension")
+    repulsion_b = repulsion_b.replace(label="Repulsion:extension")
     with pytest.raises(ValueError, match="Repulsion:extension"):
         Model(
             par=par,
@@ -310,29 +307,28 @@ def test_single_system_rejects_ambiguous_labels() -> None:
         pass
 
     repulsion_extension_a = RepulsionExtension(
-        repulsion_a.arep,
-        repulsion_a.zeff,
-        repulsion_a.kexp,
-        repulsion_a.klight,
-        repulsion_a.cutoff,
-        device=DEVICE,
-        dtype=torch.double,
+        arep=repulsion_a.arep,
+        zeff=repulsion_a.zeff,
+        kexp=repulsion_a.kexp,
+        klight=repulsion_a.klight,
+        cutoff=repulsion_a.cutoff,
         en=repulsion_a.en,
         enscale=repulsion_a.enscale,
-    )
+    ).to(device=DEVICE, dtype=torch.double)
     repulsion_extension_b = RepulsionExtension(
-        repulsion_b.arep,
-        repulsion_b.zeff,
-        repulsion_b.kexp,
-        repulsion_b.klight,
-        repulsion_b.cutoff,
-        device=DEVICE,
-        dtype=torch.double,
+        arep=repulsion_b.arep,
+        zeff=repulsion_b.zeff,
+        kexp=repulsion_b.kexp,
+        klight=repulsion_b.klight,
+        cutoff=repulsion_b.cutoff,
         en=repulsion_b.en,
         enscale=repulsion_b.enscale,
+    ).to(device=DEVICE, dtype=torch.double)
+    repulsion_extension_a = repulsion_extension_a.replace(
+        label="Repulsion:two-subclasses"
     )
-    repulsion_extension_a.label = repulsion_extension_b.label = (
-        "Repulsion:two-subclasses"
+    repulsion_extension_b = repulsion_extension_b.replace(
+        label="Repulsion:two-subclasses"
     )
     with pytest.raises(ValueError, match="Repulsion:two-subclasses"):
         Model(
@@ -343,7 +339,8 @@ def test_single_system_rejects_ambiguous_labels() -> None:
 
     d3_repulsion = new_repulsion(numbers.unique(), par, **DD)
     assert d3_repulsion is not None
-    first_d3.label = d3_repulsion.label = "same-custom-label"
+    first_d3 = first_d3.replace(label="same-custom-label")
+    d3_repulsion = d3_repulsion.replace(label="same-custom-label")
     with pytest.raises(ValueError, match="same-custom-label"):
         Model(
             par=par,
@@ -359,8 +356,8 @@ def test_single_system_d3_labels_preserve_order_and_identity() -> None:
     first = new_dispersion(numbers, par, charge=torch.tensor(0.0, **DD), **DD)
     second = new_dispersion(numbers, par, charge=torch.tensor(0.0, **DD), **DD)
     assert type(first) is DispersionD3 and type(second) is DispersionD3
-    first.label = "D3:first"
-    second.label = "D3:second"
+    first = first.replace(label="D3:first")
+    second = second.replace(label="D3:second")
 
     system = Model(
         par=par,
@@ -390,8 +387,8 @@ def test_single_system_rejects_multiple_exact_single_setup_families() -> None:
     first = new_repulsion(numbers.unique(), par, **DD)
     second = new_repulsion(numbers.unique(), par, **DD)
     assert type(first) is Repulsion and type(second) is Repulsion
-    first.label = "Repulsion:first"
-    second.label = "Repulsion:second"
+    first = first.replace(label="Repulsion:first")
+    second = second.replace(label="Repulsion:second")
 
     with pytest.raises(ValueError, match="at most one exact Repulsion"):
         Model(
@@ -412,13 +409,12 @@ def test_custom_ordinary_es2_replaces_excluded_builtin() -> None:
     default = new_es2(torch.unique(numbers), par, dtype=torch.double)
     assert default is not None
     custom = ES2(
-        default.hubbard,
-        default.lhubbard,
+        hubbard=default.hubbard,
+        lhubbard=default.lhubbard,
         average=default.average,
         gexp=torch.tensor(1.4, **DD),
         shell_resolved=default.shell_resolved,
-        dtype=torch.double,
-    )
+    ).to(dtype=torch.double)
     model = Model(
         par=par,
         config=Config.create(exclude="es2"),
@@ -444,7 +440,7 @@ def test_es3_custom_exact_replaces_excluded_builtin() -> None:
     reference_result = reference_system.singlepoint(positions)
     custom = new_es3(torch.unique(numbers), par, dtype=torch.double)
     assert custom is not None
-    custom.hubbard_derivs = custom.hubbard_derivs * 2.0
+    custom = custom.replace(hubbard_derivs=custom.hubbard_derivs * 2.0)
     system = Model(
         par=par,
         config=Config.create(exclude="es3"),
@@ -463,15 +459,11 @@ def test_es3_custom_exact_replaces_excluded_builtin() -> None:
 def test_es2_subclass_evaluates_via_custom_interaction_path() -> None:
     """A custom ES2 subclass evaluates through SCF without taking the built-in slot."""
 
+    cache_calls = []
+
     class ES2Extension(ES2):
-        __slots__ = ("cache_calls",)
-
-        def __init__(self, *args, **kwargs) -> None:
-            super().__init__(*args, **kwargs)
-            self.cache_calls = 0
-
         def get_cache(self, **kwargs):
-            self.cache_calls += 1
+            cache_calls.append(self.label)
             return super().get_cache(**kwargs)
 
     numbers = torch.tensor([8, 1, 1], device=DEVICE)
@@ -483,14 +475,13 @@ def test_es2_subclass_evaluates_via_custom_interaction_path() -> None:
     original = new_es2(torch.unique(numbers), par, dtype=torch.double)
     assert original is not None
     custom = ES2Extension(
-        original.hubbard,
-        original.lhubbard,
+        hubbard=original.hubbard,
+        lhubbard=original.lhubbard,
         average=original.average,
         gexp=original.gexp,
         shell_resolved=original.shell_resolved,
-        dtype=torch.double,
-    )
-    custom.label = "ES2"
+    ).to(dtype=torch.double)
+    custom = custom.replace(label="ES2")
     ref_system = Model(
         par=par, config=Config.create(int_driver="pytorch")
     ).setup(numbers)
@@ -503,17 +494,10 @@ def test_es2_subclass_evaluates_via_custom_interaction_path() -> None:
     assert system.es2_setup is None
     assert system.es2_interaction is None
     result = system.singlepoint(positions)
-    assert custom.cache_calls == 1
+    assert len(cache_calls) == 1
     torch.testing.assert_close(
         result.energy, ref_system.singlepoint(positions).energy
     )
-
-
-def test_exact_es2_es3_mutations_are_rejected() -> None:
-    """Only exact migrated ES2/ES3 objects reject update and reset."""
-    numbers = torch.tensor([8, 1, 1], device=DEVICE)
-    par = ParamModule(GFN1_XTB, **DD)
-    calc = Calculator(numbers, par, dtype=torch.double, opts={"verbosity": 0})
 
 
 def test_es2_setup_does_not_alias_legacy_gexp() -> None:

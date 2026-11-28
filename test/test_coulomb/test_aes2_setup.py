@@ -346,8 +346,7 @@ def test_aes2_exact_replacement_and_duplicate_label_rejection() -> None:
         rmax=custom_base.rmax,
         rad=custom_base.rad,
         vcn=custom_base.vcn,
-        **DD,
-    )
+    ).to(**DD)
     system = Model(
         par=parameters,
         config=Config.create(exclude=("aes2", "d4sc", "disp")),
@@ -367,17 +366,16 @@ def test_aes2_exact_replacement_and_duplicate_label_rejection() -> None:
     assert not torch.allclose(custom_result.energy, default_result.energy)
 
     duplicate = AES2(
-        custom_base.dmp3,
-        custom_base.dmp5,
-        custom_base.dkernel,
-        custom_base.qkernel,
-        custom_base.shift,
-        custom_base.kexp,
-        custom_base.rmax,
-        custom_base.rad,
-        custom_base.vcn,
-        **DD,
-    )
+        dmp3=custom_base.dmp3,
+        dmp5=custom_base.dmp5,
+        dkernel=custom_base.dkernel,
+        qkernel=custom_base.qkernel,
+        shift=custom_base.shift,
+        kexp=custom_base.kexp,
+        rmax=custom_base.rmax,
+        rad=custom_base.rad,
+        vcn=custom_base.vcn,
+    ).to(**DD)
     with pytest.raises(ValueError, match="AES2.*ambiguous"):
         InteractionList(custom, duplicate)
 
@@ -385,18 +383,17 @@ def test_aes2_exact_replacement_and_duplicate_label_rejection() -> None:
         pass
 
     subclass = Extension(
-        custom_base.dmp3,
-        custom_base.dmp5,
-        custom_base.dkernel,
-        custom_base.qkernel,
-        custom_base.shift,
-        custom_base.kexp,
-        custom_base.rmax,
-        custom_base.rad,
-        custom_base.vcn,
-        **DD,
-    )
-    subclass.label = "AES2"
+        dmp3=custom_base.dmp3,
+        dmp5=custom_base.dmp5,
+        dkernel=custom_base.dkernel,
+        qkernel=custom_base.qkernel,
+        shift=custom_base.shift,
+        kexp=custom_base.kexp,
+        rmax=custom_base.rmax,
+        rad=custom_base.rad,
+        vcn=custom_base.vcn,
+    ).to(**DD)
+    subclass = subclass.replace(label="AES2")
     with pytest.raises(ValueError, match="AES2.*ambiguous"):
         InteractionList(custom, subclass)
 

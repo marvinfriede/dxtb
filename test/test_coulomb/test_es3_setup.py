@@ -50,7 +50,7 @@ def _energy(system, charges: Charges) -> torch.Tensor:
     assert system.es3_setup is not None
     assert system.es3_interaction is not None
     cache = ES3Cache(
-        system.es3_setup.hubbard_derivs,
+        hd=system.es3_setup.hubbard_derivs,
         shell_resolved=system.es3_setup.shell_resolved,
     )
     orbital_charges = Charges(

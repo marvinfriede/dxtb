@@ -182,12 +182,11 @@ def test_setup_honors_component_species_lists_and_freezes_them() -> None:
     default = new_halogen(torch.unique(numbers), par, **DD)
     assert default is not None
     custom = Halogen(
-        default.damp,
-        default.rscale,
-        default.bond_strength,
+        damp=default.damp,
+        rscale=default.rscale,
+        bond_strength=default.bond_strength,
         cutoff=default.cutoff,
-        **DD,
-    )
+    ).to(**DD)
     custom_system = Model(
         par=par,
         config=Config.create(exclude=(*_EXCLUDE, "hal")),
@@ -205,7 +204,7 @@ def test_setup_honors_component_species_lists_and_freezes_them() -> None:
 
     # Setup captures the lists as masks; later object mutation affects only a
     # newly constructed System.
-    custom.halogens = []
+    custom = custom.replace(halogens=())
     unchanged = _classical_energy(custom_system, positions.clone())
     torch.testing.assert_close(unchanged, default_energy)
     changed_system = Model(
@@ -218,8 +217,7 @@ def test_setup_honors_component_species_lists_and_freezes_them() -> None:
         torch.zeros_like(default_energy),
     )
 
-    custom.halogens = [17, 35, 53, 85]
-    custom.bases = []
+    custom = custom.replace(halogens=(17, 35, 53, 85), bases=())
     no_base_system = Model(
         par=par,
         config=Config.create(exclude=(*_EXCLUDE, "hal")),
@@ -249,13 +247,12 @@ def test_halogen_subclass_inherited_get_cache_honors_species_lists() -> None:
         pass
 
     custom = CustomSpeciesHalogen(
-        ordinary.damp,
-        ordinary.rscale,
-        ordinary.bond_strength,
+        damp=ordinary.damp,
+        rscale=ordinary.rscale,
+        bond_strength=ordinary.bond_strength,
         cutoff=ordinary.cutoff,
-        **DD,
-    )
-    custom.halogens = []
+    ).to(**DD)
+    custom = custom.replace(halogens=())
     setup = custom.get_cache(numbers, IndexHelper.from_numbers(numbers, par))
     assert not setup.halogen_mask.any()
 
@@ -538,12 +535,11 @@ def test_exact_user_halogen_replaces_excluded_builtin() -> None:
     ordinary = new_halogen(torch.unique(numbers), par, **DD)
     assert ordinary is not None
     custom = Halogen(
-        ordinary.damp,
-        ordinary.rscale,
-        ordinary.bond_strength * 2.0,
+        damp=ordinary.damp,
+        rscale=ordinary.rscale,
+        bond_strength=ordinary.bond_strength * 2.0,
         cutoff=ordinary.cutoff,
-        **DD,
-    )
+    ).to(**DD)
     custom_system = Model(
         par=par,
         config=Config.create(exclude=(*_EXCLUDE, "hal")),
@@ -575,11 +571,13 @@ def test_duplicate_halogen_labels_are_rejected(with_subclass: bool) -> None:
             pass
 
         custom = HalogenExtension(
-            base.damp, base.rscale, base.bond_strength, **DD
-        )
-        custom.label = "Halogen"
+            damp=base.damp, rscale=base.rscale, bond_strength=base.bond_strength
+        ).to(**DD)
+        custom = custom.replace(label="Halogen")
     else:
-        custom = Halogen(base.damp, base.rscale, base.bond_strength, **DD)
+        custom = Halogen(
+            damp=base.damp, rscale=base.rscale, bond_strength=base.bond_strength
+        ).to(**DD)
     with pytest.raises(ValueError, match="Halogen.*ambiguous"):
         Model(
             par=par,
@@ -587,7 +585,9 @@ def test_duplicate_halogen_labels_are_rejected(with_subclass: bool) -> None:
             classical=(custom,),
         ).setup(numbers)
     if not with_subclass:
-        second = Halogen(base.damp, base.rscale, base.bond_strength, **DD)
+        second = Halogen(
+            damp=base.damp, rscale=base.rscale, bond_strength=base.bond_strength
+        ).to(**DD)
         with pytest.raises(ValueError, match="Halogen.*ambiguous"):
             Model(
                 par=par,

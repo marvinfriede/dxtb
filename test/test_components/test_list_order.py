@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+from tad_mctc.tree import context
 
 from dxtb._src.components.base import Component
 from dxtb._src.components.classicals.base import Classical, ClassicalCache
@@ -43,11 +44,14 @@ from dxtb._src.scf.interactions import (
 
 
 class _OrderedValue(Component):
-    def __init__(self, label: str, hash_value: int, key: str | None = None):
-        super().__init__()
-        self.label = label
-        self.hash_value = hash_value
-        self.key = label if key is None else key
+    hash_value: int = context(default=0)
+    key: str = context(default="")
+
+    def _normalize(self) -> dict:
+        updates = super()._normalize()
+        if not self.key:
+            updates["key"] = self.label
+        return updates
 
     def __hash__(self) -> int:
         return self.hash_value
@@ -72,10 +76,7 @@ class _List(ComponentList):
 
 
 class _Classical(Classical):
-    def __init__(self, label: str, value: float = 0.0):
-        super().__init__()
-        self.label = label
-        self.value = value
+    value: float = context(default=0.0)
 
     def get_cache(self, *_: object, **__: object) -> ClassicalCache:
         return ClassicalCache()
@@ -86,9 +87,9 @@ class _Classical(Classical):
 
 def test_component_list_preserves_input_order() -> None:
     """Distinct components retain their supplied order despite controlled hashes."""
-    a = _OrderedValue("Z", 3)
-    b = _OrderedValue("A", 1)
-    c = _OrderedValue("M", 2)
+    a = _OrderedValue(label="Z", hash_value=3)
+    b = _OrderedValue(label="A", hash_value=1)
+    c = _OrderedValue(label="M", hash_value=2)
 
     components = _List(a, b, c).components
 
@@ -100,9 +101,9 @@ def test_component_list_preserves_input_order() -> None:
 
 def test_component_list_deduplicates_first_equal_value() -> None:
     """First equal/hash-equivalent object wins, matching set duplicate semantics."""
-    first = _OrderedValue("first", 17, key="same")
-    duplicate = _OrderedValue("duplicate", 17, key="same")
-    other = _OrderedValue("other", 4)
+    first = _OrderedValue(label="first", hash_value=17, key="same")
+    duplicate = _OrderedValue(label="duplicate", hash_value=17, key="same")
+    other = _OrderedValue(label="other", hash_value=4)
 
     components = _List(first, duplicate, other).components
 
@@ -112,8 +113,8 @@ def test_component_list_deduplicates_first_equal_value() -> None:
 
 def test_component_list_keeps_none_and_duplicate_instance_contract() -> None:
     """None is ignored and repeated component instances appear only once."""
-    a = _OrderedValue("Z", 3)
-    b = _OrderedValue("A", 1)
+    a = _OrderedValue(label="Z", hash_value=3)
+    b = _OrderedValue(label="A", hash_value=1)
 
     assert _List(None, a, None, b, a).components == [a, b]
     assert _List(b, a, b).components == [b, a]
@@ -121,9 +122,9 @@ def test_component_list_keeps_none_and_duplicate_instance_contract() -> None:
 
 def test_component_list_type_preserves_order() -> None:
     """Applying a dtype keeps the existing component sequence."""
-    a = _OrderedValue("Z", 3)
-    b = _OrderedValue("A", 1)
-    c = _OrderedValue("M", 2)
+    a = _OrderedValue(label="Z", hash_value=3)
+    b = _OrderedValue(label="A", hash_value=1)
+    c = _OrderedValue(label="M", hash_value=2)
     components = _List(a, b, c)
 
     components.type(torch.float32)
@@ -143,8 +144,8 @@ def test_component_list_keeps_hashability_requirement() -> None:
 
 def test_classical_list_preserves_order_and_duplicate_label_guard() -> None:
     """Classical contributions retain input order and reject migrated label collisions."""
-    a = _Classical("A", 1.0)
-    b = _Classical("B", 2.0)
+    a = _Classical(label="A", value=1.0)
+    b = _Classical(label="B", value=2.0)
     classicals = ClassicalList(a, b)
     assert classicals.components == [a, b]
     assert ClassicalList(a, a, b).components == [a, b]
@@ -155,8 +156,8 @@ def test_classical_list_preserves_order_and_duplicate_label_guard() -> None:
     assert energies["A"] == 1.0
     assert energies["B"] == 2.0
 
-    first = _Classical("Repulsion")
-    second = _Classical("Repulsion")
+    first = _Classical(label="Repulsion")
+    second = _Classical(label="Repulsion")
     with pytest.raises(ValueError, match="Duplicate repulsion labels"):
         ClassicalList(first, second)
 
@@ -165,8 +166,8 @@ def test_interaction_and_functional_order_match() -> None:
     """Functional descriptors inherit the caller's interaction order."""
     numbers = torch.tensor([1, 1])
     positions = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
-    field = ElectricField(torch.tensor([0.0, 0.0, 0.2]))
-    field_grad = ElectricFieldGrad(torch.eye(3))
+    field = ElectricField(field=torch.tensor([0.0, 0.0, 0.2]))
+    field_grad = ElectricFieldGrad(field_grad=torch.eye(3))
     interactions = InteractionList(field_grad, field)
     cache = InteractionListCache()
     cache[field_grad.label] = build_electric_field_grad_data(
@@ -186,8 +187,8 @@ def test_interaction_and_functional_order_match() -> None:
 
 def test_interaction_list_rejects_distinct_duplicate_label() -> None:
     """Distinct migrated interaction objects with the same label remain invalid."""
-    first = ElectricField(torch.zeros(3))
-    second = ElectricField(torch.ones(3))
+    first = ElectricField(field=torch.zeros(3))
+    second = ElectricField(field=torch.ones(3))
 
     with pytest.raises(
         ValueError, match="Duplicate migrated interaction labels"

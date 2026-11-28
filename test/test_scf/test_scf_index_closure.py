@@ -464,7 +464,7 @@ def test_standalone_scf_without_system_object_and_metadata_guards() -> None:
     mats1 = IntegralMatrices(hcore=hcore1, overlap=ovlp1)
     es2_1 = new_es2(nums, par1, shell_resolved=True, dtype=torch.float64)
     assert es2_1 is not None
-    ilist1 = InteractionList(es2_1, device=pos.device, dtype=pos.dtype)
+    ilist1 = InteractionList(es2_1)
     icache1 = ilist1.get_cache(numbers=nums, positions=pos, ihelp=ihelp1)
     scf_cfg1 = ConfigSCF.create(method=labels.GFN1_XTB, maxiter=40)
 
@@ -965,9 +965,7 @@ def test_batched_implicit_solve_and_all_interaction_metadata_guards(
         numbers=nums_h2, positions=pos_h2o[:2], ihelp=ih_h2
     )
     for comp in calc2.interactions.components:
-        single_list = InteractionList(
-            comp, device=pos_h2o.device, dtype=pos_h2o.dtype
-        )
+        single_list = InteractionList(comp)
         bad_cache = empty_ilist.get_cache(
             numbers=nums_h2o, positions=pos_h2o, ihelp=calc2.ihelp
         )
@@ -980,7 +978,7 @@ def test_batched_implicit_solve_and_all_interaction_metadata_guards(
             valid_entry = valid_d4_cache[comp.label]
             bad_disp = ic2_h2[comp.label].dispmat
             valid_d4_cache[comp.label] = DispersionD4SCCache(
-                valid_entry.cn, bad_disp, valid_entry.model
+                cn=valid_entry.cn, dispmat=bad_disp, model=valid_entry.model
             )
             with pytest.raises(ValueError, match=r"d4sc\.dispmat"):
                 setup_scf_inputs(
@@ -1013,9 +1011,9 @@ def test_batched_implicit_solve_and_all_interaction_metadata_guards(
     assert d4_f32 is not None
     d4_f64 = new_d4sc(nums_h2o, par2, dtype=torch.float64)
     assert d4_f64 is not None
-    valid_d4_ic = InteractionList(
-        d4_f64, device=pos_h2o.device, dtype=torch.float64
-    ).get_cache(numbers=nums_h2o, positions=pos_h2o, ihelp=calc2.ihelp)
+    valid_d4_ic = InteractionList(d4_f64).get_cache(
+        numbers=nums_h2o, positions=pos_h2o, ihelp=calc2.ihelp
+    )
     with pytest.raises(DtypeError, match="d4sc.setup"):
         setup_scf_inputs(
             nums_h2o,
@@ -1023,26 +1021,7 @@ def test_batched_implicit_solve_and_all_interaction_metadata_guards(
             n0_2,
             occ_2,
             nel_2,
-            InteractionList(d4_f32, device=pos_h2o.device, dtype=torch.float32),
-            valid_d4_ic,
-            calc2.ihelp,
-            cfg2,
-        )
-    import copy
-
-    d4_meta = copy.copy(d4_f64)
-    d4_meta.rcov = d4_f64.rcov.to(device="meta")
-    d4_meta_list = InteractionList(
-        d4_meta, device=pos_h2o.device, dtype=torch.float64
-    )
-    with pytest.raises(DeviceError, match="d4sc.setup"):
-        setup_scf_inputs(
-            nums_h2o,
-            mats2,
-            n0_2,
-            occ_2,
-            nel_2,
-            d4_meta_list,
+            InteractionList(d4_f32),
             valid_d4_ic,
             calc2.ihelp,
             cfg2,
@@ -1056,15 +1035,15 @@ def test_batched_implicit_solve_and_all_interaction_metadata_guards(
             n0_2,
             occ_2,
             nel_2,
-            InteractionList(d4_h2, device=pos_h2o.device, dtype=torch.float64),
+            InteractionList(d4_h2),
             valid_d4_ic,
             calc2.ihelp,
             cfg2,
         )
 
     # ElectricField, ElectricFieldGrad, and GeneralizedBorn shape checks
-    ef = ElectricField(torch.zeros((3,), dtype=torch.float64))
-    ef_list = InteractionList(ef, device=pos_h2o.device, dtype=torch.float64)
+    ef = ElectricField(field=torch.zeros((3,), dtype=torch.float64))
+    ef_list = InteractionList(ef)
     ef_bad = ef_list.get_cache(
         numbers=nums_h2, positions=pos_h2o[:2], ihelp=ih_h2
     )
@@ -1081,8 +1060,8 @@ def test_batched_implicit_solve_and_all_interaction_metadata_guards(
             cfg2,
         )
 
-    efg = ElectricFieldGrad(torch.zeros((3, 3), dtype=torch.float64))
-    efg_list = InteractionList(efg, device=pos_h2o.device, dtype=torch.float64)
+    efg = ElectricFieldGrad(field_grad=torch.zeros((3, 3), dtype=torch.float64))
+    efg_list = InteractionList(efg)
     efg_bad = efg_list.get_cache(
         numbers=nums_h2, positions=pos_h2o[:2], ihelp=ih_h2
     )
@@ -1099,10 +1078,10 @@ def test_batched_implicit_solve_and_all_interaction_metadata_guards(
             cfg2,
         )
 
-    gb_h2 = GeneralizedBorn(
+    gb_h2 = GeneralizedBorn.create(
         nums_h2, torch.tensor(78.9, dtype=torch.float64), dtype=torch.float64
     )
-    gb_list = InteractionList(gb_h2, device=pos_h2o.device, dtype=torch.float64)
+    gb_list = InteractionList(gb_h2)
     gb_bad_cache = gb_list.get_cache(
         numbers=nums_h2, positions=pos_h2o[:2], ihelp=ih_h2
     )
@@ -1120,6 +1099,8 @@ def test_batched_implicit_solve_and_all_interaction_metadata_guards(
         )
 
     # Zero-orbital synthetic IndexHelper rejected before 0/0 normalization
+    import copy
+
     zero_orb_ih = copy.copy(calc2.ihelp)
     object.__setattr__(
         zero_orb_ih, "orbitals_to_shell", torch.empty((0,), dtype=torch.int64)

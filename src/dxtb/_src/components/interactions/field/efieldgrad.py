@@ -26,6 +26,7 @@ from __future__ import annotations
 import torch
 from tad_mctc.exceptions import DeviceError, DtypeError
 from tad_mctc.math import einsum
+from tad_mctc.tree import child
 
 from dxtb import IndexHelper
 from dxtb._src.typing import Any, Tensor, override
@@ -58,7 +59,7 @@ def build_electric_field_grad_data(
     off = (rows != cols).to(field_grad.dtype)
     efg = field_grad[rows, cols] + off * field_grad[cols, rows]
     vqp = (-1.0 / 3.0) * efg.expand(*positions.shape[:-1], 6)
-    return ElectricFieldGradCache(vat, vdp, vqp)
+    return ElectricFieldGradCache(vat=vat, vdp=vdp, vqp=vqp)
 
 
 class ElectricFieldGradCache(InteractionCache):
@@ -66,41 +67,23 @@ class ElectricFieldGradCache(InteractionCache):
     Restart data for the electric field gradient interaction.
     """
 
-    vat: Tensor
+    vat: Tensor = child()
     """
     Atom-resolved monopolar potential from the instantaneous electric field
     gradient (shape: ``(..., nat)``).
     """
 
-    vdp: Tensor
+    vdp: Tensor = child()
     """
     Atom-resolved dipolar potential from the instantaneous electric field
     gradient (shape: ``(..., nat, 3)``).
     """
 
-    vqp: Tensor
+    vqp: Tensor = child()
     """
     Atom-resolved quadrupolar potential from the instantaneous electric field
     gradient (shape: ``(..., nat, 6)``).
     """
-
-    __slots__ = ["vat", "vdp", "vqp"]
-
-    def __init__(
-        self,
-        vat: Tensor,
-        vdp: Tensor,
-        vqp: Tensor,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> None:
-        super().__init__(
-            device=device if device is None else vat.device,
-            dtype=dtype if dtype is None else vat.dtype,
-        )
-        self.vat = vat
-        self.vdp = vdp
-        self.vqp = vqp
 
 
 class ElectricFieldGrad(Interaction):
@@ -136,22 +119,8 @@ class ElectricFieldGrad(Interaction):
         autograd.
     """
 
-    field_grad: Tensor
+    field_grad: Tensor = child()
     """Instantaneous electric field gradient (shape: ``(3, 3)``)."""
-
-    __slots__ = ["field_grad"]
-
-    def __init__(
-        self,
-        field_grad: Tensor,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ):
-        super().__init__(
-            device=device if device is None else field_grad.device,
-            dtype=dtype if dtype is None else field_grad.dtype,
-        )
-        self.field_grad = field_grad
 
     # pylint: disable=unused-argument
     @override
@@ -281,8 +250,4 @@ def new_efield_grad(
                 f"gradient ({field_grad.dtype}) do not match."
             )
 
-    return ElectricFieldGrad(
-        field_grad,
-        device=device if device is None else field_grad.device,
-        dtype=dtype if dtype is None else field_grad.dtype,
-    )
+    return ElectricFieldGrad(field_grad=field_grad)

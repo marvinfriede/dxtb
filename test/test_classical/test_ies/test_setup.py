@@ -389,7 +389,7 @@ def test_exact_custom_ies_replaces_excluded_builtin_and_mutation_is_rejected() -
     par = _module()
     custom = new_ies(numbers, par, **DD)
     assert custom is not None
-    custom.cutoff = custom.cutoff.new_tensor(0.5)
+    custom = custom.replace(cutoff=custom.cutoff.new_tensor(0.5))
     system = Model(
         par=par,
         config=Config.create(exclude=("ies", *EXCLUDE)),
@@ -419,17 +419,16 @@ def test_ies_duplicate_labels_are_rejected() -> None:
         pass
 
     extension = IESExtension(
-        custom1.chi,
-        custom1.eeq_kcn,
-        custom1.eta,
-        custom1.rad,
-        custom1.rcov,
-        custom1.cutoff,
-        custom1.cn_max,
-        custom1.cn_kcn,
-        **DD,
-    )
-    extension.label = "IES"
+        chi=custom1.chi,
+        eeq_kcn=custom1.eeq_kcn,
+        eta=custom1.eta,
+        rad=custom1.rad,
+        rcov=custom1.rcov,
+        cutoff=custom1.cutoff,
+        cn_max=custom1.cn_max,
+        cn_kcn=custom1.cn_kcn,
+    ).to(**DD)
+    extension = extension.replace(label="IES")
 
     with pytest.raises(ValueError, match="IES.*ambiguous"):
         Model(

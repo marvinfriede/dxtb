@@ -35,14 +35,14 @@ leaves, i.e., it can be called inside a differentiated function.
 .. note::
 
     ``System`` captures immutable core setups (``ExactSystemCore``) for
-    built-in components and tensor-only custom classicals alongside
-    mutation-tracked snapshots for custom classical setups. Integral matrix
+    built-in and custom components. Integral matrix
     production uses explicit setup values and does not store per-call outputs
     on ``System``.
 """
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from functools import wraps
@@ -95,11 +95,8 @@ from dxtb._src.components.classicals import (
 )
 from dxtb._src.components.classicals.list import ClassicalListCache
 from dxtb._src.components.custom import (
-    ComponentMutationSnapshot,
     CustomClassicalCoreSetup,
-    snapshot_component_state,
-    try_build_custom_classical_core_setup,
-    validate_custom_component_graph,
+    validate_setup_data,
 )
 from dxtb._src.components.interactions import Interaction, InteractionList
 from dxtb._src.components.interactions.base import (
@@ -154,7 +151,7 @@ from dxtb._src.integral.evaluation import (
 from dxtb._src.param import ParamModule
 from dxtb._src.timing import timer
 from dxtb._src.typing import DD, Tensor
-from dxtb._src.utils.tensors import disable_functorch, normalize_device
+from dxtb._src.utils.tensors import disable_functorch
 from dxtb._src.xtb.h0 import H0Setup, H0SetupNode, setup_h0, setup_h0_core
 from dxtb.config import Config
 
@@ -1183,10 +1180,10 @@ class System:
     )
     """Setup-time ownership and tensor-version snapshot for fast validation."""
 
-    _custom_classical_snapshots: tuple[
-        tuple[Classical, ComponentMutationSnapshot, Any], ...
-    ] = field(default=(), repr=False)
-    """Setup-time ``(component, mutation_snapshot, setup)`` entries for custom Classicals."""
+    _custom_classical_setups: tuple[tuple[Classical, Any], ...] = field(
+        default=(), repr=False
+    )
+    """Setup-time ``(component, setup)`` pairs of the custom Classicals."""
 
     _auto_classical_ids: dict[int, str] = field(
         default_factory=dict, repr=False
@@ -2282,7 +2279,7 @@ class System:
                     term is not None
                     and term.kind == "custom"
                     and isinstance(term.setup, CustomClassicalCoreSetup)
-                    and term.setup.matches_component_state(component)
+                    and term.setup.component is component
                 ):
                     expected_classical_terms.append(
                         (
@@ -2676,16 +2673,11 @@ class Model:
             if inter is not None
         }
 
-        interactions = InteractionList(
-            es2, aes2, es3, d4sc, *self.interaction, **dd
-        )
+        interactions = InteractionList(es2, aes2, es3, d4sc, *self.interaction)
         _require_component_instances(
             interactions.components, Interaction, "Interaction"
         )
         validate_unique_interaction_labels(interactions.components)
-        for interaction in interactions.components:
-            if type(interaction) not in BUILTIN_INTERACTION_TYPES:
-                validate_custom_component_graph(interaction)
 
         # Preserve automatic integral promotion for field-labelled subclasses
         # and custom multipole interactions.
@@ -2827,7 +2819,7 @@ class Model:
         }
 
         classicals = ClassicalList(
-            halogen, ies, dispersion, repulsion, srb, *self.classical, **dd
+            halogen, ies, dispersion, repulsion, srb, *self.classical
         )
         _require_component_instances(
             classicals.components, Classical, "Classical"
@@ -2882,9 +2874,7 @@ class Model:
         # setup directly; custom and packed setups are also retained in
         # ``packed_classical_setups``.
         packed_classical_setups = ClassicalListCache()
-        custom_classical_snapshots: list[
-            tuple[Classical, ComponentMutationSnapshot, Any]
-        ] = []
+        custom_classical_setups: list[tuple[Classical, Any]] = []
         d3_setups: list[tuple[DispersionD3, DispersionD3CoreSetup]] = []
         repulsion_classical = next(
             (c for c in classicals.components if type(c) is Repulsion), None
@@ -2909,37 +2899,9 @@ class Model:
         )
         halogen_setup = None
 
-        pre_custom_states: (
-            tuple[
-                tuple[
-                    Tensor, int | None, torch.Size, torch.dtype, torch.device
-                ],
-                ...,
-            ]
-            | None
-        ) = None
-        pre_custom_snapshots: (
-            tuple[tuple[Tensor, Tensor | None], ...] | None
-        ) = None
-        if any(
-            type(c) not in BUILTIN_CLASSICAL_TYPES
-            for c in classicals.components
-        ):
-            structural_leaves = (
-                numbers,
-                *(getattr(ihelp, name) for name in ihelp._child_names),
-            )
-            pre_custom_states = _snapshot_tensor_states(structural_leaves)
-            pre_custom_snapshots = tuple(
-                (leaf, _clone_detached_concrete(leaf))
-                for leaf in structural_leaves
-            )
-
         classical_terms: list[ClassicalTermDescriptor] = []
         if batch_mode == 0:
             for position, component in enumerate(classicals.components):
-                if type(component) not in BUILTIN_CLASSICAL_TYPES:
-                    validate_custom_component_graph(component)
                 timer.start(component.label, parent_uid="Classicals")
                 component_setup = component.get_cache(numbers, ihelp)
                 setup: CoreSetup | None
@@ -2974,43 +2936,12 @@ class Model:
                     setup = core_halogen_setup(component_setup)
                     halogen_setup = setup
                 else:
-                    assert (
-                        pre_custom_states is not None
-                        and pre_custom_snapshots is not None
-                    )
-                    if not _structural_leaves_unchanged(
-                        (
-                            numbers,
-                            *(
-                                getattr(ihelp, name)
-                                for name in ihelp._child_names
-                            ),
-                        ),
-                        pre_custom_states,
-                        pre_custom_snapshots,
-                    ):
-                        raise ValueError(
-                            "System IndexHelper is incompatible with the captured System setup."
-                        )
-                    validate_custom_component_graph(
-                        (component, component_setup)
-                    )
+                    component_setup = _builtin_setup_node(component_setup)
+                    validate_setup_data(component, component_setup)
                     packed_classical_setups[component.label] = component_setup
-                    comp_snap = snapshot_component_state(
-                        component, component_setup
-                    )
-                    custom_classical_snapshots.append(
-                        (
-                            component,
-                            comp_snap,
-                            component_setup,
-                        )
-                    )
-                    setup = try_build_custom_classical_core_setup(
-                        component,
-                        component_setup,
-                        dd,
-                        mutation_snapshot=comp_snap,
+                    custom_classical_setups.append((component, component_setup))
+                    setup = CustomClassicalCoreSetup(
+                        component=component, cache=component_setup
                     )
                 timer.stop(component.label)
 
@@ -3028,8 +2959,6 @@ class Model:
                     )
         else:
             for component in classicals.components:
-                if type(component) not in BUILTIN_CLASSICAL_TYPES:
-                    validate_custom_component_graph(component)
                 timer.start(component.label, parent_uid="Classicals")
                 batched_setup = component.get_cache(numbers, ihelp)
                 if component is repulsion_classical:
@@ -3043,38 +2972,13 @@ class Model:
                 elif component is halogen_classical:
                     halogen_setup = batched_setup
                 else:
-                    packed_classical_setups[component.label] = batched_setup
                     if type(component) not in BUILTIN_CLASSICAL_TYPES:
-                        assert (
-                            pre_custom_states is not None
-                            and pre_custom_snapshots is not None
-                        )
-                        if not _structural_leaves_unchanged(
-                            (
-                                numbers,
-                                *(
-                                    getattr(ihelp, name)
-                                    for name in ihelp._child_names
-                                ),
-                            ),
-                            pre_custom_states,
-                            pre_custom_snapshots,
-                        ):
-                            raise ValueError(
-                                "System IndexHelper is incompatible with the captured System setup."
-                            )
-                        validate_custom_component_graph(
+                        batched_setup = _builtin_setup_node(batched_setup)
+                        validate_setup_data(component, batched_setup)
+                        custom_classical_setups.append(
                             (component, batched_setup)
                         )
-                        custom_classical_snapshots.append(
-                            (
-                                component,
-                                snapshot_component_state(
-                                    component, batched_setup
-                                ),
-                                batched_setup,
-                            )
-                        )
+                    packed_classical_setups[component.label] = batched_setup
                 timer.stop(component.label)
 
         OutputHandler.write_stdout("done", v=4)
@@ -3190,10 +3094,123 @@ class Model:
             dd=dd,
             exact_core=exact_core,
             _setup_index_token=setup_index_token,
-            _custom_classical_snapshots=tuple(custom_classical_snapshots),
+            _custom_classical_setups=tuple(custom_classical_setups),
             _auto_classical_ids=auto_classical_ids,
             _auto_interaction_ids=auto_interaction_ids,
         )
+
+
+def _builtin_setup_node(setup: Any) -> Any:
+    """
+    Return a built-in classical setup (as returned by the inherited
+    ``get_cache`` of a built-in subclass) in its Node form, so that its
+    tensors are visible to transforms and conversions.
+    """
+    converters: tuple[tuple[type, Callable[[Any], Any]], ...] = (
+        (RepulsionSetup, core_repulsion_setup),
+        (ShortRangeBondSetup, core_srb_setup),
+        (DispersionD4Setup, core_dispersion_d4_setup),
+        (IESSetup, core_ies_setup),
+        (HalogenSetup, core_halogen_setup),
+    )
+    for setup_type, convert in converters:
+        if isinstance(setup, setup_type):
+            return convert(setup)
+    return setup
+
+
+def replace_system_components(
+    system: System,
+    classicals: Sequence[Classical],
+    interactions: Sequence[Interaction],
+) -> System:
+    """
+    Return ``system`` with its components replaced position by position.
+
+    Components are immutable, so a changed component (for example a
+    relabelled copy) is a new object; every reference to the old object in
+    the System (the per-component fields, the D3 owners, the exact core
+    terms, the captured custom setups and the automatic-component ids) is
+    redirected to the new one.
+    """
+    old_classicals = system.classicals.components
+    old_interactions = system.interactions.components
+    cmap = {id(o): n for o, n in zip(old_classicals, classicals)}
+    imap = {id(o): n for o, n in zip(old_interactions, interactions)}
+    new_label = {o.label: n.label for o, n in zip(old_classicals, classicals)}
+
+    def _c(comp: Any) -> Any:
+        return None if comp is None else cmap.get(id(comp), comp)
+
+    def _i(comp: Any) -> Any:
+        return None if comp is None else imap.get(id(comp), comp)
+
+    new_classical_list = copy.copy(system.classicals)
+    new_classical_list.components = list(classicals)
+    new_interaction_list = copy.copy(system.interactions)
+    new_interaction_list.components = list(interactions)
+
+    exact_core = system.exact_core
+    if exact_core is not None:
+        exact_core = exact_core.replace(
+            classical_terms=tuple(
+                replace(
+                    term,
+                    label=classicals[term.position].label,
+                    setup=(
+                        CustomClassicalCoreSetup(
+                            component=classicals[term.position],
+                            cache=term.setup.cache,
+                        )
+                        if isinstance(term.setup, CustomClassicalCoreSetup)
+                        else term.setup
+                    ),
+                )
+                for term in exact_core.classical_terms
+            ),
+            interaction_terms=tuple(
+                replace(term, label=interactions[term.position].label)
+                for term in exact_core.interaction_terms
+            ),
+        )
+
+    return replace(
+        system,
+        classicals=new_classical_list,
+        interactions=new_interaction_list,
+        repulsion_classical=_c(system.repulsion_classical),
+        srb_classical=_c(system.srb_classical),
+        d4_classical=_c(system.d4_classical),
+        ies_classical=_c(system.ies_classical),
+        halogen_classical=_c(system.halogen_classical),
+        d3_setups=tuple(
+            (_c(owner), setup) for owner, setup in system.d3_setups
+        ),
+        es2_interaction=_i(system.es2_interaction),
+        es3_interaction=_i(system.es3_interaction),
+        aes2_interaction=_i(system.aes2_interaction),
+        d4sc_interaction=_i(system.d4sc_interaction),
+        generalized_born_interaction=_i(system.generalized_born_interaction),
+        exact_core=exact_core,
+        _packed_classical_setups=ClassicalListCache(
+            {
+                new_label.get(label, label): setup
+                for label, setup in system._packed_classical_setups.items()
+            }
+        ),
+        _custom_classical_setups=tuple(
+            (_c(owner), setup)
+            for owner, setup in system._custom_classical_setups
+        ),
+        _auto_classical_ids={
+            id(cmap.get(cid, None)) if cid in cmap else cid: token
+            for cid, token in system._auto_classical_ids.items()
+        },
+        _auto_interaction_ids={
+            id(imap.get(iid, None)) if iid in imap else iid: token
+            for iid, token in system._auto_interaction_ids.items()
+        },
+    )
 
 
 def _with_int_level(config: Config, level: int) -> Config:

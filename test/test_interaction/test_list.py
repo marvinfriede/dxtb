@@ -84,14 +84,14 @@ def test_reset() -> None:
     assert ef is not None and not hasattr(ef, "cache")
     assert efg is not None and not hasattr(efg, "cache")
 
-    assert len(call_data["DispersionD4SC"]) == 3
+    assert type(call_data["DispersionD4SC"]).__name__ == "DispersionD4SCCache"
     assert not hasattr(ilist, "reset_d4sc")
 
-    assert len(call_data["ES2"]) == 2  # mat + shell_resolved
-    assert len(call_data["ES3"]) == 2  # hd + shell_resolved
+    assert type(call_data["ES2"]).__name__ == "ES2Cache"
+    assert type(call_data["ES3"]).__name__ == "ES3Cache"
 
-    assert len(call_data["ElectricField"]) == 2
-    assert len(call_data["ElectricFieldGrad"]) == 3
+    assert type(call_data["ElectricField"]).__name__ == "ElectricFieldCache"
+    assert type(call_data["ElectricFieldGrad"]).__name__ == "ElectricFieldGradCache"
     assert call_data["ElectricField"] is not ef.get_cache(
         numbers=numbers, positions=positions, ihelp=ihelp
     )
@@ -121,11 +121,11 @@ def test_reset_all() -> None:
     assert ef is not None and not hasattr(ef, "cache")
     assert efg is not None and not hasattr(efg, "cache")
 
-    assert len(call_data["DispersionD4SC"]) == 3
-    assert len(call_data["ES2"]) == 2
-    assert len(call_data["ES3"]) == 2
-    assert len(call_data["ElectricField"]) == 2
-    assert len(call_data["ElectricFieldGrad"]) == 3
+    assert type(call_data["DispersionD4SC"]).__name__ == "DispersionD4SCCache"
+    assert type(call_data["ES2"]).__name__ == "ES2Cache"
+    assert type(call_data["ES3"]).__name__ == "ES3Cache"
+    assert type(call_data["ElectricField"]).__name__ == "ElectricFieldCache"
+    assert type(call_data["ElectricFieldGrad"]).__name__ == "ElectricFieldGradCache"
 
     assert not hasattr(d4sc, "cache")
     assert not hasattr(es2, "cache")

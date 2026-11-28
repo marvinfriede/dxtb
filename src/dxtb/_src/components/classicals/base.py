@@ -97,23 +97,11 @@ class ClassicalCache(ComponentCache):
     Restart data for individual classical contributions.
     """
 
-    __slots__: list[str] = []
-
 
 class Classical(ClassicalABC, Component):
     """
     Base class for calculation of classical contributions.
     """
-
-    label: str
-    """Label for the classical contribution."""
-
-    def __init__(
-        self,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ):
-        super().__init__(device, dtype)
 
     def get_gradient(
         self,

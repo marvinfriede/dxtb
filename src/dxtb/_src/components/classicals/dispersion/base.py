@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 
-import torch
+from tad_mctc.tree import child, context
 from tad_dftd import Param as D4Param
 
 from dxtb import IndexHelper
@@ -41,39 +41,22 @@ class Dispersion(Classical):
     Base class for dispersion correction.
     """
 
-    numbers: Tensor
+    numbers: Tensor = child()
     """Atomic numbers for all atoms in the Structure (shape: ``(..., nat)``)."""
 
-    param: D4Param
+    param: D4Param = child()
     """Dispersion parameters."""
 
-    charge: Tensor | None
+    charge: Tensor | None = child(default=None, keep_dtype=True)
     """Total charge of the Structure."""
 
-    ref_charges: Literal["eeq", "gfn2"]
+    ref_charges: Literal["eeq", "gfn2"] = context(default="eeq")
     """
     Reference charges for the dispersion model.
     This is only required for charge-dependent models.
 
     :default: ``"eeq"``
     """
-
-    __slots__ = ["numbers", "param", "charge", "ref_charges"]
-
-    def __init__(
-        self,
-        numbers: Tensor,
-        param: D4Param,
-        charge: Tensor | None = None,
-        ref_charges: Literal["eeq", "gfn2"] = "eeq",
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> None:
-        super().__init__(device, dtype)
-        self.numbers = numbers
-        self.param = param
-        self.charge = charge
-        self.ref_charges = ref_charges
 
     @abstractmethod
     def get_cache(

@@ -61,42 +61,29 @@ class DispersionD3Cache(ClassicalCache):
     The dispersion parameters (a1, a2, ...) are given in the constructor.
     """
 
-    __slots__ = [
-        "ref",
-        "rcov",
-        "rvdw",
-        "r4r2",
-        "cutoff",
-        "counting_function",
-        "weighting_function",
-        "damping_function",
-    ]
+    ref: d3.reference.Reference = child()
+    """Reference C6 coefficients and coordination numbers."""
 
-    def __init__(
-        self,
-        ref: d3.reference.Reference,
-        rcov: Tensor,
-        rvdw: Tensor,
-        r4r2: Tensor,
-        cutoff: Tensor,
-        counting_function: CountingFunction,
-        weighting_function: d3.typing.WeightingFunction,
-        damping_function: d3.typing.DampingFunction,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> None:
-        super().__init__(
-            device=device if device is None else rcov.device,
-            dtype=dtype if dtype is None else rcov.dtype,
-        )
-        self.ref = ref
-        self.rcov = rcov
-        self.rvdw = rvdw
-        self.r4r2 = r4r2
-        self.cutoff = cutoff
-        self.counting_function = counting_function
-        self.weighting_function = weighting_function
-        self.damping_function = damping_function
+    rcov: Tensor = child()
+    """Covalent radii of all atoms."""
+
+    rvdw: Tensor = child()
+    """Pairwise van der Waals radii."""
+
+    r4r2: Tensor = child()
+    """R4/R2 ratio of all atoms."""
+
+    cutoff: Tensor = child()
+    """Real-space cutoff of the coordination number."""
+
+    counting_function: CountingFunction = context()
+    """Counting function of the coordination number."""
+
+    weighting_function: d3.typing.WeightingFunction = context()
+    """Weighting function of the reference C6 coefficients."""
+
+    damping_function: d3.typing.DampingFunction = context()
+    """Damping function of the dispersion energy."""
 
 
 class _D3ParameterValue(Node):
@@ -345,7 +332,16 @@ class DispersionD3(Dispersion):
         wf = kwargs.pop("weighting_function", d3.model.gaussian_weight)
         df = kwargs.pop("damping_function", d3.damping.rational_damping)
 
-        return DispersionD3Cache(ref, rcov, rvdw, r4r2, cutoff, cf, wf, df)
+        return DispersionD3Cache(
+            ref=ref,
+            rcov=rcov,
+            rvdw=rvdw,
+            r4r2=r4r2,
+            cutoff=cutoff,
+            counting_function=cf,
+            weighting_function=wf,
+            damping_function=df,
+        )
 
     @override
     def get_energy(

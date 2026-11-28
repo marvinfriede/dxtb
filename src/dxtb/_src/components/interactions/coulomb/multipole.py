@@ -35,13 +35,7 @@ from tad_mctc.tree import Node, child
 
 from dxtb import IndexHelper
 from dxtb._src.param import Param, ParamModule, as_param_module
-from dxtb._src.typing import (
-    DD,
-    Any,
-    Tensor,
-    TensorLike,
-    override,
-)
+from dxtb._src.typing import DD, Tensor, override
 from dxtb._src.utils.tensors import normalize_device
 
 from ..base import Interaction, InteractionCache
@@ -170,68 +164,37 @@ def build_aes2_data(
     )
 
 
-class AES2Cache(InteractionCache, TensorLike):
+class AES2Cache(InteractionCache):
     """
     Cache for AES2 interaction.
     """
 
-    mrad: Tensor
+    mrad: Tensor = child()
     """Multipole damping radii for all atoms."""
 
-    dkernel: Tensor
+    dkernel: Tensor = child()
     """Kernel for on-site dipole exchange-correlation."""
 
-    qkernel: Tensor
+    qkernel: Tensor = child()
     """Kernel for on-site quadrupole exchange-correlation."""
 
-    amat_sd: Tensor
+    amat_sd: Tensor = child()
     """
     Interation matrix for charges and dipoles
     (shape: ``(..., nat, nat, 3)``).
     """
 
-    amat_dd: Tensor
+    amat_dd: Tensor = child()
     """
     Interation matrix for dipoles and dipoles
     (shape: ``(..., nat, nat, 3, 3)``).
     """
 
-    amat_sq: Tensor
+    amat_sq: Tensor = child()
     """
     Interation matrix for charges and quadrupoles
     (shape: ``(..., nat, nat, 6)``).
     """
-
-    __slots__ = [
-        "mrad",
-        "dkernel",
-        "qkernel",
-        "amat_sd",
-        "amat_dd",
-        "amat_sq",
-    ]
-
-    def __init__(
-        self,
-        mrad: Tensor,
-        dkernel: Tensor,
-        qkernel: Tensor,
-        amat_sd: Tensor,
-        amat_dd: Tensor,
-        amat_sq: Tensor,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> None:
-        super().__init__(
-            device=device if device is None else mrad.device,
-            dtype=dtype if dtype is None else mrad.dtype,
-        )
-        self.mrad = mrad
-        self.dkernel = dkernel
-        self.qkernel = qkernel
-        self.amat_sd = amat_sd
-        self.amat_dd = amat_dd
-        self.amat_sq = amat_sq
 
 
 class AES2(Interaction):
@@ -239,73 +202,32 @@ class AES2(Interaction):
     Isotropic second-order electrostatic energy (ES2).
     """
 
-    dmp3: Tensor
+    dmp3: Tensor = child()
     """Damping function for inverse quadratic contributions."""
 
-    dmp5: Tensor
+    dmp5: Tensor = child()
     """Damping function for inverse cubic contributions."""
 
-    dkernel: Tensor
+    dkernel: Tensor = child()
     """Kernel for on-site dipole exchange-correlation."""
 
-    qkernel: Tensor
+    qkernel: Tensor = child()
     """Kernel for on-site quadrupole exchange-correlation."""
 
-    shift: Tensor
+    shift: Tensor = child()
     """Shift for the generation of the multipolar damping radii."""
 
-    kexp: Tensor
+    kexp: Tensor = child()
     """Exponent for the generation of the multipolar damping radii."""
 
-    rmax: Tensor
+    rmax: Tensor = child()
     """Maximum radius for the multipolar damping radii."""
 
-    rad: Tensor
+    rad: Tensor = child()
     """Base radii for the multipolar damping radii."""
 
-    vcn: Tensor
+    vcn: Tensor = child()
     """Valence coordination number."""
-
-    __slots__ = [
-        "dmp3",
-        "dmp5",
-        "dkernel",
-        "qkernel",
-        "shift",
-        "kexp",
-        "rmax",
-        "rad",
-        "vcn",
-    ]
-
-    def __init__(
-        self,
-        dmp3: Tensor,
-        dmp5: Tensor,
-        dkernel: Tensor,
-        qkernel: Tensor,
-        shift: Tensor,
-        kexp: Tensor,
-        rmax: Tensor,
-        rad: Tensor,
-        vcn: Tensor,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> None:
-        super().__init__(device, dtype)
-
-        # scalar parameters
-        self.dmp3 = dmp3.to(**self.dd)
-        self.dmp5 = dmp5.to(**self.dd)
-        self.shift = shift.to(**self.dd)
-        self.kexp = kexp.to(**self.dd)
-        self.rmax = rmax.to(**self.dd)
-
-        # element-wise parameters
-        self.dkernel = dkernel.to(**self.dd)
-        self.qkernel = qkernel.to(**self.dd)
-        self.rad = rad.to(**self.dd)
-        self.vcn = vcn.to(**self.dd)
 
     # pylint: disable=unused-argument
     @override
@@ -701,14 +623,13 @@ def new_aes2(
     vcn = par.get_elem_param(unique, "mpvcn")
 
     return AES2(
-        dmp3=par.get("multipole.damped.dmp3"),
-        dmp5=par.get("multipole.damped.dmp5"),
-        dkernel=dkernel,
-        qkernel=qkernel,
-        shift=par.get("multipole.damped.shift"),
-        kexp=par.get("multipole.damped.kexp"),
-        rmax=par.get("multipole.damped.rmax"),
-        rad=rad,
-        vcn=vcn,
-        **dd,
+        dmp3=par.get("multipole.damped.dmp3").to(**dd),
+        dmp5=par.get("multipole.damped.dmp5").to(**dd),
+        dkernel=dkernel.to(**dd),
+        qkernel=qkernel.to(**dd),
+        shift=par.get("multipole.damped.shift").to(**dd),
+        kexp=par.get("multipole.damped.kexp").to(**dd),
+        rmax=par.get("multipole.damped.rmax").to(**dd),
+        rad=rad.to(**dd),
+        vcn=vcn.to(**dd),
     )

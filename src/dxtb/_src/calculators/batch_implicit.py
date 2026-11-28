@@ -26,6 +26,7 @@ and mapped implicit differentiation.
 from __future__ import annotations
 
 import dataclasses
+import types
 import warnings
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -55,7 +56,6 @@ from dxtb._src.calculators.singlepoint import (
     _interaction_data,
     build_integral_matrices,
 )
-from dxtb._src.components.base import _NON_TRAVERSABLE_TYPES, _iter_mro_slots
 from dxtb._src.components.classicals.dispersion.d3 import (
     DispersionD3,
     DispersionD3CoreSetup,
@@ -546,6 +546,39 @@ def _detach_scf_inputs(inputs: SCFInputs) -> SCFInputs:
     )
 
 
+_NON_TRAVERSABLE_TYPES = (
+    type(None),
+    bool,
+    int,
+    float,
+    complex,
+    str,
+    bytes,
+    slice,
+    torch.dtype,
+    torch.device,
+    type,
+    types.FunctionType,
+    types.BuiltinFunctionType,
+    types.MethodType,
+    types.ModuleType,
+)
+
+
+def _slot_names(obj: object) -> list[str]:
+    """Return the instance slot attribute names of ``obj`` across its MRO."""
+    names: list[str] = []
+    for cls in type(obj).__mro__:
+        slots = cls.__dict__.get("__slots__", ())
+        for slot in (slots,) if isinstance(slots, str) else slots:
+            if slot in ("__dict__", "__weakref__"):
+                continue
+            if slot.startswith("__") and not slot.endswith("__"):
+                slot = f"_{cls.__name__.lstrip('_')}{slot}"
+            names.append(slot)
+    return names
+
+
 def _collect_object_tensors(
     obj: object,
     excluded_ids: set[int],
@@ -583,7 +616,7 @@ def _collect_object_tensors(
                 found,
             )
     else:
-        for slot in _iter_mro_slots(obj):
+        for slot in _slot_names(obj):
             if hasattr(obj, slot):
                 _collect_object_tensors(
                     getattr(obj, slot), excluded_ids, seen_objs, found
@@ -858,7 +891,7 @@ def _build_lane_inputs(
                 "Explicit field= cannot be combined with a custom interaction "
                 f"using the '{LABEL_EFIELD}' label."
             )
-        call_components.append(ElectricField(lane_field))
+        call_components.append(ElectricField(field=lane_field))
     if lane_field_grad is not None:
         if any(
             component.label == LABEL_EFIELD_GRAD
@@ -868,12 +901,8 @@ def _build_lane_inputs(
                 "Explicit field_grad= cannot be combined with a custom "
                 f"interaction using the '{LABEL_EFIELD_GRAD}' label."
             )
-        call_components.append(ElectricFieldGrad(lane_field_grad))
-    call_interactions = InteractionList(
-        *call_components,
-        device=lane_positions.device,
-        dtype=lane_positions.dtype,
-    )
+        call_components.append(ElectricFieldGrad(field_grad=lane_field_grad))
+    call_interactions = InteractionList(*call_components)
     interaction_data = _interaction_data(
         system, lane_positions, call_interactions, _active_core=core
     )

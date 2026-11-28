@@ -169,16 +169,16 @@ def test_duplicate_canonical_d3_labels_are_rejected() -> None:
     with pytest.raises(ValueError, match="Duplicate DispersionD3 labels"):
         ClassicalList(first, second)
 
-    first.label = "D3:custom"
-    second.label = "D3:custom"
+    first = first.replace(label="D3:custom")
+    second = second.replace(label="D3:custom")
     with pytest.raises(ValueError, match="D3:custom"):
         ClassicalList(first, second)
 
     repeated = ClassicalList(first, first)
     assert repeated.components == [first]
 
-    first.label = "D3:first"
-    second.label = "D3:second"
+    first = first.replace(label="D3:first")
+    second = second.replace(label="D3:second")
     distinct_labels = ClassicalList(first, second)
     assert distinct_labels.components == [first, second]
 
@@ -302,7 +302,9 @@ def test_sparse_d3_parameters_preserve_energy() -> None:
         "a1": torch.tensor(0.49484001, dtype=torch.double),
         "a2": torch.tensor(5.73083694, dtype=torch.double),
     }
-    component = DispersionD3(numbers, sparse, dtype=torch.double)
+    component = DispersionD3(numbers=numbers, param=sparse).to(
+        dtype=torch.double
+    )
     legacy = component.get_cache(numbers)
     core = core_dispersion_d3_setup(
         legacy, numbers, component.numbers, component.param
@@ -454,7 +456,7 @@ def test_system_d3_setup_preserves_parameter_graph_and_snapshot() -> None:
 
     original = setup.as_param()["s6"]
     component.param["s6"] = torch.full_like(original, 0.25)
-    component.numbers = torch.ones_like(component.numbers)
+    component = component.replace(numbers=torch.ones_like(component.numbers))
     after = dispersion_d3_energy(setup, positions).sum()
     torch.testing.assert_close(after, before)
     assert setup.as_param()["s6"] is not component.param["s6"]
@@ -547,7 +549,7 @@ def test_core_cache_snapshot_and_legacy_component_ownership_diverge() -> None:
     before_legacy = component.get_energy(positions, legacy)
 
     component.param["s6"] = torch.full_like(component.param["s6"], 0.25)
-    component.numbers = numbers.flip(0)
+    component = component.replace(numbers=numbers.flip(0))
 
     after_core = system.classicals.get_energy(positions, cache)[component.label]
     after_legacy = component.get_energy(positions, legacy)
@@ -566,20 +568,29 @@ def test_d3_custom_label_validation_preserves_extension_collisions() -> None:
         pass
 
     exact = _component(numbers)
-    exact.label = "D3:shared"
-    extension = D3Extension(numbers, exact.param, dtype=torch.double)
-    extension.label = exact.label
+    exact = exact.replace(label="D3:shared")
+    extension = D3Extension(numbers=numbers, param=exact.param).to(
+        dtype=torch.double
+    )
+    extension = extension.replace(label=exact.label)
     assert ClassicalList(exact, extension).components == [exact, extension]
 
     other = _component(numbers)
-    other.label = "D3:extension-only"
-    extension2 = D3Extension(numbers, other.param, dtype=torch.double)
-    extension2.label = other.label
+    other = other.replace(label="D3:extension-only")
+    extension2 = D3Extension(numbers=numbers, param=other.param).to(
+        dtype=torch.double
+    )
+    extension2 = extension2.replace(label=other.label)
     assert ClassicalList(other, extension2).components == [other, extension2]
 
-    first_extension = D3Extension(numbers, exact.param, dtype=torch.double)
-    second_extension = D3Extension(numbers, exact.param, dtype=torch.double)
-    first_extension.label = second_extension.label = "D3:two-extensions"
+    first_extension = D3Extension(numbers=numbers, param=exact.param).to(
+        dtype=torch.double
+    )
+    second_extension = D3Extension(numbers=numbers, param=exact.param).to(
+        dtype=torch.double
+    )
+    first_extension = first_extension.replace(label="D3:two-extensions")
+    second_extension = second_extension.replace(label="D3:two-extensions")
     assert ClassicalList(first_extension, second_extension).components == [
         first_extension,
         second_extension,
@@ -591,9 +602,9 @@ def test_d3_custom_label_validation_preserves_extension_collisions() -> None:
         dtype=torch.double,
     )
     assert repulsion is not None
-    repulsion.label = "D3:cross-family"
+    repulsion = repulsion.replace(label="D3:cross-family")
     cross_family = _component(numbers)
-    cross_family.label = repulsion.label
+    cross_family = cross_family.replace(label=repulsion.label)
     assert ClassicalList(cross_family, repulsion).components == [
         cross_family,
         repulsion,
@@ -604,8 +615,8 @@ def test_legacy_cache_api_and_distinct_custom_labels() -> None:
     numbers = samples["LiH"]["numbers"]
     first = _component(numbers)
     second = _component(numbers)
-    first.label = "D3:first"
-    second.label = "D3:second"
+    first = first.replace(label="D3:first")
+    second = second.replace(label="D3:second")
     classicals = ClassicalList(first, second)
     caches = classicals.get_cache(numbers, None)  # type: ignore[arg-type]
     assert isinstance(caches[first.label], DispersionD3Cache)
@@ -619,7 +630,7 @@ def test_exact_custom_d3_replacement_is_captured() -> None:
     from dxtb.config import Config
 
     replacement = _component(numbers)
-    replacement.label = "D3:replacement"
+    replacement = replacement.replace(label="D3:replacement")
     replacement.param["s6"] = torch.tensor(0.3, dtype=torch.double)
     model = Model(
         par=ParamModule(GFN1_XTB, dtype=torch.double),
@@ -645,9 +656,9 @@ def test_multiple_distinct_custom_d3_labels_keep_order_and_setups() -> None:
     from dxtb.config import Config
 
     first = _component(numbers)
-    first.label = "D3:first"
+    first = first.replace(label="D3:first")
     second = _component(numbers)
-    second.label = "D3:second"
+    second = second.replace(label="D3:second")
     system = Model(
         par=ParamModule(GFN1_XTB, dtype=torch.double),
         config=Config.create(exclude=("disp", "scf")),
@@ -693,21 +704,21 @@ def test_d3_subclass_evaluates_via_custom_classical_path() -> None:
     """D3 subclasses evaluate through the custom Classical hook path."""
     from dxtb.config import Config
 
-    class D3Extension(DispersionD3):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.energy_calls = 0
+    energy_calls = []
 
+    class D3Extension(DispersionD3):
         def get_energy(self, positions, cache, **kwargs):
-            self.energy_calls += 1
+            energy_calls.append(self.label)
             return super().get_energy(positions, cache, **kwargs)
 
     sample = samples["LiH"]
     numbers = sample["numbers"]
     positions = sample["positions"].double()
     base = _component(numbers)
-    extension = D3Extension(numbers, base.param, dtype=torch.double)
-    extension.label = "D3:extension"
+    extension = D3Extension(numbers=numbers, param=base.param).to(
+        dtype=torch.double
+    )
+    extension = extension.replace(label="D3:extension")
     system = Model(
         par=ParamModule(GFN1_XTB, dtype=torch.double),
         config=Config.create(exclude=("disp", "scf")),
@@ -718,4 +729,4 @@ def test_d3_subclass_evaluates_via_custom_classical_path() -> None:
         system.classical_cache[extension.label], DispersionD3Cache
     )
     system.singlepoint(positions)
-    assert extension.energy_calls == 1
+    assert len(energy_calls) == 1

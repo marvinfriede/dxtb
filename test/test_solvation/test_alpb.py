@@ -59,7 +59,7 @@ def test_gb_single(dtype: torch.dtype, name: str, dielectric_constant=78.9):
     charges = sample["charges"].to(**dd)
     ref = sample["energies"].to(**dd)
 
-    gb = alpb.GeneralizedBorn(numbers, dielectric_constant, **dd)
+    gb = alpb.GeneralizedBorn.create(numbers, dielectric_constant, **dd)
     cache = gb.get_cache(numbers=numbers, positions=positions)
     energies = gb.get_monopole_atom_energy(cache, charges)
 
@@ -83,7 +83,7 @@ def test_gb_still_single(
     rvdw = VDW_D3(**dd)[numbers]
     ref = sample["energies_still"].to(**dd)
 
-    gb = alpb.GeneralizedBorn(
+    gb = alpb.GeneralizedBorn.create(
         numbers, dc, kernel="still", rvdw=rvdw, alpb=False, **dd
     )
     cache = gb.get_cache(numbers=numbers, positions=positions)
@@ -106,7 +106,7 @@ def test_gb_scf(dtype: torch.dtype, name: str, dielectric_constant=78.9):
     charges = torch.tensor(0.0).type(dtype)
 
     dielectric_constant = torch.tensor(dielectric_constant, **dd)
-    gb = alpb.GeneralizedBorn(numbers, dielectric_constant, **dd)
+    gb = alpb.GeneralizedBorn.create(numbers, dielectric_constant, **dd)
 
     calc_vac = Calculator(numbers, GFN1_XTB, opts=opts, **dd)
     calc_sol = Calculator(numbers, GFN1_XTB, interaction=[gb], opts=opts, **dd)
@@ -128,12 +128,12 @@ def test_gb_kernel_defaults_and_overrides() -> None:
     charges = sample["charges"].to(**dd)
     dc = torch.tensor(78.9, **dd)
 
-    gb_alpb_default = alpb.GeneralizedBorn(numbers, dc, alpb=True, **dd)
-    gb_gbsa_default = alpb.GeneralizedBorn(numbers, dc, alpb=False, **dd)
-    gb_alpb_still = alpb.GeneralizedBorn(
+    gb_alpb_default = alpb.GeneralizedBorn.create(numbers, dc, alpb=True, **dd)
+    gb_gbsa_default = alpb.GeneralizedBorn.create(numbers, dc, alpb=False, **dd)
+    gb_alpb_still = alpb.GeneralizedBorn.create(
         numbers, dc, alpb=True, kernel="still", **dd
     )
-    gb_gbsa_p16 = alpb.GeneralizedBorn(
+    gb_gbsa_p16 = alpb.GeneralizedBorn.create(
         numbers, dc, alpb=False, kernel="p16", **dd
     )
 
@@ -221,7 +221,9 @@ def test_gb_live_tblite(alpb_flag: bool) -> None:
     e_dx_vac = res_dx_vac.energy.sum(-1)
 
     # Omit kernel= so GeneralizedBorn resolves the default ("p16" or "still").
-    gb = alpb.GeneralizedBorn(numbers, eps, alpb=alpb_flag, rvdw=rvdw, **dd)
+    gb = alpb.GeneralizedBorn.create(
+        numbers, eps, alpb=alpb_flag, rvdw=rvdw, **dd
+    )
     assert gb.kernel == tb_kernel
     pos_sol = positions.detach().clone().requires_grad_(True)
     calc_sol = Calculator(
@@ -277,8 +279,8 @@ def test_h_o_cs_atom_order_permutation_invariance(alpb_flag: bool) -> None:
     rads_2 = born.get_born_radii(numbers_2, positions_2)
     torch.testing.assert_close(rads_1, rads_2[perm], atol=1.0e-14, rtol=1.0e-14)
 
-    gb_1 = alpb.GeneralizedBorn(numbers_1, 78.9, alpb=alpb_flag, **dd)
-    gb_2 = alpb.GeneralizedBorn(numbers_2, 78.9, alpb=alpb_flag, **dd)
+    gb_1 = alpb.GeneralizedBorn.create(numbers_1, 78.9, alpb=alpb_flag, **dd)
+    gb_2 = alpb.GeneralizedBorn.create(numbers_2, 78.9, alpb=alpb_flag, **dd)
 
     e_atom_1 = gb_1.get_monopole_atom_energy(
         gb_1.get_cache(numbers=numbers_1, positions=positions_1), charges_1

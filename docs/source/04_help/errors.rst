@@ -67,15 +67,15 @@ Custom component validation errors
 ----------------------------------
 
 Custom :class:`~dxtb.components.base.Classical` and
-:class:`~dxtb.components.base.Interaction` components enforce explicit
-object-graph and purity invariants (see :ref:`indepth_components_new`):
+:class:`~dxtb.components.base.Interaction` components are
+:class:`tad_mctc.tree.Node` objects (see :ref:`indepth_components_new`):
 
-- ``ValueError``: duplicate ``Interaction`` labels, duplicate ``Classical``
-  labels in a direct single-``System`` ``Model.setup(batch_mode=0)``, cyclic
-  component/cache object graphs, or in-place mutation of ``numbers`` /
-  ``IndexHelper``.
-- ``TypeError``: ``Tensor`` leaves stored inside opaque external objects,
-  ``tad_mctc.tree.Node`` ``context()`` fields, or ``init=False`` fields of
-  frozen dataclasses.
-- ``RuntimeError``: mutating component or cache state during a failed
-  ``torch.func.vmap`` attempt.
+- ``ValueError``: duplicate ``Interaction`` labels, or duplicate ``Classical``
+  labels in a direct single-``System`` ``Model.setup(batch_mode=0)``.
+- ``NodeLayoutError``: a component or cache class defines ``__init__`` or
+  declares a field without ``child()`` / ``context()``.
+- ``TypeError``: a tensor in a ``context()`` field, an unhashable static value,
+  floating-point tensors of different dtypes in one component, or setup data
+  that is neither a ``Node``, a tensor, a container of them, nor ``None``.
+- ``dataclasses.FrozenInstanceError``: assigning to a field of a component; use
+  ``component.replace(...)`` instead.

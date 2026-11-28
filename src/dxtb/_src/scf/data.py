@@ -451,20 +451,11 @@ def setup_scf_inputs(
     for entry in core_interactions.entries:
         if entry.kind == "custom":
             for t_name, t_val in entry.data:
-                if isinstance(t_val, Tensor) and t_val.is_complex():
+                if t_val.is_complex():
                     raise TypeError(
                         f"SCFInputs 'custom.{t_name}' must not be complex."
                     )
-                expected_dt = (
-                    fdtype
-                    if t_name.startswith("float_")
-                    else (
-                        t_val.dtype if isinstance(t_val, Tensor) else fdtype
-                    )
-                )
-                _check_scf_tensor(
-                    f"custom.{t_name}", t_val, dev, expected_dt
-                )
+                _check_scf_tensor(f"custom.{t_name}", t_val, dev, t_val.dtype)
             continue
         if entry.kind == "d4sc":
             setup = entry.option("setup")

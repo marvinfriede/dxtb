@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 import torch
+from tad_mctc.tree import child, context
 
 from dxtb import (
     GFN1_XTB,
@@ -898,10 +899,10 @@ def test_packed_classical_multiplicity_and_gradients() -> None:
         and d3_h2o_a is not None
         and d3_h2o_b is not None
     )
-    d3_h2_a.label = "D3:first"
-    d3_h2_b.label = "D3:second"
-    d3_h2o_a.label = "D3:first"
-    d3_h2o_b.label = "D3:second"
+    d3_h2_a = d3_h2_a.replace(label="D3:first")
+    d3_h2_b = d3_h2_b.replace(label="D3:second")
+    d3_h2o_a = d3_h2o_a.replace(label="D3:first")
+    d3_h2o_b = d3_h2o_b.replace(label="D3:second")
 
     cfg_no_disp = Config.create(
         method=labels.GFN1_XTB,
@@ -920,11 +921,6 @@ def test_packed_classical_multiplicity_and_gradients() -> None:
         auto_int_level=False,
     ).setup(numbers_h2o)
     assert len(sys_h2.d3_setups) == 2 and len(sys_h2o.d3_setups) == 2
-    # Give both identity-associated D3 instances the same label to exercise repeated-label packing
-    d3_h2_a.label = "DispersionD3"
-    d3_h2_b.label = "DispersionD3"
-    d3_h2o_a.label = "DispersionD3"
-    d3_h2o_b.label = "DispersionD3"
 
     pos_h2 = _geometry((1, 1), 0).clone().requires_grad_(True)
     pos_h2o = _geometry((8, 1, 1), 0).clone().requires_grad_(True)
@@ -937,13 +933,13 @@ def test_packed_classical_multiplicity_and_gradients() -> None:
     serial_h2o = sys_h2o.singlepoint(pos_h2o)
 
     d3_slots = [
-        val for label, val in packed.classical if label == "DispersionD3"
+        val for label, val in packed.classical if label.startswith("D3:")
     ]
     serial_h2_d3 = [
-        val for label, val in serial_h2.classical if label == "DispersionD3"
+        val for label, val in serial_h2.classical if label.startswith("D3:")
     ]
     serial_h2o_d3 = [
-        val for label, val in serial_h2o.classical if label == "DispersionD3"
+        val for label, val in serial_h2o.classical if label.startswith("D3:")
     ]
     assert len(d3_slots) == 2
     assert len(serial_h2_d3) == 2 and len(serial_h2o_d3) == 2
@@ -966,14 +962,14 @@ def test_packed_classical_multiplicity_and_gradients() -> None:
         packed.energy[1, :3], serial_h2o.energy, atol=1e-11, rtol=1e-11
     )
 
-    # Check Result.get_energies() and PyTree round-trip with repeated labels
+    # Check Result.get_energies() and PyTree round-trip
     energies_summary = packed.get_energies()
     expected_ctotal = float(
         sum(val.sum().item() for _, val in packed.classical)
     )
     assert abs(energies_summary["Classical"]["value"] - expected_ctotal) < 1e-12
-    assert "DispersionD3 (1)" in energies_summary["Classical"]["sub"]
-    assert "DispersionD3 (2)" in energies_summary["Classical"]["sub"]
+    assert "D3:first" in energies_summary["Classical"]["sub"]
+    assert "D3:second" in energies_summary["Classical"]["sub"]
 
     leaves, spec = pytree.tree_flatten(packed)
     unflattened = pytree.tree_unflatten(leaves, spec)
@@ -988,10 +984,10 @@ def test_packed_classical_multiplicity_and_gradients() -> None:
     c_a = new_dispersion(numbers_h2, param, device=DEVICE, dtype=DTYPE)
     c_b = new_dispersion(numbers_h2, param, device=DEVICE, dtype=DTYPE)
     assert c_a is not None and c_b is not None
-    c_a.param = {**c_a.param, "s8": s8_a}
-    c_b.param = {**c_b.param, "s8": s8_b}
-    c_a.label = "SharedD3:a"
-    c_b.label = "SharedD3:b"
+    c_a = c_a.replace(param={**c_a.param, "s8": s8_a})
+    c_b = c_b.replace(param={**c_b.param, "s8": s8_b})
+    c_a = c_a.replace(label="SharedD3:a")
+    c_b = c_b.replace(label="SharedD3:b")
 
     cfg_classical_only = Config.create(
         method=labels.GFN1_XTB,
@@ -1003,8 +999,6 @@ def test_packed_classical_multiplicity_and_gradients() -> None:
         classical=(c_a, c_b),
         auto_int_level=False,
     ).setup(numbers_h2)
-    c_a.label = "SharedD3"
-    c_b.label = "SharedD3"
 
     pos_c = _geometry((1, 1), 0).clone().requires_grad_(True)
     packed_custom = evaluate_packed_systems(
@@ -1012,7 +1006,9 @@ def test_packed_classical_multiplicity_and_gradients() -> None:
         (pos_c, pos_h2),
     )
     shared_slots = [
-        val for label, val in packed_custom.classical if label == "SharedD3"
+        val
+        for label, val in packed_custom.classical
+        if label.startswith("SharedD3")
     ]
     assert len(shared_slots) == 2
     g_a = torch.autograd.grad(
@@ -1032,7 +1028,7 @@ def test_packed_classical_multiplicity_and_gradients() -> None:
     serial_slots = [
         val
         for label, val in sys_custom.singlepoint(pos_serial).classical
-        if label == "SharedD3"
+        if label.startswith("SharedD3")
     ]
     assert len(serial_slots) == 2
     (serial_a,) = torch.autograd.grad(
@@ -1049,10 +1045,8 @@ def test_packed_classical_multiplicity_and_gradients() -> None:
     from dxtb._src.components.classicals.base import Classical
 
     class _ScaledHarmonicClassical(Classical):
-        def __init__(self, scale: torch.Tensor) -> None:
-            super().__init__(device=DEVICE, dtype=DTYPE)
-            self.label = "CustomHarmonic"
-            self.scale = scale
+        scale: torch.Tensor = child()
+        label: str = context(default="CustomHarmonic")
 
         def get_cache(self, numbers: torch.Tensor, ihelp=None, **kwargs):
             _ = (ihelp, kwargs)
@@ -1066,8 +1060,8 @@ def test_packed_classical_multiplicity_and_gradients() -> None:
 
     scale_a = torch.tensor(0.15, dtype=DTYPE, requires_grad=True)
     scale_b = torch.tensor(0.35, dtype=DTYPE, requires_grad=True)
-    hc_a = _ScaledHarmonicClassical(scale_a)
-    hc_b = _ScaledHarmonicClassical(scale_b)
+    hc_a = _ScaledHarmonicClassical(scale=scale_a)
+    hc_b = _ScaledHarmonicClassical(scale=scale_b)
     sys_harmonic = Model(
         par=param, config=cfg_classical_only, auto_int_level=False
     ).setup(numbers_h2)

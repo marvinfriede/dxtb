@@ -297,7 +297,7 @@ def test_exact_replacement_and_update_reset_contract() -> None:
     ihelp = IndexHelper.from_numbers(numbers, par)
     replacement = new_srb(torch.unique(numbers), par, **DD64)
     assert replacement is not None
-    replacement.prefactor = replacement.prefactor * 1.5
+    replacement = replacement.replace(prefactor=replacement.prefactor * 1.5)
     model = Model(
         par=par,
         config=Config.create(exclude=("scf", "srb")),
@@ -364,10 +364,13 @@ def test_duplicate_srb_labels_rejected(extra_kind: str) -> None:
     assert extra is not None
     if extra_kind == "builtin_subclass":
         extra = type("SRBExtension", (ShortRangeBond,), {})(
-            **{slot: getattr(extra, slot) for slot in ShortRangeBond.__slots__},
-            dtype=torch.double,
+            **{
+                name: getattr(extra, name)
+                for name in ShortRangeBond._child_names
+                + ShortRangeBond._context_names
+            }
         )
-        extra.label = LABEL_SRB
+        extra = extra.replace(label=LABEL_SRB)
 
     classical = (extra,)
     if extra_kind == "two_custom":

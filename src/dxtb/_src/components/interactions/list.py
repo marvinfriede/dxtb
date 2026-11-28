@@ -24,7 +24,6 @@ import torch
 
 from dxtb import IndexHelper
 from dxtb._src.typing import (
-    Any,
     Literal,
     Tensor,
     TensorOrTensors,
@@ -74,8 +73,6 @@ class InteractionList(ComponentList[Interaction]):
     def __init__(
         self,
         *components: Interaction | None,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
     ) -> None:
         """Create a list and reject duplicate migrated interaction labels."""
         for component in components:
@@ -98,8 +95,7 @@ class InteractionList(ComponentList[Interaction]):
         validate_unique_interaction_labels(
             [c for c in components if c is not None]
         )
-        super().__init__(*components, device=device, dtype=dtype)
-
+        super().__init__(*components)
 
     @override
     def get_energy(

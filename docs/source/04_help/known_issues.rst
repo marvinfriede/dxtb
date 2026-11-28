@@ -124,10 +124,21 @@ intentionally retired the following stateful legacy APIs:
 - Component cache-control and batch-culling methods (``cache_disable``,
   ``cache_enable``, ``cache_invalidate``, ``cache_is_setup``,
   ``cache_is_latest``, ``IndexHelper.cull`` / ``restore``, and cache ``cull`` /
-  ``restore``): ``Model.setup`` captures immutable setup data on ``System``
-  (with automatic mutation-tracked snapshot invalidation for custom
-  ``Classical`` components), and batched evaluations partition batches into
-  unpadded single-``System`` lanes rather than culling padded batches.
+  ``restore``): ``Model.setup`` captures immutable setup data on ``System``,
+  and batched evaluations partition batches into unpadded single-``System``
+  lanes rather than culling padded batches.
+- Component mutation (``Component.update`` / ``reset``, the list methods
+  ``update``, ``reset``, ``reset_all``, ``update_halogen`` and
+  ``reset_halogen``, and ``Calculator.reset``): components are immutable
+  :class:`tad_mctc.tree.Node` objects; create a changed copy with
+  ``component.replace(...)`` and build a new Model or Calculator from it.
+- Positional component construction and the ``device`` / ``dtype`` arguments
+  of component constructors: components take keyword arguments
+  (``ES2(hubbard=..., gexp=...)``), and the inputs must already share one
+  dtype and device (use ``.to(...)`` on the component afterwards, or the
+  ``new_*`` factories, which convert for you).
+  ``GeneralizedBorn.create``, ``D4Model.create`` and ``Cutoff.create`` keep
+  the previous argument lists.
 - Legacy SCF option and composition wrappers (``LegacySCFOptions``,
   ``strict_e6bcompat``, low-level ``scf_results`` override kwargs,
   ``LegacyCompositionResult``, ``LegacySystemRoute``, ``classify_legacy_system``):
@@ -152,25 +163,6 @@ to the eigensolver, avoiding ``torch.linalg.solve``. A batched
 
 Running the test suite with several ``pytest-xdist`` workers is also much
 slower if each worker uses several threads; set ``OMP_NUM_THREADS=1``.
-
-
-``reset()`` cuts gradients to user-supplied tensors
----------------------------------------------------
-
-``calc.reset()``, ``reset_all()``, and ``reset(name)`` on the classical and
-interaction lists replace direct ``Tensor`` attributes of reset components
-(such as ``DispersionD3`` and custom ``Classical`` / ``Interaction`` instances)
-with detached clones while leaving setup-only built-in components untouched.
-Gradients with respect to an external ``requires_grad=True`` tensor passed
-directly into a reset component are then ``None``. Because evaluations no longer
-retain cross-call result or integral caches, calling ``calc.reset()`` between
-evaluations is unnecessary. Electric fields are per-evaluation inputs and keep
-their autograd graph across ``Calculator.reset()``, and ``Model.par`` parameters
-remain differentiable across ``Calculator.reset()``.
-
-**Workaround:** avoid calling ``calc.reset()`` during gradient-based
-optimization, or pass a fresh Component / rebuild the Calculator after reset if
-gradients to the original component tensor leaves are needed.
 
 
 ``Calculator.to(device)`` does not move all state

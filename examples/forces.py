@@ -57,7 +57,6 @@ print("\n\n\nCalculating forces with Calculator method.\n")
 
 dxtb.timer.reset()
 
-calc.reset()
 pos = positions.clone().requires_grad_(True)
 forces2 = calc.forces(pos, chrg=charge)
 

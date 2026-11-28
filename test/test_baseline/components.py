@@ -422,7 +422,7 @@ def _alpb_positions() -> Target:
         )
 
         numbers, positions = _water()
-        interaction = GeneralizedBorn(
+        interaction = GeneralizedBorn.create(
             numbers, 78.9, kernel="p16", alpb=True, **DD
         )
         setup = setup_generalized_born(interaction, numbers)

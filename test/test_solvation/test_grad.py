@@ -54,7 +54,7 @@ def test_gb_scf_grad(dtype: torch.dtype, name: str, dielectric_constant=78.9):
     charges = torch.tensor(0.0).type(dtype)
 
     dielectric_constant = torch.tensor(dielectric_constant, **dd)
-    gb = alpb.GeneralizedBorn(numbers, dielectric_constant, **dd)
+    gb = alpb.GeneralizedBorn.create(numbers, dielectric_constant, **dd)
 
     calc = Calculator(numbers, GFN1_XTB, interaction=[gb], opts=opts, **dd)
 

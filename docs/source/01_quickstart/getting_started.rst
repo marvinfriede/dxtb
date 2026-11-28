@@ -142,8 +142,7 @@ the example `here <https://github.com/grimme-lab/dxtb/blob/main/examples/forces.
 
     Single-system and batched :class:`~dxtb.Calculator` evaluations are
     stateless across calls: you can evaluate the same :class:`~dxtb.Calculator`
-    repeatedly with geometry or parameter gradient tracking enabled without
-    calling :meth:`~dxtb.Calculator.reset` between calls. A persistent
+    repeatedly with geometry or parameter gradient tracking enabled. A persistent
     :class:`~dxtb.calculators.System` likewise supports repeated geometry
     differentiation; use :meth:`~dxtb.calculators.Model.setup_functional` when
     differentiating repeatedly with respect to setup-time parameters.

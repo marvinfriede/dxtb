@@ -39,6 +39,7 @@ A custom classical contribution inherits from
 
     from typing import Any
     import torch
+    from tad_mctc.tree import child
     from dxtb import Calculator, GFN1_XTB, IndexHelper
     from dxtb.components.base import Classical, ClassicalCache
     from dxtb.typing import DD, Tensor, override
@@ -47,39 +48,13 @@ A custom classical contribution inherits from
     class HarmonicRestraintCache(ClassicalCache):
         """Composition-dependent setup data for the harmonic restraint."""
 
-        force_constant: Tensor
-        __slots__ = ["force_constant"]
-
-        def __init__(
-            self,
-            force_constant: Tensor,
-            device: torch.device | None = None,
-            dtype: torch.dtype | None = None,
-        ) -> None:
-            super().__init__(
-                device=force_constant.device if device is None else device,
-                dtype=force_constant.dtype if dtype is None else dtype,
-            )
-            self.force_constant = force_constant
+        force_constant: Tensor = child()
 
 
     class HarmonicRestraint(Classical):
         """Isotropic harmonic restraint around the origin."""
 
-        force_constant: Tensor
-        __slots__ = ["force_constant"]
-
-        def __init__(
-            self,
-            force_constant: Tensor,
-            device: torch.device | None = None,
-            dtype: torch.dtype | None = None,
-        ) -> None:
-            super().__init__(
-                device=force_constant.device if device is None else device,
-                dtype=force_constant.dtype if dtype is None else dtype,
-            )
-            self.force_constant = force_constant
+        force_constant: Tensor = child()
 
         @override
         def get_cache(
@@ -88,7 +63,7 @@ A custom classical contribution inherits from
             ihelp: IndexHelper | None = None,
         ) -> HarmonicRestraintCache:
             """Create composition-dependent setup data."""
-            return HarmonicRestraintCache(self.force_constant)
+            return HarmonicRestraintCache(force_constant=self.force_constant)
 
         @override
         def get_energy(
@@ -102,7 +77,7 @@ A custom classical contribution inherits from
 
 
     dd: DD = {"device": torch.device("cpu"), "dtype": torch.double}
-    restraint = HarmonicRestraint(torch.tensor(0.05, **dd), **dd)
+    restraint = HarmonicRestraint(force_constant=torch.tensor(0.05, **dd))
 
     numbers = torch.tensor([3, 1], device=dd["device"])
     positions = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 3.0]], **dd)
@@ -137,14 +112,14 @@ so that the variational SCF fixed point and implicit differentiation
 (``differentiation="unrolled"``). Monopole hooks may omit ``qdp`` and ``qqp``
 from their signatures when unused; overriding dipole or quadrupole hooks
 automatically promotes the integral level when ``auto_int_level=True``.
-Non-``keep_dtype`` floating-point tensor leaves on a custom interaction or its
-cache must match the active SCF floating ``dtype``. Unlike classical setups,
+Unlike classical setups,
 :meth:`~dxtb.components.base.Interaction.get_cache` is geometry-dependent and is
 evaluated fresh on each singlepoint call.
 
 .. code-block:: python
 
     import torch
+    from tad_mctc.tree import child
     from dxtb import Calculator, GFN1_XTB, IndexHelper
     from dxtb.components.base import Interaction, InteractionCache
     from dxtb.typing import DD, Tensor, override
@@ -153,27 +128,15 @@ evaluated fresh on each singlepoint call.
     class OnsiteShiftCache(InteractionCache):
         """Per-geometry interaction cache."""
 
-        shift: Tensor
-        hardness: Tensor
-        __slots__ = ["shift", "hardness"]
-
-        def __init__(self, shift: Tensor, hardness: Tensor) -> None:
-            super().__init__(device=shift.device, dtype=shift.dtype)
-            self.shift = shift
-            self.hardness = hardness
+        shift: Tensor = child()
+        hardness: Tensor = child()
 
 
     class OnsiteShift(Interaction):
         """Quadratic atomic charge penalty coupled self-consistently."""
 
-        scale: Tensor
-        hardness: Tensor
-        __slots__ = ["scale", "hardness"]
-
-        def __init__(self, scale: Tensor, hardness: Tensor) -> None:
-            super().__init__(device=scale.device, dtype=scale.dtype)
-            self.scale = scale
-            self.hardness = hardness
+        scale: Tensor = child()
+        hardness: Tensor = child()
 
         @override
         def get_cache(
@@ -185,7 +148,7 @@ evaluated fresh on each singlepoint call.
         ) -> OnsiteShiftCache:
             assert positions is not None
             radial = self.scale * positions.square().sum(dim=-1)
-            return OnsiteShiftCache(radial, self.hardness)
+            return OnsiteShiftCache(shift=radial, hardness=self.hardness)
 
         @override
         def get_monopole_atom_potential(
@@ -210,8 +173,8 @@ evaluated fresh on each singlepoint call.
 
     dd: DD = {"device": torch.device("cpu"), "dtype": torch.double}
     interaction = OnsiteShift(
-        torch.tensor(0.02, **dd),
-        torch.tensor(0.10, **dd),
+        scale=torch.tensor(0.02, **dd),
+        hardness=torch.tensor(0.10, **dd),
     )
 
     numbers = torch.tensor([8, 1, 1], device=dd["device"])
@@ -249,54 +212,38 @@ Transforms, ``vmap``, and Differentiation
     ``Model.setup`` (``batch_mode=1`` or ``2``) and ``Calculator`` evaluations
     support multiple custom :class:`~dxtb.components.base.Classical` instances
     sharing a non-reserved ``label``: each component sees its real
-    ``self.label`` inside ``get_cache``, retains an independent setup snapshot
+    ``self.label`` inside ``get_cache``, keeps an independent setup
     or core descriptor, and contributes a separate ``(label, energy)`` entry in
     ``Result.classical``.
-- **Supported state, containers, and object-graph contract**: Custom components
-  and their caches may store floating and integer/boolean PyTorch ``Tensor``
-  leaves inside ``__slots__``, ``__dict__``, ``ComponentCache``,
-  :class:`~dxtb.typing.TensorLike`, ``tad_mctc.tree.Node`` (using ``child()``,
-  or ``child(keep_dtype=True)`` for fixed-precision tensors), ``tuple``,
-  ``NamedTuple``, ``list``, ``dict``, mutable ``@dataclass`` instances, and
-  ``@dataclass(frozen=True)`` instances whose ``init=False`` fields hold only
-  non-tensor static metadata. Acyclic shared tensor and container references
-  (aliases) are preserved across ``.to()``, ``.type()``, ``.reset()`` (for
-  direct component tensor leaves), and ``Calculator.type()``. Cyclic component
-  or cache object graphs raise :class:`ValueError`; frozen dataclasses with
-  tensor-valued ``init=False`` fields and ``Node`` instances storing tensors in
-  ``context()`` fields raise :class:`TypeError`. Subclasses with custom
-  ``.to()`` / ``.type()`` / ``_convert_child()`` overrides or helper
-  ``TensorLike`` objects are honored during conversion and routed to independent
-  (non-``vmap``) evaluation.
-- **Opaque external objects**: Arbitrary third-party objects and non-transparent
-  standard-library containers (such as ``set``, ``frozenset``,
-  ``collections.deque``, ``types.MappingProxyType``, and ``functools.partial``)
-  are not recursively traversed for dtype/device conversion or functional leaf
-  extraction. Opaque objects holding only non-tensor state are supported and
-  route custom components to independent evaluation; opaque objects storing any
-  reachable PyTorch ``Tensor`` raise :class:`TypeError` (and cyclic graphs raise
-  :class:`ValueError`) so conversion and SCF differentiation never silently skip
-  active tensor parameters.
+- **Components are Nodes**: Components and their caches are
+  :class:`tad_mctc.tree.Node` objects: frozen dataclasses whose fields are
+  declared with :func:`~tad_mctc.tree.child` (tensors, Nodes, lists, tuples
+  or dicts of them, or static hashable values; ``child(keep_dtype=True)`` for
+  fixed-precision tensors) and :func:`~tad_mctc.tree.context` (static
+  hashable values). They are constructed with keyword arguments, must not
+  define ``__init__`` (use ``_normalize`` to fill in derived fields, or a
+  classmethod constructor), and convert with ``.to()`` and ``.type()``. All
+  floating-point tensors of a component share one dtype, and all its tensors
+  one device.
+- **Immutability**: A component's fields cannot be reassigned. To change a
+  parameter, create a new component with ``component.replace(...)`` and build
+  a new Model, System or :class:`~dxtb.Calculator` from it; a System keeps
+  the setup computed from the components it was built with. Changing the
+  contents of a field in place (an in-place tensor operation, or assigning to
+  an entry of a dict field) is not supported and gives undefined results.
+- **Setup data**: ``get_cache`` must return a ``Node`` (such as a
+  ``ClassicalCache`` or ``InteractionCache``), a tensor, ``None``, or a list,
+  tuple (including a ``NamedTuple``) or dict of them; anything else raises
+  :class:`TypeError` at setup. Its floating-point dtype may differ from the
+  component's.
 - **Hook purity and automatic ``vmap`` fallback**: ``get_cache``,
-  ``get_energy``, and interaction potential/energy hooks must be pure functions
-  of their arguments and component tensors without mutating component state,
-  cache state, ``numbers``, or ``ihelp`` (mutating ``numbers`` or ``ihelp`` in
-  place raises :class:`ValueError`). Components holding non-tensor opaque
-  objects are routed directly to independent per-lane evaluation. Tensor-only
-  custom components that hit a genuine PyTorch ``vmap`` operator limitation
-  (such as ``.item()`` or data-dependent host branching) automatically fall back
-  to independent evaluation provided neither component nor cache state was
-  mutated during the mapped attempt; mutating state during a failed mapped
-  attempt raises :class:`RuntimeError`. Unrelated user exceptions propagate
-  unmodified, and lane evaluation errors carry ``exc.source_id`` identifying the
-  failing source lane.
-- **Differentiation and mutation invalidation**: Tensor parameters stored in
-  supported containers on a component or its cache participate in autograd
-  under both ``differentiation="unrolled"`` and ``differentiation="implicit"``.
-  Any between-call change to a custom ``Classical``'s (or its captured
-  cache's) tensor or non-tensor attributes invalidates that term's captured
-  setup and triggers a fresh ``get_cache`` call on the next evaluation without
-  discarding unrelated built-in setups. This invalidation is preserved across
-  ``Calculator.type(dtype)`` and call-local dtype conversion so stale caches are
-  purged rather than revalidated, while unmutated custom caches convert in
-  lockstep with their components.
+  ``get_energy``, and interaction potential/energy hooks must be pure
+  functions of their arguments and the component's fields. Custom components
+  that hit a genuine PyTorch ``vmap`` operator limitation (such as ``.item()``
+  or data-dependent host branching) automatically fall back to independent
+  per-lane evaluation. Unrelated user exceptions propagate unmodified, and lane
+  evaluation errors carry ``exc.source_id`` identifying the failing source
+  lane.
+- **Differentiation**: Tensor fields of a component or its cache participate
+  in autograd under both ``differentiation="unrolled"`` and
+  ``differentiation="implicit"``.

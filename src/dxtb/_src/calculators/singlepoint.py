@@ -60,10 +60,7 @@ from dxtb._src.components.classicals.shortrangebond import (
     ShortRangeBondCoreSetup,
     short_range_bond_energy,
 )
-from dxtb._src.components.custom import (
-    CustomClassicalCoreSetup,
-    validate_custom_component_graph,
-)
+from dxtb._src.components.custom import CustomClassicalCoreSetup
 from dxtb._src.components.interactions.base import (
     validate_unique_interaction_labels,
 )
@@ -96,7 +93,6 @@ from dxtb._src.components.interactions.field.efieldgrad import (
 )
 from dxtb._src.components.interactions.list import InteractionListCache
 from dxtb._src.components.interactions.solvation.alpb import (
-    GeneralizedBorn,
     GeneralizedBornCoreSetup,
     build_generalized_born_data,
 )
@@ -188,28 +184,18 @@ def _evaluate_custom_classical_fallback(
     positions: Tensor,
     charge: Tensor,
 ) -> Tensor:
-    """Evaluate a custom classical fallback setup, rebuilding if component state changed."""
-    matched = False
-    setup = None
-    for owner, snap, captured_setup in system._custom_classical_snapshots:
-        if owner is component:
-            if snap.matches(component):
-                matched = True
-                setup = captured_setup
-            break
-    if not matched:
-        validate_custom_component_graph(component)
+    """Evaluate a custom classical with the setup captured by ``Model.setup``."""
+    setup = next(
+        (
+            s
+            for owner, s in system._custom_classical_setups
+            if owner is component
+        ),
+        None,
+    )
+    if setup is None:
         setup = component.get_cache(system.numbers, system.ihelp)
-        validate_custom_component_graph((component, setup))
-        if not system._ihelp_compatible():
-            raise ValueError(
-                "System IndexHelper is incompatible with the captured System setup."
-            )
     energy: Tensor = component.get_energy(positions, setup, charge=charge)
-    if not system._ihelp_compatible():
-        raise ValueError(
-            "System IndexHelper is incompatible with the captured System setup."
-        )
     return energy
 
 
@@ -252,13 +238,12 @@ def _build_builtin_interaction_cache(setup: Any, positions: Tensor) -> Any:
     """Build call-local cache data from a captured built-in interaction setup."""
     if isinstance(setup, ES2CoreSetup):
         return ES2Cache(
-            build_es2_coulomb(setup, positions),
+            mat=build_es2_coulomb(setup, positions),
             shell_resolved=setup.shell_resolved,
         )
     if isinstance(setup, ES3CoreSetup):
         return ES3Cache(
-            setup.hubbard_derivs,
-            shell_resolved=setup.shell_resolved,
+            hd=setup.hubbard_derivs, shell_resolved=setup.shell_resolved
         )
     if isinstance(setup, AES2CoreSetup):
         return build_aes2_data(setup, positions)
@@ -391,19 +376,11 @@ def _interaction_data(
                 setup, positions
             )
         else:
-            validate_custom_component_graph(interaction)
-            cache = interaction.get_cache(
+            data[interaction.label] = interaction.get_cache(
                 numbers=(core.numbers if core is not None else system.numbers),
                 positions=positions,
                 ihelp=system.ihelp,
             )
-            validate_custom_component_graph((interaction, cache))
-            if not system._ihelp_compatible():
-                raise ValueError(
-                    "System IndexHelper is incompatible with the captured "
-                    "System setup."
-                )
-            data[interaction.label] = cache
     return data
 
 
@@ -930,7 +907,7 @@ def _prepare_singlepoint(
                 "Explicit field= cannot be combined with a custom interaction "
                 f"using the '{LABEL_EFIELD}' label."
             )
-        call_components.append(ElectricField(field))
+        call_components.append(ElectricField(field=field))
     if field_grad is not None:
         if any(
             component.label == LABEL_EFIELD_GRAD
@@ -940,12 +917,10 @@ def _prepare_singlepoint(
                 "Explicit field_grad= cannot be combined with a custom "
                 f"interaction using the '{LABEL_EFIELD_GRAD}' label."
             )
-        call_components.append(ElectricFieldGrad(field_grad))
+        call_components.append(ElectricFieldGrad(field_grad=field_grad))
     from dxtb._src.components.interactions.list import InteractionList
 
-    call_interactions = InteractionList(
-        *call_components, device=positions.device, dtype=positions.dtype
-    )
+    call_interactions = InteractionList(*call_components)
     interaction_data = _interaction_data(
         system, positions, call_interactions, _active_core=core
     )

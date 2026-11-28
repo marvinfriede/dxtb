@@ -76,9 +76,8 @@ def new_halogen(
         cutoff = xtb.DEFAULT_XB_CUTOFF
 
     return Halogen(
-        damp=par.get("halogen.classical.damping"),
-        rscale=par.get("halogen.classical.rscale"),
-        bond_strength=par.get_elem_param(unique, "xbond", pad_val=0),
+        damp=par.get("halogen.classical.damping").to(**dd),
+        rscale=par.get("halogen.classical.rscale").to(**dd),
+        bond_strength=par.get_elem_param(unique, "xbond", pad_val=0).to(**dd),
         cutoff=any_to_tensor(cutoff, **dd),
-        **dd,
     )

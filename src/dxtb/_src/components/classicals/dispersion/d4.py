@@ -36,7 +36,6 @@ from tad_mctc.typing import CountingFunction, Tensor, override
 from dxtb import IndexHelper
 from dxtb._src.scf.guess import get_eeq_guess
 
-from ..base import ClassicalCache
 from . import _d4_adapter as d4
 from ._d4_adapter import Damping
 from .base import Dispersion
@@ -230,7 +229,7 @@ def core_dispersion_d4_setup(
 
 def _d4_setup_view(setup: DispersionD4CoreSetup) -> DispersionD4Setup:
     """Construct fresh external D4 objects from one captured core setup."""
-    model = d4.model.D4Model(
+    model = d4.model.D4Model.create(
         setup.model_numbers.clone(),
         ga=setup.model_ga,
         gc=setup.model_gc,
@@ -240,7 +239,7 @@ def _d4_setup_view(setup: DispersionD4CoreSetup) -> DispersionD4Setup:
         device=setup.numbers.device,
         dtype=setup.model_wf.dtype,
     )
-    cutoff = d4.Cutoff(
+    cutoff = d4.Cutoff.create(
         setup.cutoff.disp2.clone(),
         setup.cutoff.disp3.clone(),
         setup.cutoff.cn.clone(),
@@ -266,7 +265,7 @@ def _copy_model(
     model: d4.model.D4Model, numbers: Tensor, dd: dict[str, Any]
 ) -> d4.model.D4Model:
     """Copy an external D4 model without changing caller-owned state."""
-    return d4.model.D4Model(
+    return d4.model.D4Model.create(
         numbers,
         ga=model.ga,
         gc=model.gc,
@@ -289,7 +288,7 @@ def setup_dispersion_d4(
     if model is not None and not isinstance(model, d4.model.D4Model):
         raise TypeError("D4: Model is not of type 'd4.model.D4Model'.")
     if model is None:
-        model = d4.model.D4Model(
+        model = d4.model.D4Model.create(
             numbers, ref_charges=dispersion.ref_charges, **dd
         )
     elif type(model) is not d4.model.D4Model:
@@ -319,9 +318,9 @@ def setup_dispersion_d4(
     if cutoff is not None and not isinstance(cutoff, d4.Cutoff):
         raise TypeError("D4: 'cutoff' is not of type 'd4.Cutoff'.")
     if cutoff is None:
-        cutoff = d4.Cutoff(**dd)
+        cutoff = d4.Cutoff.create(**dd)
     else:
-        cutoff = d4.Cutoff(
+        cutoff = d4.Cutoff.create(
             cutoff.disp2.to(**dd).clone(),
             cutoff.disp3.to(**dd).clone(),
             cutoff.cn.to(**dd).clone(),
