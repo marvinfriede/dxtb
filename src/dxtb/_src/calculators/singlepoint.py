@@ -38,26 +38,26 @@ from dxtb._src.calculators.model import (
 from dxtb._src.calculators.result import ChargeLike, PotentialLike, Result
 from dxtb._src.components.classicals.dispersion.d3 import (
     DispersionD3,
-    DispersionD3CoreSetup,
+    DispersionD3Setup,
     dispersion_d3_energy,
 )
 from dxtb._src.components.classicals.dispersion.d4 import (
     DispersionD4,
-    DispersionD4CoreSetup,
+    DispersionD4Setup,
     dispersion_d4_energy,
 )
 from dxtb._src.components.classicals.halogen import (
     Halogen,
-    HalogenCoreSetup,
+    HalogenSetup,
     halogen_energy,
 )
-from dxtb._src.components.classicals.ies import IESCoreSetup, ies_energy
+from dxtb._src.components.classicals.ies import IESSetup, ies_energy
 from dxtb._src.components.classicals.repulsion.base import repulsion_energy
 from dxtb._src.components.classicals.repulsion.rep import (
-    RepulsionCoreSetup,
+    RepulsionSetup,
 )
 from dxtb._src.components.classicals.shortrangebond import (
-    ShortRangeBondCoreSetup,
+    ShortRangeBondSetup,
     short_range_bond_energy,
 )
 from dxtb._src.components.custom import CustomClassicalCoreSetup
@@ -65,21 +65,20 @@ from dxtb._src.components.interactions.base import (
     validate_unique_interaction_labels,
 )
 from dxtb._src.components.interactions.coulomb.multipole import (
-    AES2CoreSetup,
-    build_aes2_data,
+    AES2Setup,
+    build_aes2_cache,
 )
 from dxtb._src.components.interactions.coulomb.secondorder import (
-    ES2Cache,
-    ES2CoreSetup,
-    build_es2_coulomb,
+    ES2Setup,
+    build_es2_cache,
 )
 from dxtb._src.components.interactions.coulomb.thirdorder import (
-    ES3Cache,
-    ES3CoreSetup,
+    ES3Setup,
+    build_es3_cache,
 )
 from dxtb._src.components.interactions.dispersion.d4sc import (
-    D4SCCoreSetup,
-    build_d4sc_data,
+    D4SCSetup,
+    build_d4sc_cache,
 )
 from dxtb._src.components.interactions.field.efield import (
     LABEL_EFIELD,
@@ -93,8 +92,8 @@ from dxtb._src.components.interactions.field.efieldgrad import (
 )
 from dxtb._src.components.interactions.list import InteractionListCache
 from dxtb._src.components.interactions.solvation.alpb import (
-    GeneralizedBornCoreSetup,
-    build_generalized_born_data,
+    GeneralizedBornSetup,
+    build_generalized_born_cache,
 )
 from dxtb._src.constants import defaults
 from dxtb._src.integral.container import IntegralMatrices
@@ -236,21 +235,16 @@ def _evaluate_classical_descriptor(
 
 def _build_builtin_interaction_cache(setup: Any, positions: Tensor) -> Any:
     """Build call-local cache data from a captured built-in interaction setup."""
-    if isinstance(setup, ES2CoreSetup):
-        return ES2Cache(
-            mat=build_es2_coulomb(setup, positions),
-            shell_resolved=setup.shell_resolved,
-        )
-    if isinstance(setup, ES3CoreSetup):
-        return ES3Cache(
-            hd=setup.hubbard_derivs, shell_resolved=setup.shell_resolved
-        )
-    if isinstance(setup, AES2CoreSetup):
-        return build_aes2_data(setup, positions)
-    if isinstance(setup, D4SCCoreSetup):
-        return build_d4sc_data(setup, positions)
-    if isinstance(setup, GeneralizedBornCoreSetup):
-        return build_generalized_born_data(setup, positions)
+    if isinstance(setup, ES2Setup):
+        return build_es2_cache(setup, positions)
+    if isinstance(setup, ES3Setup):
+        return build_es3_cache(setup)
+    if isinstance(setup, AES2Setup):
+        return build_aes2_cache(setup, positions)
+    if isinstance(setup, D4SCSetup):
+        return build_d4sc_cache(setup, positions)
+    if isinstance(setup, GeneralizedBornSetup):
+        return build_generalized_born_cache(setup, positions)
     raise TypeError(f"Unsupported built-in interaction setup {type(setup)}.")
 
 
@@ -259,7 +253,7 @@ class _SystemInteractionData(InteractionListCache):
 
     def __init__(
         self,
-        d4sc_setup: D4SCCoreSetup | None,
+        d4sc_setup: D4SCSetup | None,
         scf_kinds: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
@@ -337,11 +331,11 @@ def _interaction_data(
         elif isinstance(
             captured_setup,
             (
-                ES2CoreSetup,
-                ES3CoreSetup,
-                AES2CoreSetup,
-                D4SCCoreSetup,
-                GeneralizedBornCoreSetup,
+                ES2Setup,
+                ES3Setup,
+                AES2Setup,
+                D4SCSetup,
+                GeneralizedBornSetup,
             ),
         ):
             data[interaction.label] = _build_builtin_interaction_cache(
@@ -748,7 +742,7 @@ def _prepare_singlepoint(
             )
             d3_setup = (
                 captured_setup
-                if isinstance(captured_setup, DispersionD3CoreSetup)
+                if isinstance(captured_setup, DispersionD3Setup)
                 else next(
                     (
                         setup
@@ -770,7 +764,7 @@ def _prepare_singlepoint(
             elif type(component) is DispersionD4:
                 d4_setup = (
                     captured_setup
-                    if isinstance(captured_setup, DispersionD4CoreSetup)
+                    if isinstance(captured_setup, DispersionD4Setup)
                     else (
                         system.d4_setup
                         if component is system.d4_classical
@@ -788,7 +782,7 @@ def _prepare_singlepoint(
             elif type(component) is Halogen:
                 halogen_setup = (
                     captured_setup
-                    if isinstance(captured_setup, HalogenCoreSetup)
+                    if isinstance(captured_setup, HalogenSetup)
                     else (
                         system.halogen_setup
                         if component is system.halogen_classical
@@ -803,20 +797,20 @@ def _prepare_singlepoint(
                     (component.label, halogen_energy(halogen_setup, positions))
                 )
             else:
-                if isinstance(captured_setup, RepulsionCoreSetup):
+                if isinstance(captured_setup, RepulsionSetup):
                     setup = captured_setup
-                elif isinstance(captured_setup, ShortRangeBondCoreSetup):
+                elif isinstance(captured_setup, ShortRangeBondSetup):
                     setup = captured_setup
                 elif component is system.repulsion_classical:
                     setup = system.repulsion_setup
                 elif component is system.srb_classical:
                     setup = system.srb_setup
-                elif isinstance(captured_setup, IESCoreSetup) or (
+                elif isinstance(captured_setup, IESSetup) or (
                     captured_setup is None and component is system.ies_classical
                 ):
                     ies_setup = (
                         captured_setup
-                        if isinstance(captured_setup, IESCoreSetup)
+                        if isinstance(captured_setup, IESSetup)
                         else system.ies_setup
                     )
                     if ies_setup is None:

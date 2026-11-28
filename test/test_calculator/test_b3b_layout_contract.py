@@ -73,7 +73,7 @@ def test_single_and_packed_modes_keep_separate_ownership() -> None:
     assert not hasattr(single, "_packed_classical_cache")
     assert not hasattr(single, "_exact_compatibility")
     assert single.repulsion_setup is not None
-    assert type(single.repulsion_setup).__name__ == "RepulsionCoreSetup"
+    assert type(single.repulsion_setup).__name__ == "RepulsionSetup"
     assert single.classical_cache is not single.classical_cache
     assert single.classical_cache["Repulsion"] is single.repulsion_setup
     assert single.exact_core is not None
@@ -268,7 +268,6 @@ def test_interaction_descriptors_feed_functional_preparation(
         system.interactions,
         data,
         numbers,
-        d4sc_setup=data.d4sc_setup,
         kind_by_label=data.scf_kinds,
     )
     assert tuple(entry.kind for entry in prepared.entries) == tuple(

@@ -65,28 +65,16 @@ from dxtb._src.components.classicals import (
     Classical,
     ClassicalList,
     DispersionD3,
-    DispersionD3Cache,
-    DispersionD3CoreSetup,
+    DispersionD3Setup,
     DispersionD4,
-    DispersionD4CoreSetup,
     DispersionD4Setup,
     Halogen,
-    HalogenCoreSetup,
     HalogenSetup,
-    IESCoreSetup,
     IESSetup,
     Repulsion,
-    RepulsionCoreSetup,
     RepulsionSetup,
     ShortRangeBond,
-    ShortRangeBondCoreSetup,
     ShortRangeBondSetup,
-    core_dispersion_d3_setup,
-    core_dispersion_d4_setup,
-    core_halogen_setup,
-    core_ies_setup,
-    core_repulsion_setup,
-    core_srb_setup,
     new_dispersion,
     new_halogen,
     new_ies,
@@ -106,12 +94,9 @@ from dxtb._src.components.interactions.coulomb import (
     AES2,
     ES2,
     ES3,
-    AES2CoreSetup,
-    ES2CoreSetup,
-    ES3CoreSetup,
-    core_aes2_setup,
-    core_es2_setup,
-    core_es3_setup,
+    AES2Setup,
+    ES2Setup,
+    ES3Setup,
     new_aes2,
     new_es2,
     new_es3,
@@ -120,9 +105,8 @@ from dxtb._src.components.interactions.coulomb import (
     setup_es3,
 )
 from dxtb._src.components.interactions.dispersion import (
-    D4SCCoreSetup,
+    D4SCSetup,
     DispersionD4SC,
-    core_d4sc_setup,
     new_d4sc,
     setup_d4sc,
 )
@@ -130,8 +114,7 @@ from dxtb._src.components.interactions.field import efield
 from dxtb._src.components.interactions.field import efieldgrad as efield_grad
 from dxtb._src.components.interactions.solvation.alpb import (
     GeneralizedBorn,
-    GeneralizedBornCoreSetup,
-    core_generalized_born_setup,
+    GeneralizedBornSetup,
     setup_generalized_born,
 )
 from dxtb._src.constants import defaults
@@ -242,18 +225,18 @@ def _serialize_parameter_setup(
 
 
 CoreSetup = Union[
-    RepulsionCoreSetup,
-    ShortRangeBondCoreSetup,
-    DispersionD3CoreSetup,
-    DispersionD4CoreSetup,
-    IESCoreSetup,
-    HalogenCoreSetup,
+    RepulsionSetup,
+    ShortRangeBondSetup,
+    DispersionD3Setup,
+    DispersionD4Setup,
+    IESSetup,
+    HalogenSetup,
     CustomClassicalCoreSetup,
-    ES2CoreSetup,
-    ES3CoreSetup,
-    AES2CoreSetup,
-    D4SCCoreSetup,
-    GeneralizedBornCoreSetup,
+    ES2Setup,
+    ES3Setup,
+    AES2Setup,
+    D4SCSetup,
+    GeneralizedBornSetup,
 ]
 
 
@@ -390,12 +373,12 @@ def _classical_term_kind(
     ):
         return ("custom", True)
     kinds: dict[type, tuple[type, str, bool]] = {
-        Repulsion: (RepulsionCoreSetup, "repulsion", False),
-        ShortRangeBond: (ShortRangeBondCoreSetup, "srb", False),
-        DispersionD3: (DispersionD3CoreSetup, "d3", False),
-        DispersionD4: (DispersionD4CoreSetup, "d4", True),
-        IES: (IESCoreSetup, "ies", True),
-        Halogen: (HalogenCoreSetup, "halogen", False),
+        Repulsion: (RepulsionSetup, "repulsion", False),
+        ShortRangeBond: (ShortRangeBondSetup, "srb", False),
+        DispersionD3: (DispersionD3Setup, "d3", False),
+        DispersionD4: (DispersionD4Setup, "d4", True),
+        IES: (IESSetup, "ies", True),
+        Halogen: (HalogenSetup, "halogen", False),
     }
     spec = kinds.get(type(component))
     if spec is None or not isinstance(setup, spec[0]):
@@ -408,11 +391,11 @@ def _interaction_term_kind(
 ) -> str | None:
     """Describe only exact built-in interactions with captured setup data."""
     kinds: dict[type, tuple[type, str]] = {
-        ES2: (ES2CoreSetup, "es2"),
-        ES3: (ES3CoreSetup, "es3"),
-        AES2: (AES2CoreSetup, "aes2"),
-        DispersionD4SC: (D4SCCoreSetup, "d4sc"),
-        GeneralizedBorn: (GeneralizedBornCoreSetup, "generalized_born"),
+        ES2: (ES2Setup, "es2"),
+        ES3: (ES3Setup, "es3"),
+        AES2: (AES2Setup, "aes2"),
+        DispersionD4SC: (D4SCSetup, "d4sc"),
+        GeneralizedBorn: (GeneralizedBornSetup, "generalized_born"),
     }
     spec = kinds.get(type(interaction))
     if spec is None or not isinstance(setup, spec[0]):
@@ -659,7 +642,7 @@ def _build_setup_index_token(
     ihelp: IndexHelper,
     integral_setup: IntegralSetup | None,
     h0_setup: H0Setup | H0SetupNode | None,
-    es2_setup: ES2CoreSetup | None,
+    es2_setup: ES2Setup | None,
 ) -> _SetupIndexToken:
     """Capture setup-time identity and version metadata for fast validation."""
     driver_type = None if integral_setup is None else integral_setup.driver_type
@@ -705,7 +688,7 @@ def _refresh_setup_index_token(
     token: _SetupIndexToken,
     integral_setup: IntegralSetup | None,
     h0_setup: H0Setup | H0SetupNode | None,
-    es2_setup: ES2CoreSetup | None,
+    es2_setup: ES2Setup | None,
 ) -> _SetupIndexToken:
     """Refresh backend/H0/ES2 tracking after dtype conversion of an intact System."""
     driver_type = None if integral_setup is None else integral_setup.driver_type
@@ -1097,31 +1080,31 @@ class System:
     interactions: InteractionList
     """Self-consistent contributions with their parameters gathered."""
 
-    es2_setup: ES2CoreSetup | None
+    es2_setup: ES2Setup | None
     """Numbers-only setup for pure single-system ES2 matrix construction."""
 
     es2_interaction: ES2 | None
     """Exact interaction associated with :attr:`es2_setup`, if any."""
 
-    es3_setup: ES3CoreSetup | None
+    es3_setup: ES3Setup | None
     """Numbers-only parameter data for per-call ES3 interaction data."""
 
     es3_interaction: ES3 | None
     """Exact interaction associated with :attr:`es3_setup`, if any."""
 
-    aes2_setup: AES2CoreSetup | None
+    aes2_setup: AES2Setup | None
     """Numbers/parameter setup for per-call AES2 geometry data."""
 
     aes2_interaction: AES2 | None
     """Exact AES2 interaction associated with :attr:`aes2_setup`."""
 
-    d4sc_setup: D4SCCoreSetup | None
+    d4sc_setup: D4SCSetup | None
     """Numbers/parameter setup for the exact migrated D4SC term."""
 
     d4sc_interaction: DispersionD4SC | None
     """Exact D4SC interaction associated with :attr:`d4sc_setup`."""
 
-    generalized_born_setup: GeneralizedBornCoreSetup | None
+    generalized_born_setup: GeneralizedBornSetup | None
     """Explicit setup for one exact GeneralizedBorn interaction."""
 
     generalized_born_interaction: GeneralizedBorn | None
@@ -1136,31 +1119,31 @@ class System:
     _packed_classical_setups: ClassicalListCache = field(repr=False)
     """Setups of a padded or conformer System's D3 Classicals."""
 
-    repulsion_setup: RepulsionCoreSetup | RepulsionSetup | None
+    repulsion_setup: RepulsionSetup | None
     """Numbers-only setup associated with the exact migrated Repulsion."""
 
     repulsion_classical: Repulsion | None
     """Exact migrated Repulsion associated with :attr:`repulsion_setup`."""
 
-    srb_setup: ShortRangeBondCoreSetup | ShortRangeBondSetup | None
+    srb_setup: ShortRangeBondSetup | None
     """Numbers-only setup associated with the exact migrated SRB term."""
 
     srb_classical: ShortRangeBond | None
     """Exact migrated SRB associated with :attr:`srb_setup`."""
 
-    d4_setup: DispersionD4CoreSetup | DispersionD4Setup | None
+    d4_setup: DispersionD4Setup | None
     """Numbers-only setup associated with the exact classical D4 term."""
 
     d4_classical: DispersionD4 | None
     """Exact classical D4 associated with :attr:`d4_setup`."""
 
-    ies_setup: IESCoreSetup | IESSetup | None
+    ies_setup: IESSetup | None
     """Numbers/parameter setup for the exact migrated IES term."""
 
     ies_classical: IES | None
     """Exact IES associated with :attr:`ies_setup`."""
 
-    halogen_setup: HalogenCoreSetup | HalogenSetup | None
+    halogen_setup: HalogenSetup | None
     """Numbers/parameter setup for the exact migrated halogen term."""
 
     halogen_classical: Halogen | None
@@ -1169,7 +1152,7 @@ class System:
     dd: DD
     """Device and data type of the tensors of the System."""
 
-    d3_setups: tuple[tuple[DispersionD3, DispersionD3CoreSetup], ...] = ()
+    d3_setups: tuple[tuple[DispersionD3, DispersionD3Setup], ...] = ()
     """Captured setup for each exact single-System classical D3 component."""
 
     exact_core: ExactSystemCore | None = field(default=None, repr=False)
@@ -1530,7 +1513,7 @@ class System:
         )
 
     @property
-    def d3_setup(self) -> DispersionD3CoreSetup | None:
+    def d3_setup(self) -> DispersionD3Setup | None:
         """Return the sole exact D3 setup when the System has one."""
         return self.d3_setups[0][1] if len(self.d3_setups) == 1 else None
 
@@ -1542,12 +1525,12 @@ class System:
             if isinstance(
                 setup,
                 (
-                    RepulsionCoreSetup,
-                    ShortRangeBondCoreSetup,
-                    DispersionD3CoreSetup,
-                    DispersionD4CoreSetup,
-                    IESCoreSetup,
-                    HalogenCoreSetup,
+                    RepulsionSetup,
+                    ShortRangeBondSetup,
+                    DispersionD3Setup,
+                    DispersionD4Setup,
+                    IESSetup,
+                    HalogenSetup,
                 ),
             )
             else None
@@ -1561,11 +1544,11 @@ class System:
             if isinstance(
                 setup,
                 (
-                    ES2CoreSetup,
-                    ES3CoreSetup,
-                    AES2CoreSetup,
-                    D4SCCoreSetup,
-                    GeneralizedBornCoreSetup,
+                    ES2Setup,
+                    ES3Setup,
+                    AES2Setup,
+                    D4SCSetup,
+                    GeneralizedBornSetup,
                 ),
             )
             else None
@@ -2252,12 +2235,12 @@ class System:
             if isinstance(
                 setup,
                 (
-                    RepulsionCoreSetup,
-                    ShortRangeBondCoreSetup,
-                    DispersionD3CoreSetup,
-                    DispersionD4CoreSetup,
-                    IESCoreSetup,
-                    HalogenCoreSetup,
+                    RepulsionSetup,
+                    ShortRangeBondSetup,
+                    DispersionD3Setup,
+                    DispersionD4Setup,
+                    IESSetup,
+                    HalogenSetup,
                 ),
             ):
                 kind = _classical_term_kind(component, setup)
@@ -2300,11 +2283,11 @@ class System:
             if isinstance(
                 setup,
                 (
-                    ES2CoreSetup,
-                    ES3CoreSetup,
-                    AES2CoreSetup,
-                    D4SCCoreSetup,
-                    GeneralizedBornCoreSetup,
+                    ES2Setup,
+                    ES3Setup,
+                    AES2Setup,
+                    D4SCSetup,
+                    GeneralizedBornSetup,
                 ),
             ):
                 kind = _interaction_term_kind(interaction, setup)
@@ -2726,45 +2709,39 @@ class Model:
             None,
         )
         es2_setup = (
-            core_es2_setup(
-                setup_es2(
-                    numbers,
-                    es2_interaction.hubbard,
-                    ihelp,
-                    lhubbard=es2_interaction.lhubbard,
-                    gexp=es2_interaction.gexp,
-                    average=es2_interaction.average,
-                    shell_resolved=es2_interaction.shell_resolved,
-                )
+            setup_es2(
+                numbers,
+                es2_interaction.hubbard,
+                ihelp,
+                lhubbard=es2_interaction.lhubbard,
+                gexp=es2_interaction.gexp,
+                average=es2_interaction.average,
+                shell_resolved=es2_interaction.shell_resolved,
             )
             if es2_interaction is not None and batch_mode == 0
             else None
         )
         es3_setup = (
-            core_es3_setup(
-                setup_es3(
-                    es3_interaction.hubbard_derivs,
-                    ihelp,
-                    shell_scale=es3_interaction.shell_scale,
-                )
+            setup_es3(
+                es3_interaction.hubbard_derivs,
+                ihelp,
+                shell_scale=es3_interaction.shell_scale,
             )
             if es3_interaction is not None and batch_mode == 0
             else None
         )
         aes2_setup = (
-            core_aes2_setup(setup_aes2(aes2_interaction, numbers, ihelp))
+            setup_aes2(aes2_interaction, numbers, ihelp)
             if aes2_interaction is not None and batch_mode == 0
             else None
         )
         d4sc_setup = (
-            core_d4sc_setup(setup_d4sc(d4sc_interaction, numbers))
+            setup_d4sc(d4sc_interaction, numbers)
             if d4sc_interaction is not None and batch_mode == 0
             else None
         )
         generalized_born_setup = (
-            core_generalized_born_setup(
-                setup_generalized_born(generalized_born_interaction, numbers)
-            )
+            setup_generalized_born(generalized_born_interaction, numbers)
             if generalized_born_interaction is not None and batch_mode == 0
             else None
         )
@@ -2875,7 +2852,7 @@ class Model:
         # ``packed_classical_setups``.
         packed_classical_setups = ClassicalListCache()
         custom_classical_setups: list[tuple[Classical, Any]] = []
-        d3_setups: list[tuple[DispersionD3, DispersionD3CoreSetup]] = []
+        d3_setups: list[tuple[DispersionD3, DispersionD3Setup]] = []
         repulsion_classical = next(
             (c for c in classicals.components if type(c) is Repulsion), None
         )
@@ -2906,37 +2883,25 @@ class Model:
                 component_setup = component.get_cache(numbers, ihelp)
                 setup: CoreSetup | None
                 if type(component) is DispersionD3:
-                    assert isinstance(component_setup, DispersionD3Cache)
-                    setup = core_dispersion_d3_setup(
-                        component_setup,
-                        numbers,
-                        component.numbers,
-                        component.param,
-                        snapshot=True,
-                    )
+                    assert isinstance(component_setup, DispersionD3Setup)
+                    setup = component_setup
                     d3_setups.append((component, setup))
                 elif type(component) is Repulsion:
                     assert isinstance(component_setup, RepulsionSetup)
-                    setup = core_repulsion_setup(component_setup)
-                    repulsion_setup = setup
+                    setup = repulsion_setup = component_setup
                 elif type(component) is ShortRangeBond:
                     assert isinstance(component_setup, ShortRangeBondSetup)
-                    setup = core_srb_setup(component_setup)
-                    srb_setup = setup
+                    setup = srb_setup = component_setup
                 elif type(component) is DispersionD4:
                     assert isinstance(component_setup, DispersionD4Setup)
-                    setup = core_dispersion_d4_setup(component_setup)
-                    d4_setup = setup
+                    setup = d4_setup = component_setup
                 elif type(component) is IES:
                     assert isinstance(component_setup, IESSetup)
-                    setup = core_ies_setup(component_setup)
-                    ies_setup = setup
+                    setup = ies_setup = component_setup
                 elif type(component) is Halogen:
                     assert isinstance(component_setup, HalogenSetup)
-                    setup = core_halogen_setup(component_setup)
-                    halogen_setup = setup
+                    setup = halogen_setup = component_setup
                 else:
-                    component_setup = _builtin_setup_node(component_setup)
                     validate_setup_data(component, component_setup)
                     packed_classical_setups[component.label] = component_setup
                     custom_classical_setups.append((component, component_setup))
@@ -2973,7 +2938,6 @@ class Model:
                     halogen_setup = batched_setup
                 else:
                     if type(component) not in BUILTIN_CLASSICAL_TYPES:
-                        batched_setup = _builtin_setup_node(batched_setup)
                         validate_setup_data(component, batched_setup)
                         custom_classical_setups.append(
                             (component, batched_setup)
@@ -3098,25 +3062,6 @@ class Model:
             _auto_classical_ids=auto_classical_ids,
             _auto_interaction_ids=auto_interaction_ids,
         )
-
-
-def _builtin_setup_node(setup: Any) -> Any:
-    """
-    Return a built-in classical setup (as returned by the inherited
-    ``get_cache`` of a built-in subclass) in its Node form, so that its
-    tensors are visible to transforms and conversions.
-    """
-    converters: tuple[tuple[type, Callable[[Any], Any]], ...] = (
-        (RepulsionSetup, core_repulsion_setup),
-        (ShortRangeBondSetup, core_srb_setup),
-        (DispersionD4Setup, core_dispersion_d4_setup),
-        (IESSetup, core_ies_setup),
-        (HalogenSetup, core_halogen_setup),
-    )
-    for setup_type, convert in converters:
-        if isinstance(setup, setup_type):
-            return convert(setup)
-    return setup
 
 
 def replace_system_components(

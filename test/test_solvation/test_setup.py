@@ -33,10 +33,8 @@ from dxtb._src.components.interactions.container import Charges
 from dxtb._src.components.interactions.solvation.alpb import (
     GeneralizedBorn,
     GeneralizedBornCache,
-    GeneralizedBornCoreSetup,
     GeneralizedBornSetup,
-    build_generalized_born_data,
-    core_generalized_born_setup,
+    build_generalized_born_cache,
     new_solvation,
     setup_generalized_born,
 )
@@ -70,7 +68,7 @@ def _component(
 def _energy(
     setup: GeneralizedBornSetup, positions: Tensor, charges: Tensor
 ) -> Tensor:
-    data = build_generalized_born_data(setup, positions)
+    data = build_generalized_born_cache(setup, positions)
     return 0.5 * (charges * (data.mat @ charges)).sum()
 
 
@@ -85,7 +83,7 @@ def test_setup_builder_preserves_direct_energy(kernel: str, alpb: bool) -> None:
         component.get_cache(numbers=numbers, positions=positions), charges
     )
     built = component.get_monopole_atom_energy(
-        build_generalized_born_data(setup, positions), charges
+        build_generalized_born_cache(setup, positions), charges
     )
     torch.testing.assert_close(built, direct)
 
@@ -138,12 +136,12 @@ def test_setup_is_frozen_and_call_data_is_fresh() -> None:
     assert not hasattr(component, "_cachevars")
     assert not hasattr(component, "_cachegrad")
 
-    core = core_generalized_born_setup(setup)
+    core = setup
     assert isinstance(core, Node)
-    assert type(core) is GeneralizedBornCoreSetup
+    assert type(core) is GeneralizedBornSetup
     leaves, spec = _pytree.tree_flatten(core)
     rebuilt = _pytree.tree_unflatten(leaves, spec)
-    assert type(rebuilt) is GeneralizedBornCoreSetup
+    assert type(rebuilt) is GeneralizedBornSetup
     assert all(a is b for a, b in zip(leaves, _pytree.tree_leaves(rebuilt)))
     converted = core.to(dtype=torch.float32)
     assert converted.keps.dtype == torch.float32
@@ -152,11 +150,11 @@ def test_setup_is_frozen_and_call_data_is_fresh() -> None:
     assert meta.keps.device.type == "meta"
     assert meta.numbers.dtype == core.numbers.dtype
     stacked = stack((core, core))
-    assert type(stacked) is GeneralizedBornCoreSetup
+    assert type(stacked) is GeneralizedBornSetup
     assert stacked.keps.shape[0] == 2
     torch.testing.assert_close(
-        build_generalized_born_data(core, positions).mat,
-        build_generalized_born_data(setup, positions).mat,
+        build_generalized_born_cache(core, positions).mat,
+        build_generalized_born_cache(setup, positions).mat,
     )
 
 
@@ -204,7 +202,7 @@ def test_charge_potential_and_dielectric_gradients() -> None:
     component = _component(numbers, dielectric=dielectric)
     setup = setup_generalized_born(component, numbers)
     charges = torch.tensor([0.2, -0.2], **DD, requires_grad=True)
-    data = build_generalized_born_data(setup, positions)
+    data = build_generalized_born_cache(setup, positions)
     energy = component.get_monopole_atom_energy(data, charges).sum()
     charge_gradient, dielectric_gradient = torch.autograd.grad(
         energy, (charges, dielectric)
@@ -263,7 +261,7 @@ def test_potential_transforms_and_born_radii_transforms() -> None:
     charges = torch.tensor([0.2, -0.2], **DD)
 
     def potential(pos: Tensor, q: Tensor = charges) -> Tensor:
-        data = build_generalized_born_data(setup, pos)
+        data = build_generalized_born_cache(setup, pos)
         return data.mat @ q
 
     direction = torch.tensor([[0.1, 0.0, 0.0], [-0.05, 0.0, 0.0]], **DD)
@@ -290,7 +288,7 @@ def test_potential_transforms_and_born_radii_transforms() -> None:
     torch.testing.assert_close(radii_mapped, radii_loop)
 
     def charge_potential(q: Tensor) -> Tensor:
-        return build_generalized_born_data(setup, positions).mat @ q
+        return build_generalized_born_cache(setup, positions).mat @ q
 
     q_direction = torch.tensor([0.1, -0.2], **DD)
     _, q_tangent = torch.func.jvp(charge_potential, (charges,), (q_direction,))
@@ -346,7 +344,7 @@ def test_system_setup_bypasses_cache_and_freezes_configuration(
     assert changed.generalized_born_setup is not None
     assert changed.generalized_born_setup.kernel == "still"
     assert not torch.allclose(
-        build_generalized_born_data(
+        build_generalized_born_cache(
             changed.generalized_born_setup, positions
         ).mat,
         data[component.label].mat,
@@ -477,7 +475,7 @@ def test_padded_ghost_has_finite_zero_contribution_and_gradient() -> None:
         [[0.0, 0.0, 0.0], [0.0, 0.0, 1.4], [0.0, 0.0, 0.0]], **DD
     ).requires_grad_(True)
     setup = setup_generalized_born(_component(numbers), numbers)
-    data = build_generalized_born_data(setup, positions)
+    data = build_generalized_born_cache(setup, positions)
     charges = torch.tensor([0.2, -0.2, 0.0], **DD)
     energies = 0.5 * charges * (data.mat @ charges)
     (gradient,) = torch.autograd.grad(energies.sum(), positions)
@@ -568,7 +566,7 @@ def test_core_node_mixed_dtype_device_and_context_edge_cases() -> None:
         setup_generalized_born(component, numbers),
         descreening=descreening,
     )
-    core = core_generalized_born_setup(legacy)
+    core = legacy
     assert core.keps.dtype == torch.float64
     assert core.born_scale.dtype == torch.float32
     assert core.born_offset.dtype == torch.float32
@@ -593,23 +591,17 @@ def test_core_node_mixed_dtype_device_and_context_edge_cases() -> None:
         born_scale=torch.tensor(0.95, device="cpu", dtype=torch.double),
         born_offset=torch.tensor(0.08, device="cpu", dtype=torch.double),
     )
-    meta_core = core_generalized_born_setup(meta_setup)
+    meta_core = meta_setup
     assert meta_core.born_scale.device.type == "meta"
     assert meta_core.born_offset.device.type == "meta"
     with pytest.raises(RuntimeError, match="different devices"):
-        core_generalized_born_setup(
-            replace(
+        replace(
                 meta_setup,
                 rvdw=torch.tensor([1.2, 1.2], device="cpu", dtype=torch.double),
             )
-        )
 
-    still_core = core_generalized_born_setup(
-        setup_generalized_born(_component(numbers, kernel="still"), numbers)
-    )
-    no_alpb_core = core_generalized_born_setup(
-        setup_generalized_born(_component(numbers, alpb=False), numbers)
-    )
+    still_core = setup_generalized_born(_component(numbers, kernel="still"), numbers)
+    no_alpb_core = setup_generalized_born(_component(numbers, alpb=False), numbers)
     core_spec = _pytree.tree_flatten(core)[1]
     assert core_spec != _pytree.tree_flatten(still_core)[1]
     assert core_spec != _pytree.tree_flatten(no_alpb_core)[1]

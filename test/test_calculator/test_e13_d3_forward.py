@@ -26,8 +26,6 @@ from dxtb import GFN1_XTB, ParamModule, labels
 from dxtb._src.calculators.model import Model
 from dxtb._src.components.classicals.dispersion.d3 import (
     DispersionD3,
-    _D3ParameterValue,
-    core_dispersion_d3_setup,
     dispersion_d3_energy,
 )
 from dxtb.config import Config
@@ -304,11 +302,10 @@ def test_zero_trainable_s9_derivative_matches_finite_difference() -> None:
         "s9": torch.tensor(0.0, requires_grad=True, **dd),
     }
     dispersion = DispersionD3(numbers=numbers, param=params).to(**dd)
-    cache = dispersion.get_cache(numbers)
-    core = core_dispersion_d3_setup(cache, numbers, numbers, params)
+    setup = dispersion.get_cache(numbers)
 
-    legacy = dispersion.get_energy(positions, cache).sum()
-    exact = dispersion_d3_energy(core, positions).sum()
+    legacy = dispersion.get_energy(positions, setup).sum()
+    exact = dispersion_d3_energy(setup, positions).sum()
     legacy_gradient = torch.autograd.grad(
         legacy, params["s9"], create_graph=True, retain_graph=True
     )[0]
@@ -318,36 +315,20 @@ def test_zero_trainable_s9_derivative_matches_finite_difference() -> None:
     assert legacy_gradient.abs() > 1.0e-12
     torch.testing.assert_close(legacy_gradient, exact_gradient)
 
+    def exact_energy(s9: torch.Tensor) -> torch.Tensor:
+        return dispersion_d3_energy(
+            setup.replace(param={**setup.param, "s9": s9}), positions
+        ).sum()
+
     step = 1.0e-4
-    with torch.no_grad():
-        params["s9"].fill_(step)
-    plus = dispersion.get_energy(positions, cache).sum()
-    with torch.no_grad():
-        params["s9"].fill_(-step)
-    minus = dispersion.get_energy(positions, cache).sum()
-    with torch.no_grad():
-        params["s9"].zero_()
+    plus = exact_energy(torch.tensor(step, **dd))
+    minus = exact_energy(torch.tensor(-step, **dd))
     finite_difference = (plus - minus) / (2.0 * step)
     torch.testing.assert_close(
         legacy_gradient, finite_difference, atol=1.0e-10, rtol=1.0e-6
     )
 
-    def exact_energy(s9: torch.Tensor) -> torch.Tensor:
-        entries = tuple(
-            (
-                entry.replace(value=_D3ParameterValue.encode(s9))
-                if entry.name == "s9"
-                else entry
-            )
-            for entry in core.parameter_entries
-        )
-        return dispersion_d3_energy(
-            core.replace(parameter_entries=entries), positions
-        ).sum()
-
-    static_zero_python = exact_energy(0.0)
-    static_zero_tensor = exact_energy(torch.tensor(0.0, dtype=positions.dtype))
-    torch.testing.assert_close(static_zero_python, static_zero_tensor)
+    static_zero_python = exact_energy(torch.tensor(0.0, **dd))
 
     nonzero_s9 = exact_energy(torch.tensor(0.25, dtype=positions.dtype))
     negative_s9 = exact_energy(torch.tensor(-0.25, dtype=positions.dtype))

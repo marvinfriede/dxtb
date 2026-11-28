@@ -58,25 +58,25 @@ from dxtb._src.calculators.singlepoint import (
 )
 from dxtb._src.components.classicals.dispersion.d3 import (
     DispersionD3,
-    DispersionD3CoreSetup,
+    DispersionD3Setup,
     dispersion_d3_energy,
 )
 from dxtb._src.components.classicals.dispersion.d4 import (
     DispersionD4,
-    DispersionD4CoreSetup,
+    DispersionD4Setup,
     dispersion_d4_energy,
 )
 from dxtb._src.components.classicals.halogen import (
     Halogen,
-    HalogenCoreSetup,
+    HalogenSetup,
     halogen_energy,
 )
-from dxtb._src.components.classicals.ies import IESCoreSetup, ies_energy
+from dxtb._src.components.classicals.ies import IESSetup, ies_energy
 from dxtb._src.components.classicals.repulsion.rep import (
-    RepulsionCoreSetup,
+    RepulsionSetup,
 )
 from dxtb._src.components.classicals.shortrangebond import (
-    ShortRangeBondCoreSetup,
+    ShortRangeBondSetup,
 )
 from dxtb._src.components.interactions.field.efield import (
     LABEL_EFIELD,
@@ -2253,7 +2253,7 @@ def _evaluate_lane_classical(
         )
         d3_setup = (
             captured_setup
-            if isinstance(captured_setup, DispersionD3CoreSetup)
+            if isinstance(captured_setup, DispersionD3Setup)
             else next(
                 (
                     setup
@@ -2275,7 +2275,7 @@ def _evaluate_lane_classical(
         elif type(component) is DispersionD4:
             d4_setup = (
                 captured_setup
-                if isinstance(captured_setup, DispersionD4CoreSetup)
+                if isinstance(captured_setup, DispersionD4Setup)
                 else (
                     system.d4_setup
                     if component is system.d4_classical
@@ -2293,7 +2293,7 @@ def _evaluate_lane_classical(
         elif type(component) is Halogen:
             halogen_setup = (
                 captured_setup
-                if isinstance(captured_setup, HalogenCoreSetup)
+                if isinstance(captured_setup, HalogenSetup)
                 else (
                     system.halogen_setup
                     if component is system.halogen_classical
@@ -2308,12 +2308,12 @@ def _evaluate_lane_classical(
                     halogen_energy(halogen_setup, lane_positions),
                 )
             )
-        elif isinstance(captured_setup, IESCoreSetup) or (
+        elif isinstance(captured_setup, IESSetup) or (
             captured_setup is None and component is system.ies_classical
         ):
             ies_setup = (
                 captured_setup
-                if isinstance(captured_setup, IESCoreSetup)
+                if isinstance(captured_setup, IESSetup)
                 else system.ies_setup
             )
             if ies_setup is None:
@@ -2326,7 +2326,7 @@ def _evaluate_lane_classical(
             )
         else:
             if isinstance(
-                captured_setup, (RepulsionCoreSetup, ShortRangeBondCoreSetup)
+                captured_setup, (RepulsionSetup, ShortRangeBondSetup)
             ):
                 setup = captured_setup
             elif component is system.repulsion_classical:

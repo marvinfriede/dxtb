@@ -87,9 +87,9 @@ def test_single_system_setup_does_not_use_generic_classical_cache(
     monkeypatch.setattr(ClassicalList, "get_cache", fail_get_cache)
     system = Model(par=ParamModule(GFN1_XTB, **DD)).setup(numbers)
 
-    assert type(system.repulsion_setup).__name__ == "RepulsionCoreSetup"
+    assert type(system.repulsion_setup).__name__ == "RepulsionSetup"
     assert len(system.d3_setups) == 1
-    assert type(system.d3_setups[0][1]).__name__ == "DispersionD3CoreSetup"
+    assert type(system.d3_setups[0][1]).__name__ == "DispersionD3Setup"
     assert not system._packed_classical_setups
     assert not hasattr(system, "_packed_classical_cache")
     assert set(system.classical_cache) == {

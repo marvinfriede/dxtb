@@ -697,7 +697,7 @@ def test_es3_partial_meta_and_dispatch_mode_guards() -> None:
     assert sys_oh2.integral_setup is not None
     assert sys_oh2.integral_setup.pytorch is not None
 
-    # 0. ES2CoreSetup float shells_to_atom via unvalidated tree_unflatten.
+    # 0. ES2Setup float shells_to_atom via unvalidated tree_unflatten.
     es2 = sys_oh2.es2_setup
     assert es2.shells_to_atom is not None
     es2_leaves, es2_spec = tree_flatten(es2)
@@ -769,7 +769,7 @@ def test_es3_partial_meta_and_dispatch_mode_guards() -> None:
     assert cand_g0._ihelp_schema_compatible() is False
     assert cand_g0._ihelp_compatible() is False
 
-    # 1. ES3CoreSetup: 0D scalar (no IndexError!), 2D tensor, and unvalidated partial-meta leaf.
+    # 1. ES3Setup: 0D scalar (no IndexError!), 2D tensor, and unvalidated partial-meta leaf.
     es3 = sys_oh2.es3_setup
     n_expected = es3.hubbard_derivs.shape[0]
     _, es3_spec = tree_flatten(es3)

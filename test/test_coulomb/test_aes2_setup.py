@@ -32,10 +32,8 @@ from dxtb._src.calculators.singlepoint import _interaction_data
 from dxtb._src.components.interactions.container import Charges
 from dxtb._src.components.interactions.coulomb import (
     AES2,
-    AES2CoreSetup,
     AES2Setup,
-    build_aes2_data,
-    core_aes2_setup,
+    build_aes2_cache,
     new_aes2,
     setup_aes2,
 )
@@ -85,7 +83,7 @@ def _energy(
     ihelp: IndexHelper,
 ) -> Tensor:
     return interaction.get_energy(
-        build_aes2_data(setup, positions), charges, ihelp
+        build_aes2_cache(setup, positions), charges, ihelp
     ).sum()
 
 
@@ -123,8 +121,8 @@ def test_setup_is_frozen_and_call_data_is_fresh() -> None:
     with pytest.raises(FrozenInstanceError):
         setup.dmp3 = torch.tensor(2.0, **DD)  # type: ignore[misc]
 
-    first = build_aes2_data(setup, positions)
-    second = build_aes2_data(setup, positions)
+    first = build_aes2_cache(setup, positions)
+    second = build_aes2_cache(setup, positions)
     assert first is not second
     assert first.amat_sd.data_ptr() != second.amat_sd.data_ptr()
     assert not hasattr(interaction, "cache")
@@ -132,12 +130,12 @@ def test_setup_is_frozen_and_call_data_is_fresh() -> None:
     assert not hasattr(interaction, "_cachegrad")
     torch.testing.assert_close(first.amat_sd, second.amat_sd)
 
-    core = core_aes2_setup(setup)
+    core = setup
     assert isinstance(core, Node)
-    assert type(core) is AES2CoreSetup
+    assert type(core) is AES2Setup
     leaves, spec = _pytree.tree_flatten(core)
     rebuilt = _pytree.tree_unflatten(leaves, spec)
-    assert type(rebuilt) is AES2CoreSetup
+    assert type(rebuilt) is AES2Setup
     assert all(a is b for a, b in zip(leaves, _pytree.tree_leaves(rebuilt)))
     converted = core.to(dtype=torch.float32)
     assert converted.dmp3.dtype == torch.float32
@@ -147,9 +145,9 @@ def test_setup_is_frozen_and_call_data_is_fresh() -> None:
     assert meta.dmp3.device.type == "meta"
     assert meta.pair_mask.dtype == torch.bool
     batched = stack((core, core))
-    assert type(batched) is AES2CoreSetup
+    assert type(batched) is AES2Setup
     assert batched.dmp3.shape[0] == 2
-    core_data = build_aes2_data(core, positions)
+    core_data = build_aes2_cache(core, positions)
     torch.testing.assert_close(core_data.amat_sd, first.amat_sd)
 
 
@@ -196,7 +194,7 @@ def test_aes2_potential_transforms_include_interaction_list() -> None:
 
     def potential(pos: Tensor) -> Tensor:
         call_data = InteractionListCache()
-        call_data[interaction.label] = build_aes2_data(setup, pos)
+        call_data[interaction.label] = build_aes2_cache(setup, pos)
         value = interactions.get_potential(call_data, charges, ihelp)
         assert value.mono is not None
         assert value.dipole is not None

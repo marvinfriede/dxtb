@@ -25,19 +25,15 @@ from .factory import new_ies
 from .ies import (
     IES,
     LABEL_IES,
-    IESCoreSetup,
     IESSetup,
-    core_ies_setup,
     ies_energy,
     setup_ies,
 )
 
 __all__ = [
     "IES",
-    "IESCoreSetup",
     "IESSetup",
     "LABEL_IES",
-    "core_ies_setup",
     "ies_energy",
     "new_ies",
     "setup_ies",

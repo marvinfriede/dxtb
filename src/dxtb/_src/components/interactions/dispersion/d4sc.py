@@ -23,8 +23,6 @@ Self-consistent D4 dispersion correction.
 
 from __future__ import annotations
 
-import dataclasses
-from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -49,13 +47,11 @@ from dxtb._src.utils.tensors import normalize_device
 from ..base import Interaction, InteractionCache
 
 __all__ = [
-    "D4SCCoreSetup",
     "D4SCSetup",
     "DispersionD4SC",
     "DispersionD4SCCache",
     "LABEL_DISPERSIOND4SC",
-    "build_d4sc_data",
-    "core_d4sc_setup",
+    "build_d4sc_cache",
     "new_d4sc",
     "setup_d4sc",
 ]
@@ -65,262 +61,17 @@ LABEL_DISPERSIOND4SC = "DispersionD4SC"
 """Label for the :class:`.DispersionD4SC` interaction, coinciding with the class name."""
 
 
-@dataclass(frozen=True, eq=False)
-class D4SCSetup:
+class D4SCSetup(Node):
     """Static numbers and parameter data for self-consistent D4."""
 
-    numbers: Tensor
-    parameters: tuple[tuple[str, Tensor | float | int | str], ...]
-    rcov: Tensor
-    r4r2: Tensor
-    cn_cutoff: Tensor
-    pair_weight: Tensor
-    counting_function: CountingFunction
-    model_type: type[d4.model.D4Model]
-    model_ga: float
-    model_gc: float
-    model_wf: Tensor
-    model_ref_charges: str
-    model_rc6: Tensor
-    model_extra: tuple[tuple[str, Any], ...] = ()
-
-    def as_param(self) -> d4.Param:
-        """Materialize the parameter mapping expected by tad-dftd4."""
-        return d4.Param(**dict(self.parameters))
-
-
-@dataclass(frozen=True, eq=False)
-class _StaticMapping:
-    items: tuple[tuple[Any, Any], ...]
-
-
-@dataclass(frozen=True, eq=False)
-class _StaticList:
-    items: tuple[Any, ...]
-
-
-class _D4SCValue(Node):
-    """Typed recursive value used for mixed static and tensor model state."""
-
-    kind: str = context()
-    metadata: Any = context()
-    tensor_value: Tensor | None = child(keep_dtype=True)
-    items: tuple[_D4SCValue, ...] = child(keep_dtype=True)
-
-    def _convert_child(
-        self,
-        name: str,
-        value: Any,
-        device: torch.device | str | None,
-        dtype: torch.dtype | None,
-    ) -> Any:
-        if name == "tensor_value" and isinstance(value, Tensor):
-            target_dtype = dtype if value.is_floating_point() else None
-            return value.to(device=device, dtype=target_dtype)
-        if name == "items":
-            converted = tuple(
-                item.to(device=device, dtype=dtype) for item in value
-            )
-            if all(new is old for old, new in zip(value, converted)):
-                return value
-            return converted
-        return super()._convert_child(name, value, device, dtype)
-
-    @classmethod
-    def encode(cls, value: Any) -> _D4SCValue:
-        """Encode one already-snapshotted value without copying tensors."""
-        if isinstance(value, Tensor):
-            return cls(
-                kind="tensor", metadata=None, tensor_value=value, items=()
-            )
-        if isinstance(value, _StaticMapping):
-            items = tuple(
-                child
-                for key, item in value.items
-                for child in (cls.encode(key), cls.encode(item))
-            )
-            return cls(
-                kind="mapping", metadata=None, tensor_value=None, items=items
-            )
-        if isinstance(value, _StaticList):
-            return cls(
-                kind="list",
-                metadata=None,
-                tensor_value=None,
-                items=tuple(cls.encode(item) for item in value.items),
-            )
-        if isinstance(value, tuple):
-            return cls(
-                kind="tuple",
-                metadata=None,
-                tensor_value=None,
-                items=tuple(cls.encode(item) for item in value),
-            )
-        if value is None or isinstance(value, (bool, int, float, str)):
-            return cls(
-                kind="scalar", metadata=value, tensor_value=None, items=()
-            )
-        raise TypeError(
-            "Custom D4Model state must contain only tensors and immutable "
-            f"scalar values; received {type(value).__name__}."
-        )
-
-    def decode(self) -> Any:
-        """Reconstruct the immutable setup representation."""
-        if self.kind == "tensor":
-            return self.tensor_value
-        if self.kind == "scalar":
-            return self.metadata
-        if self.kind == "tuple":
-            return tuple(item.decode() for item in self.items)
-        if self.kind == "list":
-            return _StaticList(tuple(item.decode() for item in self.items))
-        if self.kind == "mapping":
-            return _StaticMapping(
-                tuple(
-                    (self.items[index].decode(), self.items[index + 1].decode())
-                    for index in range(0, len(self.items), 2)
-                )
-            )
-        raise TypeError(f"Unsupported D4SC value kind: {self.kind!r}.")
-
-
-class _D4SCNamedValue(Node):
-    """One ordered named D4SC parameter or model-state value."""
-
-    name: str = context()
-    value: _D4SCValue = child()
-
-
-class D4SCCoreSetup(Node):
-    """Immutable Node values used by single-System D4SC evaluation."""
-
     numbers: Tensor = child(keep_dtype=True)
-    parameter_entries: tuple[_D4SCNamedValue, ...] = child(keep_dtype=True)
+    param: d4.Param = child()
     rcov: Tensor = child()
     r4r2: Tensor = child()
     cn_cutoff: Tensor = child()
     pair_weight: Tensor = child()
+    model: d4.model.D4Model = child()
     counting_function: CountingFunction = context()
-    model_type: type[d4.model.D4Model] = context()
-    model_ga: float = context()
-    model_gc: float = context()
-    model_wf: Tensor = child()
-    model_ref_charges: str = context()
-    model_rc6: Tensor = child()
-    model_extra_entries: tuple[_D4SCNamedValue, ...] = child(keep_dtype=True)
-
-    def _convert_child(
-        self,
-        name: str,
-        value: Any,
-        device: torch.device | str | None,
-        dtype: torch.dtype | None,
-    ) -> Any:
-        if name in ("parameter_entries", "model_extra_entries"):
-            converted = tuple(
-                entry.to(device=device, dtype=dtype) for entry in value
-            )
-            if all(new is old for old, new in zip(value, converted)):
-                return value
-            return converted
-        return super()._convert_child(name, value, device, dtype)
-
-    @property
-    def parameters(self) -> tuple[tuple[str, Any], ...]:
-        """Return the ordered view of parameter values."""
-        return tuple(
-            (entry.name, entry.value.decode())
-            for entry in self.parameter_entries
-        )
-
-    @property
-    def model_extra(self) -> tuple[tuple[str, Any], ...]:
-        """Return the ordered immutable view of model state."""
-        return tuple(
-            (entry.name, entry.value.decode())
-            for entry in self.model_extra_entries
-        )
-
-    def as_param(self) -> d4.Param:
-        """Materialize the parameter mapping expected by tad-dftd4."""
-        return d4.Param(**dict(self.parameters))
-
-
-def core_d4sc_setup(setup: D4SCSetup) -> D4SCCoreSetup:
-    """Convert the component setup to immutable typed Node values."""
-    return D4SCCoreSetup(
-        numbers=setup.numbers,
-        parameter_entries=tuple(
-            _D4SCNamedValue(name=name, value=_D4SCValue.encode(value))
-            for name, value in setup.parameters
-        ),
-        rcov=setup.rcov,
-        r4r2=setup.r4r2,
-        cn_cutoff=setup.cn_cutoff,
-        pair_weight=setup.pair_weight,
-        counting_function=setup.counting_function,
-        model_type=setup.model_type,
-        model_ga=setup.model_ga,
-        model_gc=setup.model_gc,
-        model_wf=setup.model_wf,
-        model_ref_charges=setup.model_ref_charges,
-        model_rc6=setup.model_rc6,
-        model_extra_entries=tuple(
-            _D4SCNamedValue(name=name, value=_D4SCValue.encode(value))
-            for name, value in setup.model_extra
-        ),
-    )
-
-
-def _d4sc_setup_view(setup: D4SCCoreSetup) -> D4SCSetup:
-    """Build a zero-copy component view of a captured core setup."""
-    return D4SCSetup(
-        numbers=setup.numbers,
-        parameters=setup.parameters,
-        rcov=setup.rcov,
-        r4r2=setup.r4r2,
-        cn_cutoff=setup.cn_cutoff,
-        pair_weight=setup.pair_weight,
-        counting_function=setup.counting_function,
-        model_type=setup.model_type,
-        model_ga=setup.model_ga,
-        model_gc=setup.model_gc,
-        model_wf=setup.model_wf,
-        model_ref_charges=setup.model_ref_charges,
-        model_rc6=setup.model_rc6,
-        model_extra=setup.model_extra,
-    )
-
-
-def _clone_static(value: Any) -> Any:
-    """Clone tensor-valued static model data without cutting its graph."""
-    if isinstance(value, Tensor):
-        return value.clone()
-    if isinstance(value, tuple):
-        return tuple(_clone_static(item) for item in value)
-    if isinstance(value, list):
-        return _StaticList(tuple(_clone_static(item) for item in value))
-    if isinstance(value, dict):
-        return _StaticMapping(
-            tuple((key, _clone_static(item)) for key, item in value.items())
-        )
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-    raise TypeError(
-        "Custom D4Model state must contain only tensors and immutable scalar "
-        f"values; received {type(value).__name__}."
-    )
-
-
-def _extra_model_state(model: d4.model.D4Model) -> tuple[tuple[str, Any], ...]:
-    """Capture the extra fields declared by a D4Model subclass."""
-    base_fields = {"numbers", "ga", "gc", "wf", "ref_charges", "rc6"}
-    return tuple(
-        (f.name, _clone_static(getattr(model, f.name)))
-        for f in dataclasses.fields(model)
-        if f.name not in base_fields
-    )
 
 
 def setup_d4sc(component: DispersionD4SC, numbers: Tensor) -> D4SCSetup:
@@ -338,72 +89,22 @@ def setup_d4sc(component: DispersionD4SC, numbers: Tensor) -> D4SCSetup:
     )
 
     model = component.model
-    param = component.param
-    parameters = tuple(
-        (name, _clone_static(value)) for name, value in param.items()
-    )
-
     return D4SCSetup(
         numbers=numbers.clone(),
-        parameters=parameters,
+        param={name: value.clone() for name, value in component.param.items()},
         rcov=component.rcov.clone(),
         r4r2=component.r4r2.clone(),
         cn_cutoff=component.cutoff.cn.clone(),
         pair_weight=pair_weight,
+        model=model.replace(
+            numbers=numbers.clone(), wf=model.wf.clone(), rc6=model.rc6.clone()
+        ),
         counting_function=component.counting_function,
-        model_type=type(model),
-        model_ga=model.ga,
-        model_gc=model.gc,
-        model_wf=model.wf.clone(),
-        model_ref_charges=model.ref_charges,
-        model_rc6=model.rc6.clone(),
-        model_extra=_extra_model_state(model),
     )
 
 
-def _build_d4sc_model(
-    setup: D4SCSetup | D4SCCoreSetup,
-) -> d4.model.D4Model:
-    """Construct a model object owned by one call-data value."""
-    try:
-        model = setup.model_type.create(
-            setup.numbers.clone(),
-            ga=setup.model_ga,
-            gc=setup.model_gc,
-            wf=setup.model_wf.clone(),
-            ref_charges=setup.model_ref_charges,
-            rc6=setup.model_rc6.clone(),
-            device=setup.numbers.device,
-            dtype=setup.model_wf.dtype,
-            **{
-                name: _restore_static(value)
-                for name, value in setup.model_extra
-            },
-        )
-    except TypeError as exc:
-        raise TypeError(
-            "A custom D4Model used by D4SC must be creatable with "
-            "D4Model.create and its extra fields."
-        ) from exc
-
-    return model
-
-
-def _restore_static(value: Any) -> Any:
-    """Rebuild mutable values owned by the call-local external model."""
-    if isinstance(value, _StaticMapping):
-        return {key: _restore_static(item) for key, item in value.items}
-    if isinstance(value, _StaticList):
-        return [_restore_static(item) for item in value.items]
-    if isinstance(value, tuple):
-        return tuple(_restore_static(item) for item in value)
-    if isinstance(value, Tensor):
-        return value.clone()
-    return value
-
-
-def build_d4sc_data(
-    setup: D4SCSetup | D4SCCoreSetup, positions: Tensor
+def build_d4sc_cache(
+    setup: D4SCSetup, positions: Tensor
 ) -> DispersionD4SCCache:
     """Build fresh geometry-dependent D4SC data for one evaluation."""
     numbers = setup.numbers
@@ -415,11 +116,11 @@ def build_d4sc_data(
         cutoff=setup.cn_cutoff,
         pair_weight=setup.pair_weight,
     )
-    model = _build_d4sc_model(setup)
+    model = setup.model
     dispmat = d4sc_dispersion_matrix(
         numbers,
         positions,
-        setup.as_param(),
+        setup.param,
         setup.r4r2,
         model.rc6,
         cutoff=d4_defaults.D4_DISP2_CUTOFF,
@@ -447,7 +148,7 @@ class DispersionD4SCCache(InteractionCache):
     """
 
     model: d4.model.D4Model = child()
-    """Fresh model instance owned by this one call-data object."""
+    """D4 model of the setup."""
 
 
 class DispersionD4SC(Interaction):
@@ -525,7 +226,7 @@ class DispersionD4SC(Interaction):
             )
         if positions is None:
             raise ValueError("Positions are required for D4SC data.")
-        return build_d4sc_data(setup_d4sc(self, numbers), positions)
+        return build_d4sc_cache(setup_d4sc(self, numbers), positions)
 
     @override
     def get_monopole_atom_energy(

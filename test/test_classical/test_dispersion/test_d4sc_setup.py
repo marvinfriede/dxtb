@@ -31,12 +31,10 @@ from dxtb._src.components.classicals.dispersion import _d4_adapter as d4
 from dxtb._src.components.interactions import InteractionList
 from dxtb._src.components.interactions.base import InteractionCache
 from dxtb._src.components.interactions.dispersion.d4sc import (
-    D4SCCoreSetup,
     D4SCSetup,
     DispersionD4SC,
     DispersionD4SCCache,
-    build_d4sc_data,
-    core_d4sc_setup,
+    build_d4sc_cache,
     new_d4sc,
     setup_d4sc,
 )
@@ -78,14 +76,11 @@ def test_old_culling_alias_is_removed() -> None:
 
     setup = setup_d4sc(interaction, numbers)
     persistent_numbers = interaction.model.numbers.clone()
-    persistent_wf = setup.model_wf.clone()
-    persistent_rc6 = setup.model_rc6.clone()
-    persistent_parameters = tuple(
-        (name, value.clone() if isinstance(value, Tensor) else value)
-        for name, value in setup.parameters
-    )
+    persistent_wf = setup.model.wf.clone()
+    persistent_rc6 = setup.model.rc6.clone()
+    persistent_parameters = {k: v.clone() for k, v in setup.param.items()}
     local_positions = positions.clone().requires_grad_(True)
-    data = build_d4sc_data(setup, local_positions)
+    data = build_d4sc_cache(setup, local_positions)
 
     assert data.model is not interaction.model
     assert not hasattr(data, "cull")
@@ -99,19 +94,13 @@ def test_old_culling_alias_is_removed() -> None:
     assert torch.isfinite(position_grad).all()
     assert torch.equal(interaction.model.numbers, persistent_numbers)
     assert torch.equal(setup.numbers, persistent_numbers)
-    assert torch.equal(setup.model_wf, persistent_wf)
-    assert torch.equal(setup.model_rc6, persistent_rc6)
-    for (name, value), (snapshot_name, snapshot) in zip(
-        setup.parameters, persistent_parameters
-    ):
-        assert name == snapshot_name
-        if isinstance(value, Tensor):
-            assert isinstance(snapshot, Tensor)
-            assert torch.equal(value, snapshot)
-        else:
-            assert value == snapshot
+    assert torch.equal(setup.model.wf, persistent_wf)
+    assert torch.equal(setup.model.rc6, persistent_rc6)
+    assert setup.param.keys() == persistent_parameters.keys()
+    for name, value in setup.param.items():
+        assert torch.equal(value, persistent_parameters[name])
 
-    assert build_d4sc_data(setup, positions) is not data
+    assert build_d4sc_cache(setup, positions) is not data
 
 
 def test_direct_get_cache_is_fresh_and_nonpersistent() -> None:
@@ -132,37 +121,30 @@ def test_direct_get_cache_is_fresh_and_nonpersistent() -> None:
 
 
 def test_setup_is_frozen_and_contains_only_static_data() -> None:
-    """D4SC setup excludes models, geometry and call outputs."""
+    """D4SC setup excludes components, geometry and call outputs."""
     numbers, _ = _sample()
     par = _parameters()
     system = _model(par, exclude=("es2", "es3", "aes2")).setup(numbers)
     setup = system.d4sc_setup
 
-    assert isinstance(setup, D4SCCoreSetup)
+    assert isinstance(setup, D4SCSetup)
     assert system.d4sc_interaction is not None
     assert setup is not None
     assert {field.name for field in fields(setup)} == {
         "numbers",
-        "parameter_entries",
+        "param",
         "rcov",
         "r4r2",
         "cn_cutoff",
         "pair_weight",
+        "model",
         "counting_function",
-        "model_type",
-        "model_ga",
-        "model_gc",
-        "model_wf",
-        "model_ref_charges",
-        "model_rc6",
-        "model_extra_entries",
     }
-    assert isinstance(setup.parameters, tuple)
-    assert all(isinstance(entry, tuple) for entry in setup.parameters)
+    assert isinstance(setup.param, dict)
     assert isinstance(setup_d4sc(system.d4sc_interaction, numbers), D4SCSetup)
     assert isinstance(
-        core_d4sc_setup(setup_d4sc(system.d4sc_interaction, numbers)),
-        D4SCCoreSetup,
+        setup_d4sc(system.d4sc_interaction, numbers),
+        D4SCSetup,
     )
     assert not any(
         isinstance(
@@ -173,7 +155,6 @@ def test_setup_is_frozen_and_contains_only_static_data() -> None:
                 Model,
                 DispersionD4SC,
                 DispersionD4SCCache,
-                d4.model.D4Model,
             ),
         )
         for field in fields(setup)
@@ -239,7 +220,7 @@ def test_custom_model_subclass_is_reconstructed_for_direct_compatibility() -> (
         auto_int_level=False,
     ).setup(numbers)
     assert system.d4sc_setup is not None
-    call_data = build_d4sc_data(system.d4sc_setup, positions)
+    call_data = build_d4sc_cache(system.d4sc_setup, positions)
     assert type(call_data.model) is ScaledD4Model
 
 
@@ -248,7 +229,7 @@ def test_call_local_potential_is_energy_charge_derivative() -> None:
     numbers, positions = _sample("SiH4")
     interaction = new_d4sc(numbers, _parameters(), **DD)
     assert interaction is not None
-    data = build_d4sc_data(setup_d4sc(interaction, numbers), positions)
+    data = build_d4sc_cache(setup_d4sc(interaction, numbers), positions)
     charges = torch.tensor(
         [0.05, -0.02, 0.01, -0.02, -0.02], **DD, requires_grad=True
     )
@@ -302,7 +283,7 @@ def test_setup_parameters_retain_parammodule_gradient() -> None:
     interaction = new_d4sc(numbers, par, **DD)
     assert interaction is not None
     setup = setup_d4sc(interaction, numbers)
-    data = build_d4sc_data(setup, positions)
+    data = build_d4sc_cache(setup, positions)
     charges = torch.tensor([0.05, -0.02, 0.01, -0.02, -0.02], **DD)
     energy = interaction.get_monopole_atom_energy(data, charges).sum()
     grads = torch.autograd.grad(energy, leaves, allow_unused=True)
@@ -318,7 +299,7 @@ def test_setup_parameters_retain_parammodule_gradient() -> None:
         leaf.requires_grad_(True)
     interaction2 = new_d4sc(numbers, par2, **DD)
     assert interaction2 is not None
-    data2 = build_d4sc_data(setup_d4sc(interaction2, numbers), positions)
+    data2 = build_d4sc_cache(setup_d4sc(interaction2, numbers), positions)
     energy2 = interaction2.get_monopole_atom_energy(data2, charges).sum()
     grads2 = torch.autograd.grad(energy2, leaves2)
     for grad, grad2 in zip(grads, grads2):
@@ -329,7 +310,7 @@ def test_setup_parameters_retain_parammodule_gradient() -> None:
     s9.requires_grad_(True)
     interaction3 = new_d4sc(numbers, par3, **DD)
     assert interaction3 is not None
-    data3 = build_d4sc_data(setup_d4sc(interaction3, numbers), positions)
+    data3 = build_d4sc_cache(setup_d4sc(interaction3, numbers), positions)
     energy3 = interaction3.get_monopole_atom_energy(data3, charges).sum()
     assert not energy3.requires_grad
 
@@ -348,7 +329,7 @@ def test_mixed_position_parameter_derivative_is_finite() -> None:
 
     def energy(x: Tensor) -> Tensor:
         return interaction.get_monopole_atom_energy(
-            build_d4sc_data(setup, x), q
+            build_d4sc_cache(setup, x), q
         ).sum()
 
     (grad_pos,) = torch.autograd.grad(energy(pos), pos, create_graph=True)
@@ -371,7 +352,7 @@ def test_stale_component_mutation_does_not_change_existing_setup() -> None:
     q = torch.tensor([0.03, -0.02, -0.01, 0.01, -0.01], **DD)
 
     def energy(current_setup: D4SCSetup) -> Tensor:
-        data = build_d4sc_data(current_setup, positions)
+        data = build_d4sc_cache(current_setup, positions)
         return interaction.get_monopole_atom_energy(data, q).sum()
 
     before = energy(setup)
@@ -392,7 +373,7 @@ def test_stale_component_mutation_does_not_change_existing_setup() -> None:
     ).setup(numbers)
     assert component_system.d4sc_setup is not None
     torch.testing.assert_close(
-        dict(component_system.d4sc_setup.parameters)["a1"],
+        component_system.d4sc_setup.param["a1"],
         interaction.param["a1"],
     )
     assert not torch.allclose(energy(component_system.d4sc_setup), before)
@@ -418,7 +399,7 @@ def test_d4sc_charge_and_geometry_history_is_independent() -> None:
     q1[0] += 0.1
 
     def evaluate(pos: Tensor, q: Tensor) -> tuple[Tensor, Tensor]:
-        data = build_d4sc_data(setup, pos)
+        data = build_d4sc_cache(setup, pos)
         return (
             interaction.get_monopole_atom_energy(data, q).sum(),
             interaction.get_monopole_atom_potential(data, q),
@@ -480,7 +461,7 @@ def test_d4sc_position_jacfwd_and_potential_transforms() -> None:
     charges = torch.tensor([0.05, -0.02, 0.01, -0.02, -0.02], **DD)
 
     def energy(pos: Tensor) -> Tensor:
-        data = build_d4sc_data(setup, pos)
+        data = build_d4sc_cache(setup, pos)
         return interaction.get_monopole_atom_energy(data, charges).sum()
 
     pos = positions.clone().requires_grad_(True)
@@ -490,7 +471,7 @@ def test_d4sc_position_jacfwd_and_potential_transforms() -> None:
 
     charge_leaf = charges.clone().requires_grad_(True)
     charge_energy = lambda q: interaction.get_monopole_atom_energy(
-        build_d4sc_data(setup, positions), q
+        build_d4sc_cache(setup, positions), q
     ).sum()
     (charge_reverse,) = torch.autograd.grad(
         charge_energy(charge_leaf), charge_leaf
@@ -499,7 +480,7 @@ def test_d4sc_position_jacfwd_and_potential_transforms() -> None:
     torch.testing.assert_close(charge_forward, charge_reverse)
 
     def potential(pos: Tensor) -> Tensor:
-        data = build_d4sc_data(setup, pos)
+        data = build_d4sc_cache(setup, pos)
         return interaction.get_monopole_atom_potential(data, charges)
 
     direction = torch.linspace(-0.2, 0.4, positions.numel(), **DD).reshape_as(
@@ -570,7 +551,7 @@ def test_calculator_reset_preserves_exact_d4sc_setup() -> None:
     interaction = calc.system.d4sc_interaction
     assert setup is not None and interaction is not None
     assert calc.system.d4sc_setup is setup
-    data = build_d4sc_data(setup, positions)
+    data = build_d4sc_cache(setup, positions)
     q = torch.tensor([0.1, -0.1], **DD)
     energy = interaction.get_monopole_atom_energy(data, q).sum()
     (gradient,) = torch.autograd.grad(energy, a1)
@@ -587,7 +568,7 @@ def test_d4sc_setup_energy_matches_compatibility_formula() -> None:
 
     setup = setup_d4sc(interaction, numbers)
     actual = interaction.get_monopole_atom_energy(
-        build_d4sc_data(setup, positions), charges
+        build_d4sc_cache(setup, positions), charges
     )
     compatibility = interaction.get_monopole_atom_energy(
         interaction.get_cache(numbers=numbers, positions=positions), charges
@@ -612,7 +593,7 @@ def test_system_setup_carries_exact_replacement_parameters() -> None:
     ).setup(numbers)
     assert replaced.d4sc_interaction is custom
     assert replaced.d4sc_setup is not None
-    assert dict(replaced.d4sc_setup.parameters)["a1"] == custom.param["a1"]
+    assert replaced.d4sc_setup.param["a1"] == custom.param["a1"]
 
     default = Model(
         par=_parameters(),
@@ -622,11 +603,11 @@ def test_system_setup_carries_exact_replacement_parameters() -> None:
     assert default.d4sc_setup is not None
     q = torch.tensor([0.03, -0.02, -0.01, 0.01, -0.01], **DD)
     energy_custom = custom.get_monopole_atom_energy(
-        build_d4sc_data(replaced.d4sc_setup, positions), q
+        build_d4sc_cache(replaced.d4sc_setup, positions), q
     ).sum()
     assert default.d4sc_interaction is not None
     energy_default = default.d4sc_interaction.get_monopole_atom_energy(
-        build_d4sc_data(default.d4sc_setup, positions), q
+        build_d4sc_cache(default.d4sc_setup, positions), q
     ).sum()
     assert not torch.allclose(energy_custom, energy_default)
 
@@ -652,10 +633,10 @@ def test_sparse_d4_parameters_are_preserved(missing: str) -> None:
         auto_int_level=False,
     ).setup(numbers)
     assert system.d4sc_setup is not None
-    supplied = dict(system.d4sc_setup.parameters)
+    supplied = system.d4sc_setup.param
     assert set(supplied) == set(custom.param)
     assert missing not in supplied
-    call_data = build_d4sc_data(system.d4sc_setup, positions)
+    call_data = build_d4sc_cache(system.d4sc_setup, positions)
     energy = custom.get_monopole_atom_energy(call_data, charges)
     assert torch.isfinite(energy).all()
 

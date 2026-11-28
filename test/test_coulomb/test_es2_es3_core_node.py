@@ -30,13 +30,9 @@ from dxtb import GFN1_XTB, GFN2_XTB, IndexHelper, ParamModule
 from dxtb._src.calculators.model import Model
 from dxtb.config import Config
 from dxtb._src.components.interactions.coulomb import (
-    ES2CoreSetup,
     ES2Setup,
-    ES3CoreSetup,
     ES3Setup,
     build_es2_coulomb,
-    core_es2_setup,
-    core_es3_setup,
     new_es2,
     setup_es2,
     setup_es3,
@@ -79,7 +75,7 @@ def _es2_setup(shell_resolved: bool):
         ihelp,
         interaction,
         legacy,
-        core_es2_setup(legacy),
+        legacy,
     )
 
 
@@ -96,7 +92,7 @@ def _es3_setups(shell_resolved: bool):
         ihelp,
         shell_scale=interaction.shell_scale if shell_resolved else None,
     )
-    return numbers, ihelp, interaction, legacy, core_es3_setup(legacy)
+    return numbers, ihelp, interaction, legacy, legacy
 
 
 @pytest.mark.parametrize("shell_resolved", [False, True])
@@ -106,14 +102,14 @@ def test_es2_core_node_layout_roundtrip_and_conversion(
     """Keep ES2 tensor leaves, static configuration and identities intact."""
     _, _, _, interaction, legacy, core = _es2_setup(shell_resolved)
     assert isinstance(core, Node)
-    assert isinstance(core, ES2CoreSetup)
+    assert isinstance(core, ES2Setup)
     assert core.average is legacy.average
     assert core.shell_resolved is legacy.shell_resolved
 
     leaves, spec = _pytree.tree_flatten(core)
     assert all(isinstance(leaf, torch.Tensor) for leaf in leaves)
     rebuilt = _pytree.tree_unflatten(leaves, spec)
-    assert type(rebuilt) is ES2CoreSetup
+    assert type(rebuilt) is ES2Setup
     assert rebuilt.average is core.average
     assert rebuilt.shell_resolved is core.shell_resolved
     for name in (
@@ -169,7 +165,7 @@ def test_es2_core_matrix_and_gradients_match_legacy(
         average=interaction.average,
         shell_resolved=shell_resolved,
     )
-    core = core_es2_setup(legacy)
+    core = legacy
     torch.testing.assert_close(
         build_es2_coulomb(core, positions), build_es2_coulomb(legacy, positions)
     )
@@ -202,7 +198,7 @@ def test_es3_core_node_roundtrip_and_formula_parity(
     """Preserve ES3 resolution, setup leaves and established formulas."""
     _, _, interaction, legacy, core = _es3_setups(shell_resolved)
     assert isinstance(core, Node)
-    assert isinstance(core, ES3CoreSetup)
+    assert isinstance(core, ES3Setup)
     assert core.shell_resolved is shell_resolved
     assert legacy.shell_resolved is shell_resolved
     assert core.hubbard_derivs is legacy.hubbard_derivs
@@ -211,7 +207,7 @@ def test_es3_core_node_roundtrip_and_formula_parity(
     assert len(leaves) == 1
     assert leaves[0] is legacy.hubbard_derivs
     rebuilt = _pytree.tree_unflatten(leaves, spec)
-    assert type(rebuilt) is ES3CoreSetup
+    assert type(rebuilt) is ES3Setup
     assert rebuilt.hubbard_derivs is core.hubbard_derivs
     assert rebuilt.shell_resolved is shell_resolved
 
@@ -254,7 +250,7 @@ def test_es3_core_node_roundtrip_and_formula_parity(
         system_index,
         shell_scale=interaction.shell_scale if shell_resolved else None,
     )
-    core_grad_setup = core_es3_setup(legacy_grad_setup)
+    core_grad_setup = legacy_grad_setup
     (gradient,) = torch.autograd.grad(
         core_grad_setup.hubbard_derivs.sum(), source
     )
@@ -269,8 +265,8 @@ def test_system_setup_owns_core_nodes_and_legacy_setup_contracts_remain() -> (
     numbers, positions = _system_inputs()
     par = ParamModule(GFN1_XTB, dtype=positions.dtype)
     system = Model(par=par).setup(numbers)
-    assert isinstance(system.es2_setup, ES2CoreSetup)
-    assert isinstance(system.es3_setup, ES3CoreSetup)
+    assert isinstance(system.es2_setup, ES2Setup)
+    assert isinstance(system.es3_setup, ES3Setup)
     assert not hasattr(system, "es2_legacy_setup")
     assert not hasattr(system, "es3_legacy_setup")
 
@@ -285,7 +281,7 @@ def test_system_setup_owns_core_nodes_and_legacy_setup_contracts_remain() -> (
     assert isinstance(es3_cache, ES3Cache)
 
     setup_es3_positional = ES3Setup(
-        system.es3_setup.hubbard_derivs, shell_resolved=False
+        hubbard_derivs=system.es3_setup.hubbard_derivs, shell_resolved=False
     )
     assert isinstance(setup_es3_positional, ES3Setup)
     legacy_es3 = setup_es3(es3_interaction.hubbard_derivs, system.ihelp)
@@ -315,7 +311,7 @@ def test_setup_nodes_device_dtype_and_frozen_semantics() -> None:
         for leaf in _pytree.tree_leaves(dtype_converted):
             if leaf.dtype == torch.bool:
                 assert leaf.dtype is torch.bool
-        if isinstance(setup, ES2CoreSetup):
+        if isinstance(setup, ES2Setup):
             assert (
                 dtype_converted.shells_to_atom.dtype
                 == setup.shells_to_atom.dtype
@@ -352,8 +348,8 @@ def test_unhashable_average_keeps_identity_and_legacy_cache_support() -> None:
         average=average,
         shell_resolved=False,
     )
-    core = core_es2_setup(legacy)
-    assert core.average is average
+    core = legacy
+    assert core.average.function is average
     assert _pytree.tree_leaves(core)
     torch.testing.assert_close(
         build_es2_coulomb(core, positions), build_es2_coulomb(legacy, positions)
@@ -371,8 +367,8 @@ def test_unhashable_average_keeps_identity_and_legacy_cache_support() -> None:
         config=Config.create(exclude="es2"),
         interaction=(interaction,),
     ).setup(numbers)
-    assert isinstance(system.es2_setup, ES2CoreSetup)
-    assert system.es2_setup.average is average
+    assert isinstance(system.es2_setup, ES2Setup)
+    assert system.es2_setup.average.function is average
 
 
 def test_core_setup_stack_and_vmap_preserve_static_context() -> None:
@@ -381,8 +377,8 @@ def test_core_setup_stack_and_vmap_preserve_static_context() -> None:
     _, _, _, _, es3 = _es3_setups(shell_resolved=False)
     stacked_es2 = stack((es2, es2))
     stacked_es3 = stack((es3, es3))
-    assert isinstance(stacked_es2, ES2CoreSetup)
-    assert isinstance(stacked_es3, ES3CoreSetup)
+    assert isinstance(stacked_es2, ES2Setup)
+    assert isinstance(stacked_es3, ES3Setup)
     assert stacked_es2.average is es2.average
     assert not stacked_es2.shell_resolved
     assert not stacked_es3.shell_resolved

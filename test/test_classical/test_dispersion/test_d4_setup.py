@@ -30,12 +30,10 @@ from dxtb import GFN2_XTB, Calculator, ParamModule
 from dxtb._src.calculators.model import Model
 from dxtb._src.components.classicals import (
     DispersionD4,
-    DispersionD4CoreSetup,
     DispersionD4Setup,
 )
 from dxtb._src.components.classicals.dispersion import _d4_adapter as d4
 from dxtb._src.components.classicals.dispersion.d4 import (
-    core_dispersion_d4_setup,
     dispersion_d4_energy,
 )
 from dxtb._src.param import Param
@@ -78,35 +76,29 @@ def test_setup_is_frozen_and_uses_immutable_parameter_structure() -> None:
     system = _system(_parameters(self_consistent=False)).setup(numbers)
     setup = system.d4_setup
 
-    assert type(setup) is DispersionD4CoreSetup
+    assert type(setup) is DispersionD4Setup
     assert system.d4_classical is not None
     assert system.classical_cache["DispersionD4"] is setup
     assert {field.name for field in fields(setup)} == {
         "numbers",
-        "parameter_entries",
-        "model_numbers",
-        "model_ga",
-        "model_gc",
-        "model_wf",
-        "model_ref_charges",
-        "model_rc6",
+        "param",
+        "model",
         "rcov",
         "r4r2",
         "cutoff",
         "counting_function",
-        "damping_type",
+        "damping_function",
         "ref_charges",
     }
-    assert isinstance(setup.parameters, tuple)
-    assert all(isinstance(entry, tuple) for entry in setup.parameters)
-    forbidden = (Param, ParamModule, Model, DispersionD4, d4.model.D4Model)
+    assert isinstance(setup.param, dict)
+    forbidden = (Param, ParamModule, Model, DispersionD4)
     assert all(
         not isinstance(value, forbidden)
         for field in fields(setup)
         for value in (getattr(setup, field.name),)
     )
-    assert not isinstance(setup.cutoff, d4.Cutoff)
-    assert setup.damping_type is d4.damping.RationalDamping
+    assert isinstance(setup.cutoff, d4.Cutoff)
+    assert type(setup.damping_function) is d4.damping.RationalDamping
     assert not any("positions" in field.name for field in fields(setup))
     assert not any("energy" in field.name for field in fields(setup))
     assert not any("charge" == field.name for field in fields(setup))
@@ -126,17 +118,17 @@ def test_setup_is_frozen_and_uses_immutable_parameter_structure() -> None:
     assert isinstance(setup, Node)
     leaves, spec = _pytree.tree_flatten(setup)
     rebuilt = _pytree.tree_unflatten(leaves, spec)
-    assert type(rebuilt) is DispersionD4CoreSetup
+    assert type(rebuilt) is DispersionD4Setup
     assert all(a is b for a, b in zip(leaves, _pytree.tree_leaves(rebuilt)))
     converted = setup.to(dtype=torch.float32)
-    assert converted.model_wf.dtype == torch.float32
+    assert converted.model.wf.dtype == torch.float32
     assert converted.numbers.dtype == numbers.dtype
     meta = setup.to(device=torch.device("meta"))
     assert meta.numbers.device.type == "meta"
-    assert meta.model_wf.device.type == "meta"
+    assert meta.model.wf.device.type == "meta"
     stacked = stack((setup, setup))
-    assert type(stacked) is DispersionD4CoreSetup
-    assert stacked.model_wf.shape[0] == 2
+    assert type(stacked) is DispersionD4Setup
+    assert stacked.model.wf.shape[0] == 2
 
 
 def test_gfn2_d4_classical_list_compatibility_view_parity() -> None:
@@ -205,8 +197,8 @@ def test_classical_d4_modes_keep_distinct_configuration() -> None:
     ordinary_setup = ordinary.d4_setup
     atm_setup = gfn2.d4_setup
     assert ordinary_setup is not None and atm_setup is not None
-    ordinary_param = dict(ordinary_setup.parameters)
-    atm_param = dict(atm_setup.parameters)
+    ordinary_param = ordinary_setup.param
+    atm_param = atm_setup.param
     assert ordinary_setup.ref_charges == "eeq"
     assert atm_setup.ref_charges == "gfn2"
     assert ordinary_param["s6"] != 0.0
@@ -244,17 +236,14 @@ def test_d4_model_tables_are_not_mutated_by_geometry_or_charge_calls() -> None:
     system = _system(_parameters(self_consistent=False)).setup(numbers)
     setup = system.d4_setup
     assert setup is not None
-    before_numbers = setup.model_numbers.clone()
-    before_wf = setup.model_wf.clone()
-    before_rc6 = setup.model_rc6.clone()
+    before_numbers = setup.model.numbers.clone()
+    before_wf = setup.model.wf.clone()
+    before_rc6 = setup.model.rc6.clone()
     before_cutoff = tuple(
         getattr(setup.cutoff, name).clone()
         for name in ("disp2", "disp3", "cn", "cn_eeq")
     )
-    before_parameters = tuple(
-        (name, value.clone() if isinstance(value, Tensor) else value)
-        for name, value in setup.parameters
-    )
+    before_parameters = {k: v.clone() for k, v in setup.param.items()}
 
     a1 = dispersion_d4_energy(setup, positions, 0.0)
     moved = positions.clone()
@@ -266,19 +255,14 @@ def test_d4_model_tables_are_not_mutated_by_geometry_or_charge_calls() -> None:
     a2 = dispersion_d4_energy(setup, positions.clone(), 0.0)
 
     torch.testing.assert_close(a1, a2)
-    torch.testing.assert_close(setup.model_numbers, before_numbers)
-    torch.testing.assert_close(setup.model_wf, before_wf)
-    torch.testing.assert_close(setup.model_rc6, before_rc6)
+    torch.testing.assert_close(setup.model.numbers, before_numbers)
+    torch.testing.assert_close(setup.model.wf, before_wf)
+    torch.testing.assert_close(setup.model.rc6, before_rc6)
     for name, value in zip(("disp2", "disp3", "cn", "cn_eeq"), before_cutoff):
         torch.testing.assert_close(getattr(setup.cutoff, name), value)
-    for (name, value), (expected_name, expected) in zip(
-        setup.parameters, before_parameters
-    ):
-        assert name == expected_name
-        if isinstance(value, Tensor):
-            torch.testing.assert_close(value, expected)
-        else:
-            assert value == expected
+    assert setup.param.keys() == before_parameters.keys()
+    for name, value in setup.param.items():
+        torch.testing.assert_close(value, before_parameters[name])
 
 
 def test_total_charge_tensor_gradient_reaches_classical_d4() -> None:
@@ -491,7 +475,7 @@ def test_exact_user_d4_replaces_excluded_builtin() -> None:
 
     assert system.d4_classical is dispersion
     assert system.d4_setup is not None
-    assert dict(system.d4_setup.parameters)["a1"].item() == 0.2
+    assert system.d4_setup.param["a1"].item() == 0.2
     result = system.singlepoint(positions, chrg=0.0)
     assert torch.isfinite(_classical_energy(result))
 
@@ -523,26 +507,24 @@ def test_duplicate_classical_d4_labels_are_rejected() -> None:
 
 
 def test_core_node_call_q_model_gradients_and_unsupported_types() -> None:
-    """Core D4 setup takes call-time charges, model tensor gradients, and type checks."""
+    """D4 setup takes call-time charges, model tensor gradients and custom models."""
     numbers, positions = _geometry()
     dispersion = (
         _system(_parameters(self_consistent=False)).setup(numbers).d4_classical
     )
     assert dispersion is not None
     q = torch.linspace(-0.2, 0.2, numbers.numel(), **DD)
-    base_core = core_dispersion_d4_setup(dispersion.get_cache(numbers))
+    base_core = dispersion.get_cache(numbers)
     torch.testing.assert_close(
         dispersion.get_energy(positions, base_core, q=q),
         dispersion_d4_energy(base_core, positions, 0.0, q=q),
     )
 
     wf = torch.tensor(6.0, **DD, requires_grad=True)
-    rc6 = base_core.model_rc6.detach().clone().requires_grad_(True)
+    rc6 = base_core.model.rc6.detach().clone().requires_grad_(True)
     model = d4.model.D4Model.create(numbers, wf=wf, rc6=rc6, ref_charges='eeq', **DD)
     cutoff = d4.Cutoff.create(disp2=torch.tensor(2.0, **DD), **DD)
-    core = core_dispersion_d4_setup(
-        dispersion.get_cache(numbers, model=model, cutoff=cutoff)
-    )
+    core = dispersion.get_cache(numbers, model=model, cutoff=cutoff)
     energy = dispersion_d4_energy(core, positions, 0.0).sum()
     grads = torch.autograd.grad(energy, (wf, rc6))
     assert all(torch.isfinite(g).all() and (g.abs() > 0).any() for g in grads)
@@ -554,13 +536,11 @@ def test_core_node_call_q_model_gradients_and_unsupported_types() -> None:
     class CustomD4Model(d4.model.D4Model):
         pass
 
-    with pytest.raises(TypeError, match="built-in D4Model"):
-        core_dispersion_d4_setup(
-            dispersion.get_cache(numbers, model=CustomD4Model.create(numbers, **DD))
-        )
-    with pytest.raises(TypeError, match="RationalDamping"):
-        core_dispersion_d4_setup(
-            dispersion.get_cache(
-                numbers, damping_function=d4.damping.ZeroDamping()
-            )
-        )
+    custom = dispersion.get_cache(
+        numbers, model=CustomD4Model.create(numbers, **DD)
+    )
+    assert type(custom.model) is CustomD4Model
+    zero = dispersion.get_cache(
+        numbers, damping_function=d4.damping.ZeroDamping()
+    )
+    assert type(zero.damping_function) is d4.damping.ZeroDamping

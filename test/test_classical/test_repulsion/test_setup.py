@@ -31,7 +31,6 @@ from dxtb._src.calculators.model import Model
 from dxtb._src.calculators.singlepoint import _evaluate_classical_descriptor
 from dxtb._src.components.classicals import (
     Repulsion,
-    RepulsionCoreSetup,
     RepulsionSetup,
     new_repulsion,
 )
@@ -53,7 +52,7 @@ def test_system_owns_frozen_repulsion_setup(method) -> None:
 
     assert system.repulsion_classical is not None
     assert isinstance(system.repulsion_setup, Node)
-    assert type(system.repulsion_setup) is RepulsionCoreSetup
+    assert type(system.repulsion_setup) is RepulsionSetup
     assert system.classical_cache["Repulsion"] is system.repulsion_setup
     assert {field.name for field in fields(system.repulsion_setup)} == {
         "arep",
@@ -64,7 +63,7 @@ def test_system_owns_frozen_repulsion_setup(method) -> None:
     }
     leaves, spec = _pytree.tree_flatten(system.repulsion_setup)
     rebuilt = _pytree.tree_unflatten(leaves, spec)
-    assert type(rebuilt) is RepulsionCoreSetup
+    assert type(rebuilt) is RepulsionSetup
     assert all(a is b for a, b in zip(leaves, _pytree.tree_leaves(rebuilt)))
 
     converted = system.repulsion_setup.to(dtype=torch.float32)
@@ -75,7 +74,7 @@ def test_system_owns_frozen_repulsion_setup(method) -> None:
     assert meta.mask.dtype == torch.bool
 
     batched = stack((system.repulsion_setup, system.repulsion_setup))
-    assert type(batched) is RepulsionCoreSetup
+    assert type(batched) is RepulsionSetup
     assert batched.arep.shape[0] == 2
 
     forbidden = (Param, ParamModule, Model, Repulsion)
@@ -94,7 +93,7 @@ def test_system_owns_frozen_repulsion_setup(method) -> None:
 
 
 def test_core_repulsion_transforms_and_legacy_parity() -> None:
-    """RepulsionCoreSetup preserves legacy values, JVP/jacfwd, and vmap."""
+    """RepulsionSetup preserves legacy values, JVP/jacfwd, and vmap."""
     numbers = samples["H2O"]["numbers"].to(DEVICE)
     positions = samples["H2O"]["positions"].to(
         device=DEVICE, dtype=torch.double

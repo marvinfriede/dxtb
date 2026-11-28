@@ -79,11 +79,10 @@ from .average import AveragingFunction, averaging_function, harmonic_average
 
 __all__ = [
     "ES2",
-    "ES2CoreSetup",
     "ES2Setup",
     "LABEL_ES2",
+    "build_es2_cache",
     "build_es2_coulomb",
-    "core_es2_setup",
     "new_es2",
     "setup_es2",
 ]
@@ -91,22 +90,6 @@ __all__ = [
 
 LABEL_ES2 = "ES2"
 """Label for the 'ES2' interaction, coinciding with the class name."""
-
-
-@dataclass(frozen=True, eq=False)
-class ES2Setup:
-    """Numbers-only structural and parameter data for one ES2 evaluation."""
-
-    atom_pair_mask: Tensor
-    atom_mask: Tensor
-    atom_hubbard: Tensor | None
-    shell_pair_mask: Tensor | None
-    shell_mask: Tensor | None
-    shell_hubbard: Tensor | None
-    shells_to_atom: Tensor | None
-    gexp: Tensor
-    average: AveragingFunction
-    shell_resolved: bool
 
 
 @dataclass(frozen=True, eq=False)
@@ -128,8 +111,17 @@ class _UnhashableAveragingContext:
         return self.function(*args, **kwargs)
 
 
-class ES2CoreSetup(Node):
-    """Immutable Node values used by single-System ES2 evaluation."""
+def _hashable_average(average: AveragingFunction) -> AveragingFunction:
+    """Wrap an unhashable averaging callable so it can be a context field."""
+    try:
+        hash(average)
+    except TypeError:
+        return _UnhashableAveragingContext(average)
+    return average
+
+
+class ES2Setup(Node):
+    """Numbers-only structural and parameter data for one ES2 evaluation."""
 
     atom_pair_mask: Tensor = child(keep_dtype=True)
     atom_mask: Tensor = child(keep_dtype=True)
@@ -139,38 +131,12 @@ class ES2CoreSetup(Node):
     shell_hubbard: Tensor | None = child()
     shells_to_atom: Tensor | None = child(keep_dtype=True)
     gexp: Tensor = child()
-    average_context: Any = context()
+    average: AveragingFunction = context()
     shell_resolved: bool = context()
 
-    @property
-    def average(self) -> AveragingFunction:
-        """Return the original averaging callable from static context."""
-        context_value = self.average_context
-        if isinstance(context_value, _UnhashableAveragingContext):
-            return context_value.function
-        return context_value
-
-
-def core_es2_setup(setup: ES2Setup) -> ES2CoreSetup:
-    """Convert a component setup to immutable core value fields."""
-    average_context = setup.average
-    try:
-        hash(average_context)
-    except TypeError:
-        average_context = _UnhashableAveragingContext(average_context)
-
-    return ES2CoreSetup(
-        atom_pair_mask=setup.atom_pair_mask,
-        atom_mask=setup.atom_mask,
-        atom_hubbard=setup.atom_hubbard,
-        shell_pair_mask=setup.shell_pair_mask,
-        shell_mask=setup.shell_mask,
-        shell_hubbard=setup.shell_hubbard,
-        shells_to_atom=setup.shells_to_atom,
-        gexp=setup.gexp,
-        average_context=average_context,
-        shell_resolved=setup.shell_resolved,
-    )
+    def _normalize(self) -> dict[str, Any]:
+        average = _hashable_average(self.average)
+        return {} if average is self.average else {"average": average}
 
 
 class ES2Cache(InteractionCache):
@@ -232,11 +198,9 @@ class ES2(Interaction):
             )
         if self.shell_resolved and self.lhubbard is None:
             updates["shell_resolved"] = False
-        try:
-            hash(self.average)
-        except TypeError:
-            # context fields must be hashable; hash a plain callable by identity
-            updates["average"] = _UnhashableAveragingContext(self.average)
+        average = _hashable_average(self.average)
+        if average is not self.average:
+            updates["average"] = average
         return updates
 
     # pylint: disable=unused-argument
@@ -286,10 +250,7 @@ class ES2(Interaction):
             average=self.average,
             shell_resolved=self.shell_resolved,
         )
-        return ES2Cache(
-            mat=build_es2_coulomb(setup, positions),
-            shell_resolved=setup.shell_resolved,
-        )
+        return build_es2_cache(setup, positions)
 
     def get_atom_coulomb_matrix(
         self, numbers: Tensor, positions: Tensor, ihelp: IndexHelper
@@ -637,9 +598,15 @@ def setup_es2(
     )
 
 
-def build_es2_coulomb(
-    setup: ES2Setup | ES2CoreSetup, positions: Tensor
-) -> Tensor:
+def build_es2_cache(setup: ES2Setup, positions: Tensor) -> ES2Cache:
+    """Build the ES2 cache (the Coulomb matrix) for the current positions."""
+    return ES2Cache(
+        mat=build_es2_coulomb(setup, positions),
+        shell_resolved=setup.shell_resolved,
+    )
+
+
+def build_es2_coulomb(setup: ES2Setup, positions: Tensor) -> Tensor:
     """Build the atom- or shell-resolved ES2 matrix for current positions."""
     dd: DD = {"device": positions.device, "dtype": positions.dtype}
     eps = torch.tensor(torch.finfo(positions.dtype).eps, **dd)

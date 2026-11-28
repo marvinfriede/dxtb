@@ -58,9 +58,7 @@ Example
 """
 
 from .base import (
-    RepulsionCoreSetup,
     RepulsionSetup,
-    core_repulsion_setup,
     setup_repulsion,
 )
 from .factory import new_repulsion
@@ -70,8 +68,6 @@ __all__ = [
     "LABEL_REPULSION",
     "new_repulsion",
     "Repulsion",
-    "RepulsionCoreSetup",
     "RepulsionSetup",
-    "core_repulsion_setup",
     "setup_repulsion",
 ]

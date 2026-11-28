@@ -139,6 +139,14 @@ intentionally retired the following stateful legacy APIs:
   ``new_*`` factories, which convert for you).
   ``GeneralizedBorn.create``, ``D4Model.create`` and ``Cutoff.create`` keep
   the previous argument lists.
+- The ``*CoreSetup`` classes and ``core_*_setup`` converters of the built-in
+  components (and ``DispersionD3Cache``): each built-in has one ``*Setup``
+  Node, returned by ``get_cache`` (or ``setup_*``) and stored on ``System``
+  as is. ``build_aes2_data``, ``build_d4sc_data`` and
+  ``build_generalized_born_data`` are now ``build_*_cache``; ES2 and ES3 gain
+  ``build_es2_cache`` and ``build_es3_cache``. The D3, D4 and D4SC setups hold
+  the parameters as a dict (``setup.param``) and the D4 model as a
+  ``D4Model`` Node (``setup.model``).
 - Legacy SCF option and composition wrappers (``LegacySCFOptions``,
   ``strict_e6bcompat``, low-level ``scf_results`` override kwargs,
   ``LegacyCompositionResult``, ``LegacySystemRoute``, ``classify_legacy_system``):

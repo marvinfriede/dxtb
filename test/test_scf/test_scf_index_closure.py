@@ -1006,40 +1006,39 @@ def test_batched_implicit_solve_and_all_interaction_metadata_guards(
                     cfg2,
                 )
 
-    # D4SCSetup standalone dtype / device / atom-count mismatch
+    # D4SC cache dtype (the cache Node keeps one dtype) / atom-count mismatch
     d4_f32 = new_d4sc(nums_h2o, par2, dtype=torch.float32)
     assert d4_f32 is not None
     d4_f64 = new_d4sc(nums_h2o, par2, dtype=torch.float64)
     assert d4_f64 is not None
-    valid_d4_ic = InteractionList(d4_f64).get_cache(
-        numbers=nums_h2o, positions=pos_h2o, ihelp=calc2.ihelp
-    )
-    with pytest.raises(DtypeError, match="d4sc.setup"):
-        setup_scf_inputs(
-            nums_h2o,
-            mats2,
-            n0_2,
-            occ_2,
-            nel_2,
-            InteractionList(d4_f32),
-            valid_d4_ic,
-            calc2.ihelp,
-            cfg2,
-        )
     d4_h2 = new_d4sc(nums_h2, par2, dtype=torch.float64)
     assert d4_h2 is not None
-    with pytest.raises(ValueError, match="d4sc.setup"):
-        setup_scf_inputs(
-            nums_h2o,
-            mats2,
-            n0_2,
-            occ_2,
-            nel_2,
-            InteractionList(d4_h2),
-            valid_d4_ic,
-            calc2.ihelp,
-            cfg2,
+    for bad_model, error in (
+        (d4_f32.model, DtypeError),
+        (d4_h2.model, ValueError),
+    ):
+        bad_d4_ic = InteractionList(d4_f64).get_cache(
+            numbers=nums_h2o, positions=pos_h2o, ihelp=calc2.ihelp
         )
+        entry = bad_d4_ic[d4_f64.label]
+        dtype = bad_model.rc6.dtype
+        bad_d4_ic[d4_f64.label] = DispersionD4SCCache(
+            cn=entry.cn.to(dtype),
+            dispmat=entry.dispmat.to(dtype),
+            model=bad_model,
+        )
+        with pytest.raises(error, match="d4sc.model"):
+            setup_scf_inputs(
+                nums_h2o,
+                mats2,
+                n0_2,
+                occ_2,
+                nel_2,
+                InteractionList(d4_f64),
+                bad_d4_ic,
+                calc2.ihelp,
+                cfg2,
+            )
 
     # ElectricField, ElectricFieldGrad, and GeneralizedBorn shape checks
     ef = ElectricField(field=torch.zeros((3,), dtype=torch.float64))

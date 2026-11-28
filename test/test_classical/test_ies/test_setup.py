@@ -33,7 +33,6 @@ from dxtb import GFN0_XTB, Calculator, ParamModule
 from dxtb._src.calculators.model import Model
 from dxtb._src.components.classicals import (
     IES,
-    IESCoreSetup,
     IESSetup,
     new_ies,
 )
@@ -73,7 +72,7 @@ def test_ies_setup_is_frozen_and_cache_compatibility_is_fresh() -> None:
     setup = system.ies_setup
 
     assert isinstance(setup, Node)
-    assert type(setup) is IESCoreSetup
+    assert type(setup) is IESSetup
     assert system.ies_classical is not None
     assert system.classical_cache["IES"] is setup
     assert {field.name for field in fields(setup)} == {
@@ -94,7 +93,7 @@ def test_ies_setup_is_frozen_and_cache_compatibility_is_fresh() -> None:
     )
     leaves, spec = _pytree.tree_flatten(setup)
     rebuilt = _pytree.tree_unflatten(leaves, spec)
-    assert type(rebuilt) is IESCoreSetup
+    assert type(rebuilt) is IESSetup
     assert rebuilt.cutoff == setup.cutoff
     assert all(a is b for a, b in zip(leaves, _pytree.tree_leaves(rebuilt)))
     converted = setup.to(dtype=torch.float32)
@@ -105,7 +104,7 @@ def test_ies_setup_is_frozen_and_cache_compatibility_is_fresh() -> None:
     assert meta.numbers.device.type == "meta"
     assert meta.eeq.chi.device.type == "meta"
     stacked = stack((setup, setup))
-    assert type(stacked) is IESCoreSetup
+    assert type(stacked) is IESSetup
     assert stacked.eeq.chi.shape[0] == 2
     assert stacked.cutoff == setup.cutoff
     with pytest.raises(ValueError, match="different structure"):
@@ -396,7 +395,7 @@ def test_exact_custom_ies_replaces_excluded_builtin_and_mutation_is_rejected() -
         classical=(custom,),
     ).setup(numbers)
     assert system.ies_classical is custom
-    assert type(system.ies_setup) is IESCoreSetup
+    assert type(system.ies_setup) is IESSetup
     assert system.classical_cache["IES"] is system.ies_setup
     assert isinstance(system.ies_setup.cutoff, float)
     assert system.ies_setup.cutoff == pytest.approx(float(custom.cutoff))

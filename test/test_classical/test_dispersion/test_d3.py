@@ -32,7 +32,6 @@ from tad_mctc.io.structure import Structure
 
 from dxtb import GFN1_XTB
 from dxtb._src.components.classicals.dispersion import (
-    core_dispersion_d3_setup,
     dispersion_d3_energy,
 )
 from dxtb._src.components.classicals.dispersion.d3 import (
@@ -147,7 +146,7 @@ def test_three_way_d3_parity_values_and_gradients() -> None:
     assert _DXTB_D3_CN_CUTOFF == 25.0
     assert _DXTB_D3_DISPERSION_CUTOFF == 50.0
     assert cache.cutoff.item() == 25.0
-    core = core_dispersion_d3_setup(cache, numbers, disp.numbers, disp.param)
+    core = cache
 
     pos_dxtb = positions.clone().requires_grad_(True)
     e_dxtb = disp.get_energy(pos_dxtb, cache)
@@ -186,9 +185,7 @@ def test_three_way_d3_parity_values_and_gradients() -> None:
     disp_r2scan = new_dispersion(numbers, r2scan_par, **dd)
     assert isinstance(disp_r2scan, DispersionD3)
     cache_r2scan = disp_r2scan.get_cache(numbers)
-    core_r2scan = core_dispersion_d3_setup(
-        cache_r2scan, numbers, disp_r2scan.numbers, disp_r2scan.param
-    )
+    core_r2scan = cache_r2scan
     e_r2scan_dxtb = disp_r2scan.get_energy(positions, cache_r2scan)
     e_r2scan_core = dispersion_d3_energy(core_r2scan, positions)
     e_r2scan_native = d3.dftd3(
@@ -216,9 +213,7 @@ def test_three_way_d3_parity_values_and_gradients() -> None:
 
         comp_atm = DispersionD3(numbers=numbers, param=param_dxtb).to(**dd)
         cache_atm = comp_atm.get_cache(numbers)
-        core_atm = core_dispersion_d3_setup(
-            cache_atm, numbers, comp_atm.numbers, comp_atm.param
-        )
+        core_atm = cache_atm
 
         p1 = positions.clone().requires_grad_(True)
         e1 = dispersion_d3_energy(core_atm, p1)
@@ -343,7 +338,7 @@ def test_d3_h2o_gfn1_float64_reference_parity() -> None:
     disp = new_dispersion(numbers, GFN1_XTB, **dd)
     assert isinstance(disp, DispersionD3)
     cache = disp.get_cache(numbers)
-    core = core_dispersion_d3_setup(cache, numbers, disp.numbers, disp.param)
+    core = cache
 
     e_cache = disp.get_energy(positions, cache).sum()
     e_core = dispersion_d3_energy(core, positions).sum()

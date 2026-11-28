@@ -25,7 +25,6 @@ This module implements the isotropic electrostatics class. The
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from functools import partial
 
 from tad_mctc import Structure
@@ -44,10 +43,8 @@ from ..base import Classical
 
 __all__ = [
     "IES",
-    "IESCoreSetup",
     "IESSetup",
     "LABEL_IES",
-    "core_ies_setup",
     "ies_energy",
     "setup_ies",
 ]
@@ -73,26 +70,13 @@ def _resolve_cutoff(cutoff: Tensor | float | int) -> float:
     )
 
 
-@dataclass(frozen=True, eq=False)
-class IESSetup:
-    """Frozen numbers/parameter data for one IES term.
+class IESSetup(Node):
+    """Numbers- and parameter-derived data for one IES term.
 
     ``EEQModel`` is an immutable tad-multicharge Node. Its ``solve`` method
     constructs all geometry-dependent values locally and does not update the
-    model. This dataclass is the component setup used by direct component calls
-    and padded batches.
+    model.
     """
-
-    numbers: Tensor
-    eeq: EEQModel
-    rcov: Tensor
-    cutoff: float
-    cn_max: Tensor
-    cn_kcn: Tensor
-
-
-class IESCoreSetup(Node):
-    """Immutable tensor setup for single-System IES evaluation."""
 
     numbers: Tensor = child(keep_dtype=True)
     eeq: EEQModel = child()
@@ -100,18 +84,6 @@ class IESCoreSetup(Node):
     cutoff: float = context()
     cn_max: Tensor = child()
     cn_kcn: Tensor = child()
-
-
-def core_ies_setup(setup: IESSetup) -> IESCoreSetup:
-    """Convert an IES component setup to its immutable core Node."""
-    return IESCoreSetup(
-        numbers=setup.numbers,
-        eeq=setup.eeq,
-        rcov=setup.rcov,
-        cutoff=_resolve_cutoff(setup.cutoff),
-        cn_max=setup.cn_max,
-        cn_kcn=setup.cn_kcn,
-    )
 
 
 def setup_ies(ies: IES, numbers: Tensor) -> IESSetup:
@@ -134,7 +106,7 @@ def setup_ies(ies: IES, numbers: Tensor) -> IESSetup:
 
 
 def ies_energy(
-    setup: IESSetup | IESCoreSetup,
+    setup: IESSetup,
     positions: Tensor,
     charge: Tensor | float | int,
     *,
@@ -157,14 +129,9 @@ def ies_energy(
         positions=positions,
         charge=structure_charge(total_charge, numbers),
     )
-    cutoff = (
-        setup.cutoff
-        if isinstance(setup.cutoff, float)
-        else _resolve_cutoff(setup.cutoff)
-    )
     cn_model = CNModel(
         count=partial(erf_count, kcn=setup.cn_kcn),
-        cutoff=cutoff,
+        cutoff=setup.cutoff,
         cn_max=setup.cn_max,
         rcov=setup.rcov,
     )
@@ -237,7 +204,7 @@ class IES(Classical):
     def get_energy(
         self,
         positions: Tensor,
-        cache: IESSetup | IESCoreSetup,
+        cache: IESSetup,
         charge: Tensor | float | int | None = None,
         *,
         solve_mode: SolveMode = "schur",
@@ -250,7 +217,7 @@ class IES(Classical):
         ----------
         positions : Tensor
             Atomic positions of the Structure (shape: ``(natom, 3)``).
-        cache : IESSetup | IESCoreSetup
+        cache : IESSetup
             Frozen coordinate-independent data for the EEQ solve.
         charge : Tensor | float | int | None
             Total molecular charge. If None, the energy is not computed.
@@ -262,11 +229,8 @@ class IES(Classical):
         Tensor
             Isotropic electrostatics energy of the Structure (shape: ``()``).
         """
-        if not isinstance(cache, (IESSetup, IESCoreSetup)):
-            raise TypeError(
-                f"Setup in {self.label} is not of type 'IESSetup' or "
-                "'IESCoreSetup'."
-            )
+        if not isinstance(cache, IESSetup):
+            raise TypeError(f"Setup in {self.label} is not of type 'IESSetup'.")
         if charge is None:
             raise ValueError("Total molecular charge is required for IES.")
         return ies_energy(cache, positions, charge, solve_mode=solve_mode)

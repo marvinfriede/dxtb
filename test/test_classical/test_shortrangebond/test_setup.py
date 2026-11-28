@@ -31,7 +31,6 @@ from dxtb._src.calculators.model import Model
 from dxtb._src.components.classicals import (
     LABEL_SRB,
     ShortRangeBond,
-    ShortRangeBondCoreSetup,
     ShortRangeBondSetup,
     new_srb,
     short_range_bond_energy,
@@ -66,7 +65,7 @@ def test_setup_is_frozen_and_contains_only_resolved_values() -> None:
     setup = system.srb_setup
 
     assert isinstance(setup, Node)
-    assert isinstance(setup, ShortRangeBondCoreSetup)
+    assert isinstance(setup, ShortRangeBondSetup)
     assert set(field.name for field in fields(setup)) == {
         "numbers",
         "r0",
@@ -93,7 +92,7 @@ def test_setup_is_frozen_and_contains_only_resolved_values() -> None:
     assert isinstance(setup.cn_cutoff, float)
     leaves, spec = _pytree.tree_flatten(setup)
     rebuilt = _pytree.tree_unflatten(leaves, spec)
-    assert type(rebuilt) is ShortRangeBondCoreSetup
+    assert type(rebuilt) is ShortRangeBondSetup
     assert rebuilt.cn_cutoff == setup.cn_cutoff
     assert all(a is b for a, b in zip(leaves, _pytree.tree_leaves(rebuilt)))
     converted = setup.to(dtype=torch.float32)
@@ -104,7 +103,7 @@ def test_setup_is_frozen_and_contains_only_resolved_values() -> None:
     assert meta.r0.device.type == "meta"
     assert meta.numbers.dtype == numbers.dtype
     stacked = stack((setup, setup))
-    assert type(stacked) is ShortRangeBondCoreSetup
+    assert type(stacked) is ShortRangeBondSetup
     assert stacked.r0.shape[0] == 2
     assert stacked.cn_cutoff == setup.cn_cutoff
     with pytest.raises(ValueError, match="different structure"):

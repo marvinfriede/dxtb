@@ -39,12 +39,7 @@ from dxtb._src.components.interactions.coulomb.multipole import AES2
 from dxtb._src.components.interactions.coulomb.secondorder import ES2
 from dxtb._src.components.interactions.coulomb.thirdorder import ES3
 from dxtb._src.components.interactions.dispersion.d4sc import (
-    D4SCCoreSetup,
-    D4SCSetup,
     DispersionD4SC,
-    _build_d4sc_model,
-    _d4sc_setup_view,
-    setup_d4sc,
 )
 from dxtb._src.components.interactions.field.efield import ElectricField
 from dxtb._src.components.interactions.field.efieldgrad import ElectricFieldGrad
@@ -64,16 +59,10 @@ def prepare_scf_interactions(
     interaction_data: InteractionListCache,
     numbers: Tensor,
     *,
-    d4sc_setup: D4SCCoreSetup | None = None,
     kind_by_label: dict[str, str] | None = None,
     target_dtype: torch.dtype | None = None,
 ) -> SCFInteractionSet:
-    """Convert supported components/caches to frozen core entries.
-
-    ``d4sc_setup`` is supplied by the single-System call-data boundary so
-    its functional reference weights use the same setup snapshot as the
-    geometry-dependent D4SC cache. Direct callers may omit it.
-    """
+    """Convert supported components/caches to frozen core entries."""
     validate_unique_interaction_labels(interactions.components)
     entries: list[SCFInteractionEntry] = []
     for component in interactions.components:
@@ -127,16 +116,12 @@ def prepare_scf_interactions(
             )
         elif kind == "d4sc":
             assert isinstance(component, DispersionD4SC)
-            setup = (
-                _d4sc_setup_view(d4sc_setup)
-                if d4sc_setup is not None
-                else setup_d4sc(component, numbers)
-            )
+            # the model that built the cache's dispersion matrix
             entries.append(
                 SCFInteractionEntry(
                     "d4sc",
                     (("cn", cache.cn), ("dispmat", cache.dispmat)),
-                    (("setup", setup),),
+                    (("model", cache.model),),
                 )
             )
         elif kind == "generalized_born":
@@ -226,10 +211,7 @@ def _potential_parts(
             + 2 * entry.tensor("qkernel") * quad_charges * scale
         )
     elif entry.kind == "d4sc":
-        setup = entry.option("setup")
-        assert isinstance(setup, D4SCSetup)
-        model = _build_d4sc_model(setup)
-        weights, derivative = model.weight_references(
+        weights, derivative = entry.option("model").weight_references(
             entry.tensor("cn"), atom_charges, with_dgwdq=True
         )
         atom = d4sc_atom_potential(
@@ -346,9 +328,7 @@ def _entry_energy(
             )
             result = result + ke + einsum("...ix,...ix->...i", vqp, qqp)
     elif entry.kind == "d4sc":
-        setup = entry.option("setup")
-        assert isinstance(setup, D4SCSetup)
-        weights = _build_d4sc_model(setup).weight_references(
+        weights = entry.option("model").weight_references(
             entry.tensor("cn"), atom_charges
         )
         result = result + d4sc_atom_energy(

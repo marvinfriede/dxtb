@@ -24,7 +24,6 @@ evaluation for the short-range bond correction.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from functools import partial
 
 import torch
@@ -43,9 +42,7 @@ from ..base import Classical, ComponentCache
 __all__ = [
     "LABEL_SRB",
     "ShortRangeBond",
-    "ShortRangeBondCoreSetup",
     "ShortRangeBondSetup",
-    "core_srb_setup",
     "setup_srb",
     "short_range_bond_energy",
 ]
@@ -71,30 +68,8 @@ def _resolve_cn_cutoff(cutoff: Tensor | float | int) -> float:
     )
 
 
-@dataclass(frozen=True, eq=False)
-class ShortRangeBondSetup:
+class ShortRangeBondSetup(Node):
     """Numbers-only SRB values used by one or more geometry evaluations."""
-
-    numbers: Tensor
-    r0: Tensor
-    cnfak: Tensor
-    en: Tensor
-    pauling: Tensor
-    rcov: Tensor
-    counting_function: CountingFunction
-    shift: Tensor
-    prefactor: Tensor
-    steepness: Tensor
-    enscale: Tensor
-    enpoly: Tensor
-    pair_cutoff2: Tensor
-    cn_cutoff: float
-    cn_max: Tensor
-    cn_kcn: Tensor
-
-
-class ShortRangeBondCoreSetup(Node):
-    """Immutable tensor setup for single-System SRB evaluation."""
 
     numbers: Tensor = child(keep_dtype=True)
     r0: Tensor = child()
@@ -112,30 +87,6 @@ class ShortRangeBondCoreSetup(Node):
     pair_cutoff2: Tensor = child()
     cn_max: Tensor = child()
     cn_kcn: Tensor = child()
-
-
-def core_srb_setup(
-    setup: ShortRangeBondSetup,
-) -> ShortRangeBondCoreSetup:
-    """Convert a component setup to the identity-preserving core Node."""
-    return ShortRangeBondCoreSetup(
-        numbers=setup.numbers,
-        r0=setup.r0,
-        cnfak=setup.cnfak,
-        en=setup.en,
-        pauling=setup.pauling,
-        rcov=setup.rcov,
-        counting_function=setup.counting_function,
-        cn_cutoff=_resolve_cn_cutoff(setup.cn_cutoff),
-        shift=setup.shift,
-        prefactor=setup.prefactor,
-        steepness=setup.steepness,
-        enscale=setup.enscale,
-        enpoly=setup.enpoly,
-        pair_cutoff2=setup.pair_cutoff2,
-        cn_max=setup.cn_max,
-        cn_kcn=setup.cn_kcn,
-    )
 
 
 def setup_srb(
@@ -169,17 +120,12 @@ def setup_srb(
 
 
 def short_range_bond_energy(
-    setup: ShortRangeBondSetup | ShortRangeBondCoreSetup, positions: Tensor
+    setup: ShortRangeBondSetup, positions: Tensor
 ) -> Tensor:
     """Evaluate the atom-partitioned SRB energy from setup and positions."""
-    cutoff = (
-        setup.cn_cutoff
-        if isinstance(setup.cn_cutoff, float)
-        else _resolve_cn_cutoff(setup.cn_cutoff)
-    )
     cn_model = CNModel(
         count=partial(setup.counting_function, kcn=setup.cn_kcn),
-        cutoff=cutoff,
+        cutoff=setup.cn_cutoff,
         cn_max=setup.cn_max,
         rcov=setup.rcov,
     )
@@ -314,9 +260,7 @@ class ShortRangeBond(Classical):
         self, positions: Tensor, cache: ComponentCache, **_: Any
     ) -> Tensor:
         """Return the symmetrically half-partitioned atomwise SRB energy."""
-        if not isinstance(
-            cache, (ShortRangeBondSetup, ShortRangeBondCoreSetup)
-        ):
+        if not isinstance(cache, ShortRangeBondSetup):
             raise TypeError(
                 f"Data in {self.label} is not of type 'ShortRangeBondSetup'."
             )

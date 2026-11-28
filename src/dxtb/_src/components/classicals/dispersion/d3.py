@@ -23,7 +23,6 @@ The DFT-D3 dispersion model.
 
 from __future__ import annotations
 
-
 import tad_dftd as d3
 import torch
 from tad_mctc.data import radii
@@ -33,15 +32,12 @@ from tad_mctc.tree import Node, child, context
 from dxtb import IndexHelper
 from dxtb._src.typing import Any, CountingFunction, Tensor, override
 
-from ..base import ClassicalCache, ComponentCache
 from .base import Dispersion
 
 __all__ = [
     "LABEL_DISPERSIOND3",
     "DispersionD3",
-    "DispersionD3Cache",
-    "DispersionD3CoreSetup",
-    "core_dispersion_d3_setup",
+    "DispersionD3Setup",
     "dispersion_d3_energy",
 ]
 
@@ -52,14 +48,14 @@ _DXTB_D3_DISPERSION_CUTOFF = 50.0
 LABEL_DISPERSIOND3 = "DispersionD3"
 
 
-class DispersionD3Cache(ClassicalCache):
-    """
-    Cache for the dispersion settings.
+class DispersionD3Setup(Node):
+    """Numbers-only values required by one D3 evaluation."""
 
-    Note
-    ----
-    The dispersion parameters (a1, a2, ...) are given in the constructor.
-    """
+    numbers: Tensor = child(keep_dtype=True)
+    """Atomic numbers of the dispersion component."""
+
+    param: dict[str, Tensor] = child()
+    """Dispersion parameters."""
 
     ref: d3.reference.Reference = child()
     """Reference C6 coefficients and coordination numbers."""
@@ -86,151 +82,8 @@ class DispersionD3Cache(ClassicalCache):
     """Damping function of the dispersion energy."""
 
 
-class _D3ParameterValue(Node):
-    """Typed representation of one tensor or scalar D3 parameter."""
-
-    kind: str = context()
-    tensor_value: Tensor | None = child(keep_dtype=True)
-    static_value: bool | int | float | str | None = context()
-
-    def _convert_child(
-        self,
-        name: str,
-        value: Any,
-        device: torch.device | str | None,
-        dtype: torch.dtype | None,
-    ) -> Any:
-        if name == "tensor_value" and isinstance(value, Tensor):
-            target_dtype = dtype if value.is_floating_point() else None
-            return value.to(device=device, dtype=target_dtype)
-        return super()._convert_child(name, value, device, dtype)
-
-    @classmethod
-    def encode(cls, value: Tensor | float | int | str) -> _D3ParameterValue:
-        if isinstance(value, Tensor):
-            return cls(kind="tensor", tensor_value=value, static_value=None)
-        if isinstance(value, bool):
-            return cls(kind="bool", tensor_value=None, static_value=value)
-        if isinstance(value, int):
-            return cls(kind="int", tensor_value=None, static_value=value)
-        if isinstance(value, float):
-            return cls(kind="float", tensor_value=None, static_value=value)
-        if isinstance(value, str):
-            return cls(kind="str", tensor_value=None, static_value=value)
-        raise TypeError(
-            "D3 parameter values must be tensors or immutable scalar values; "
-            f"received {type(value).__name__}."
-        )
-
-    def decode(self) -> Tensor | bool | int | float | str:
-        if self.kind == "tensor":
-            if self.tensor_value is None:
-                raise TypeError("Tensor D3 parameter has no tensor value.")
-            return self.tensor_value
-        if self.kind in ("bool", "int", "float", "str"):
-            return self.static_value  # type: ignore[return-value]
-        raise TypeError(f"Unsupported D3 parameter value kind: {self.kind!r}.")
-
-
-class _D3NamedParameter(Node):
-    """An ordered D3 parameter with its key kept as static metadata."""
-
-    name: str = context()
-    value: _D3ParameterValue = child()
-
-
-class DispersionD3CoreSetup(Node):
-    """Explicit, transform-visible setup for exact single-System D3."""
-
-    setup_numbers: Tensor = child(keep_dtype=True)
-    component_numbers: Tensor = child(keep_dtype=True)
-    parameter_entries: tuple[_D3NamedParameter, ...] = child()
-    reference_cn: Tensor = child()
-    reference_c6: Tensor = child()
-    rcov: Tensor = child()
-    rvdw: Tensor = child()
-    r4r2: Tensor = child()
-    cutoff: Tensor = child()
-    counting_function: CountingFunction = context()
-    weighting_function: Any = context()
-    damping_function: Any = context()
-
-    @property
-    def parameters(self) -> tuple[tuple[str, Any], ...]:
-        """Return ordered parameters with their original value types."""
-        return tuple(
-            (entry.name, entry.value.decode())
-            for entry in self.parameter_entries
-        )
-
-    def as_param(self) -> dict[str, Any]:
-        """Materialize the mapping accepted by tad-dftd3."""
-        return dict(self.parameters)
-
-
-def core_dispersion_d3_setup(
-    setup: DispersionD3Cache,
-    setup_numbers: Tensor,
-    component_numbers: Tensor,
-    parameters: dict[str, Any],
-    *,
-    snapshot: bool = False,
-) -> DispersionD3CoreSetup:
-    """Represent one D3 component cache explicitly, keeping its two number sources.
-
-    The component API gathers ``rcov``, ``rvdw`` and ``r4r2`` from the numbers
-    passed to ``get_cache`` but evaluates the D3 kernels using the component's
-    own numbers. The two tensors are therefore retained separately.
-
-    ``snapshot`` is used only at the System ownership boundary: it clones the
-    number and parameter inputs while preserving their autograd edges. Other
-    cache tensors transfer to the Node when the component cache entry is replaced.
-    """
-    if setup.counting_function is not exp_count:
-        raise TypeError(
-            "System-owned D3 setup requires the built-in stateless exp_count "
-            "counting function."
-        )
-    if setup.weighting_function is not d3.model.gaussian_weight:
-        raise TypeError(
-            "System-owned D3 setup requires the built-in stateless "
-            "gaussian_weight function."
-        )
-    if setup.damping_function is not d3.damping.rational_damping:
-        raise TypeError(
-            "System-owned D3 setup requires the built-in stateless "
-            "rational_damping function."
-        )
-
-    def capture(value: Any) -> Any:
-        return (
-            value.clone() if snapshot and isinstance(value, Tensor) else value
-        )
-
-    return DispersionD3CoreSetup(
-        setup_numbers=capture(setup_numbers),
-        component_numbers=capture(component_numbers),
-        parameter_entries=tuple(
-            _D3NamedParameter(
-                name=name,
-                value=_D3ParameterValue.encode(capture(value)),
-            )
-            for name, value in parameters.items()
-        ),
-        reference_cn=setup.ref.cn,
-        reference_c6=setup.ref.c6,
-        rcov=setup.rcov,
-        rvdw=setup.rvdw,
-        r4r2=setup.r4r2,
-        cutoff=setup.cutoff,
-        counting_function=setup.counting_function,
-        weighting_function=setup.weighting_function,
-        damping_function=setup.damping_function,
-    )
-
-
 def dispersion_d3_energy(
-    setup: DispersionD3CoreSetup,
+    setup: DispersionD3Setup,
     positions: Tensor,
 ) -> Tensor:
     """Evaluate D3 using only captured setup values and call-local geometry."""
@@ -239,15 +92,10 @@ def dispersion_d3_energy(
     # same mapped axis as its reference weights; without this zero-valued
     # structural broadcast, conformer vmap can mistake the atom axis for the
     # conformer axis (or reject the call when the dimensions differ).
-    numbers = setup.component_numbers + torch.zeros_like(
-        positions[..., 0], dtype=setup.component_numbers.dtype
+    numbers = setup.numbers + torch.zeros_like(
+        positions[..., 0], dtype=setup.numbers.dtype
     )
-    # Reference is a lightweight view over immutable captured tensor tables;
-    # the upstream weighting/C6 routines only read these values.
-    reference = d3.reference.Reference(
-        cn=setup.reference_cn,
-        c6=setup.reference_c6,
-    )
+    reference = setup.ref
     cn = d3.ncoord.coordination_number(
         numbers,
         positions,
@@ -262,7 +110,7 @@ def dispersion_d3_energy(
     return d3.disp.dispersion(
         numbers,
         positions,
-        setup.as_param(),
+        setup.param,
         c6,
         setup.rvdw,
         setup.r4r2,
@@ -283,7 +131,7 @@ class DispersionD3(Dispersion):
     @override
     def get_cache(
         self, numbers: Tensor, ihelp: IndexHelper | None = None, **kwargs: Any
-    ) -> DispersionD3Cache:
+    ) -> DispersionD3Setup:
         """
         Obtain cache for storage of settings.
 
@@ -298,8 +146,8 @@ class DispersionD3(Dispersion):
 
         Returns
         -------
-        DispersionD3Cache
-            Cache for the D3 dispersion.
+        DispersionD3Setup
+            Setup for the D3 dispersion.
         """
         ref = kwargs.pop(
             "ref",
@@ -332,7 +180,9 @@ class DispersionD3(Dispersion):
         wf = kwargs.pop("weighting_function", d3.model.gaussian_weight)
         df = kwargs.pop("damping_function", d3.damping.rational_damping)
 
-        return DispersionD3Cache(
+        return DispersionD3Setup(
+            numbers=self.numbers.clone(),
+            param={key: value.clone() for key, value in self.param.items()},
             ref=ref,
             rcov=rcov,
             rvdw=rvdw,
@@ -345,7 +195,7 @@ class DispersionD3(Dispersion):
 
     @override
     def get_energy(
-        self, positions: Tensor, cache: ComponentCache, **kwargs: Any
+        self, positions: Tensor, cache: DispersionD3Setup, **kwargs: Any
     ) -> Tensor:
         """
         Get D3 dispersion energy.
@@ -354,45 +204,16 @@ class DispersionD3(Dispersion):
         ----------
         positions : Tensor
             Cartesian coordinates of all atoms (shape: ``(..., nat, 3)``).
-        cache : ComponentCache
-            Dispersion cache containing settings.
+        cache : DispersionD3Setup
+            Numbers-only D3 setup.
 
         Returns
         -------
         Tensor
             Atom-resolved D3 dispersion energy.
         """
-        if isinstance(cache, DispersionD3CoreSetup):
-            return dispersion_d3_energy(cache, positions)
-
-        if not isinstance(cache, DispersionD3Cache):
+        if not isinstance(cache, DispersionD3Setup):
             raise TypeError(
-                f"Cache in {self.label} is not of type 'DispersionD3Cache'."
+                f"Setup in {self.label} is not of type 'DispersionD3Setup'."
             )
-
-        cn = d3.ncoord.coordination_number(
-            self.numbers,
-            positions,
-            counting_function=cache.counting_function,
-            rcov=cache.rcov,
-            cutoff=cache.cutoff,
-        )
-        weights = d3.model.weight_references(
-            self.numbers, cn, cache.ref, cache.weighting_function
-        )
-
-        c6 = d3.model.atomic_c6(self.numbers, weights, cache.ref)
-
-        return d3.disp.dispersion(
-            self.numbers,
-            positions,
-            self.param,
-            c6,
-            cache.rvdw,
-            cache.r4r2,
-            cache.damping_function,
-            cutoff=d3.Cutoff(
-                disp2=_DXTB_D3_DISPERSION_CUTOFF,
-                disp3=_DXTB_D3_DISPERSION_CUTOFF,
-            ),
-        )
+        return dispersion_d3_energy(cache, positions)

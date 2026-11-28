@@ -444,7 +444,6 @@ def setup_scf_inputs(
         interactions,
         interaction_data,
         numbers,
-        d4sc_setup=getattr(interaction_data, "d4sc_setup", None),
         kind_by_label=getattr(interaction_data, "scf_kinds", None),
         target_dtype=fdtype,
     )
@@ -458,28 +457,21 @@ def setup_scf_inputs(
                 _check_scf_tensor(f"custom.{t_name}", t_val, dev, t_val.dtype)
             continue
         if entry.kind == "d4sc":
-            setup = entry.option("setup")
-            rc6 = getattr(setup, "model_rc6", None)
-            _check_scf_tensor("d4sc.setup.model_rc6", rc6, dev, fdtype)
+            model = entry.option("model")
+            rc6 = getattr(model, "rc6", None)
+            _check_scf_tensor("d4sc.model.rc6", rc6, dev, fdtype)
             assert isinstance(rc6, Tensor)
             if rc6.ndim != len(b) + 4 or rc6.shape[-2] != rc6.shape[-1]:
-                raise ValueError("SCFInputs 'd4sc.setup.model_rc6' invalid.")
+                raise ValueError("SCFInputs 'd4sc.model.rc6' invalid.")
             nref = int(rc6.shape[-1])
             d4_shapes = {
                 "numbers": (*b, nat),
-                "rcov": (*b, nat),
-                "r4r2": (*b, nat),
-                "pair_weight": (*b, nat, nat),
-                "model_rc6": (*b, nat, nat, nref, nref),
+                "rc6": (*b, nat, nat, nref, nref),
             }
-            for path, leaf in tensor_leaves(setup):
-                dt = (
-                    None
-                    if path == "numbers"
-                    else (fdtype if leaf.is_floating_point() else leaf.dtype)
-                )
+            for path, leaf in tensor_leaves(model):
+                dt = fdtype if leaf.is_floating_point() else leaf.dtype
                 _check_scf_tensor(
-                    f"d4sc.setup.{path}", leaf, dev, dt, d4_shapes.get(path)
+                    f"d4sc.model.{path}", leaf, dev, dt, d4_shapes.get(path)
                 )
             req = {"cn": (*b, nat), "dispmat": (*b, nat, nat, nref, nref)}
         else:

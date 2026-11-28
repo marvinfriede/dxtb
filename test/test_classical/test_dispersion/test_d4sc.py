@@ -173,14 +173,13 @@ def test_h3_7_d4sc_casimir_polder_derivatives_and_compatibility() -> None:
     1. Analytical D4SC atom potential matches autograd `dE_disp/dq`.
     2. Second derivatives (`d^2E/dq^2` and `d^2E/dr dq`) match finite differences
        and `torch.func` Jacobians.
-    3. Custom `D4Model` subclasses are preserved in `setup_d4sc` / `D4SCCoreSetup`,
+    3. Custom `D4Model` subclasses are preserved in `setup_d4sc` / `D4SCSetup`,
        while non-`RationalDamping` strategies are explicitly rejected with `TypeError`.
     """
     from dxtb._src.components.classicals.dispersion import _d4_adapter as d4_compat
     from dxtb._src.components.interactions.dispersion.d4sc import (
         DispersionD4SC,
-        build_d4sc_data,
-        core_d4sc_setup,
+        build_d4sc_cache,
         new_d4sc,
         setup_d4sc,
     )
@@ -194,14 +193,14 @@ def test_h3_7_d4sc_casimir_polder_derivatives_and_compatibility() -> None:
     assert isinstance(comp, DispersionD4SC)
     q0 = torch.linspace(-0.2, 0.2, numbers.numel(), **dd)
 
-    core_setup = core_d4sc_setup(setup_d4sc(comp, numbers))
+    core_setup = setup_d4sc(comp, numbers)
 
     def energy_fn(pos_in: torch.Tensor, q_in: torch.Tensor) -> torch.Tensor:
-        cache = build_d4sc_data(core_setup, pos_in)
+        cache = build_d4sc_cache(core_setup, pos_in)
         return comp.get_monopole_atom_energy(cache, q_in).sum()
 
     def pot_fn(pos_in: torch.Tensor, q_in: torch.Tensor) -> torch.Tensor:
-        cache = build_d4sc_data(core_setup, pos_in)
+        cache = build_d4sc_cache(core_setup, pos_in)
         return comp.get_monopole_atom_potential(cache, q_in)
 
     pot_analytic = pot_fn(positions, q0)
@@ -240,8 +239,8 @@ def test_h3_7_d4sc_casimir_polder_derivatives_and_compatibility() -> None:
             return res * self.scale
 
     comp_custom_mod = DispersionD4SC(param=comp.param, model=_ScaledD4Model.create(numbers, ref_charges='gfn2', **dd), rcov=comp.rcov, r4r2=comp.r4r2, cutoff=comp.cutoff).to(**dd)
-    setup_custom = core_d4sc_setup(setup_d4sc(comp_custom_mod, numbers))
-    cache_custom = build_d4sc_data(setup_custom, positions)
+    setup_custom = setup_d4sc(comp_custom_mod, numbers)
+    cache_custom = build_d4sc_cache(setup_custom, positions)
     e_custom = comp_custom_mod.get_monopole_atom_energy(cache_custom, q0).sum()
     torch.testing.assert_close(
         e_custom, (1.25**2) * energy_fn(positions, q0), rtol=1e-13, atol=1e-14

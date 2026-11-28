@@ -38,7 +38,7 @@ from dxtb._src.components.classicals.ies import ies_energy
 from dxtb._src.components.classicals.shortrangebond import (
     short_range_bond_energy,
 )
-from dxtb._src.components.interactions.coulomb.multipole import build_aes2_data
+from dxtb._src.components.interactions.coulomb.multipole import build_aes2_cache
 from dxtb._src.xtb.gfn0 import GFN0Hamiltonian
 from dxtb._src.xtb.gfn1 import GFN1Hamiltonian
 from dxtb._src.xtb.gfn2 import GFN2Hamiltonian
@@ -339,7 +339,7 @@ def test_cn_model_integration_and_batched_geometry_differentiation() -> None:
     torch.testing.assert_close(
         e_d4_packed, _REF_D4_ENERGY, rtol=1e-12, atol=1e-13
     )
-    aes2_data = build_aes2_data(gfn2_sys.aes2_setup, batched_lih)
+    aes2_data = build_aes2_cache(gfn2_sys.aes2_setup, batched_lih)
     mrad_sum = aes2_data.mrad.sum(-1)
     assert not torch.allclose(mrad_sum[0], mrad_sum[1])
     torch.testing.assert_close(
@@ -389,14 +389,14 @@ def test_d4_custom_counting_function_changes_cn_and_matches_reference() -> None:
     cn_exp = cn_d4.replace(count=exp_count)(structure)
     assert not torch.allclose(cn_erf, cn_exp, atol=1e-4)
 
-    e_erf = d4.dftd4(h2o_num, h2o_pos, 0.0, setup.as_param(), q=q).sum()
+    e_erf = d4.dftd4(h2o_num, h2o_pos, 0.0, setup.param, q=q).sum()
     (g_erf,) = torch.autograd.grad(e_erf, h2o_pos, retain_graph=True)
 
     e_exp = d4.dftd4(
         h2o_num,
         h2o_pos,
         0.0,
-        setup.as_param(),
+        setup.param,
         q=q,
         counting_function=exp_count,
     ).sum()
@@ -407,7 +407,7 @@ def test_d4_custom_counting_function_changes_cn_and_matches_reference() -> None:
         h2o_num,
         h2o_pos,
         0.0,
-        setup.as_param(),
+        setup.param,
         q=q,
         cn_function=lambda num, pos, **_: cn_d4.replace(count=exp_count)(
             Structure(numbers=num, positions=pos)

@@ -168,7 +168,7 @@ def test_classical_d4_uses_explicit_setup_without_persistent_cache() -> None:
     assert (
         not found
     ), "Persistent classical D4 cache path returned: " + ", ".join(found)
-    assert "@dataclass(frozen=True, eq=False)\nclass DispersionD4Setup" in d4
+    assert "class DispersionD4Setup(Node):" in d4
 
     energy = d4.split("def dispersion_d4_energy(", maxsplit=1)[1].split(
         "class DispersionD4(", maxsplit=1
@@ -196,7 +196,7 @@ def test_halogen_uses_fixed_shape_explicit_setup() -> None:
     )
     found = [token for token in forbidden if token in halogen]
     assert not found, "Dynamic halogen path returned: " + ", ".join(found)
-    assert "@dataclass(frozen=True, eq=False)\nclass HalogenSetup" in halogen
+    assert "class HalogenSetup(Node):" in halogen
 
     energy = halogen.split("def halogen_energy(", maxsplit=1)[1].split(
         "class Halogen(", maxsplit=1
@@ -220,8 +220,8 @@ def test_d4sc_uses_frozen_setup_and_call_local_model() -> None:
     )
     found = [token for token in forbidden if token in d4sc]
     assert not found, "Persistent D4SC cache path returned: " + ", ".join(found)
-    assert "@dataclass(frozen=True, eq=False)\nclass D4SCSetup" in d4sc
-    assert "def build_d4sc_data(" in d4sc
+    assert "class D4SCSetup(Node):" in d4sc
+    assert "def build_d4sc_cache(" in d4sc
 
     for method, next_method in (
         ("get_monopole_atom_energy(", "get_monopole_atom_potential("),
@@ -238,7 +238,7 @@ def test_d4sc_uses_frozen_setup_and_call_local_model() -> None:
     singlepoint = (SRC / "_src" / "calculators" / "singlepoint.py").read_text()
     assert "system.d4sc_interaction" in singlepoint
     assert "system.d4sc_setup" in singlepoint
-    assert "build_d4sc_data(setup, positions)" in singlepoint
+    assert "build_d4sc_cache(setup, positions)" in singlepoint
 
     interaction_list = (
         SRC / "_src" / "components" / "interactions" / "list.py"

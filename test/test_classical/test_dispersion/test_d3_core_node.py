@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+from tad_mctc.data import radii
 from tad_mctc.ncoord import exp_count
 from tad_mctc.tree import stack
 from torch.utils._pytree import tree_flatten, tree_unflatten
@@ -13,12 +14,11 @@ from dxtb import GFN1_XTB, Calculator
 from dxtb._src.calculators.model import Model
 from dxtb._src.components.classicals import (
     ClassicalList,
-    DispersionD3CoreSetup,
+    DispersionD3Setup,
     new_repulsion,
 )
 from dxtb._src.components.classicals.dispersion import (
-    DispersionD3Cache,
-    core_dispersion_d3_setup,
+    DispersionD3Setup,
     dispersion_d3_energy,
     new_dispersion,
 )
@@ -31,12 +31,12 @@ from .samples import samples
 def test_local_d3_cutoffs_match_supported_legacy_pair_and_atm_limits() -> None:
     """The local D3 adapter keeps its shared 50-bohr pre-migration limit."""
     numbers = torch.tensor([8, 1, 1], dtype=torch.int64)
-    component, cache, core = _core(numbers)
-    component.param["s9"] = torch.tensor(1.0, dtype=torch.double)
-    core = core_dispersion_d3_setup(
-        cache, numbers, component.numbers, component.param
+    component = _component(numbers)
+    component = component.replace(
+        param={**component.param, "s9": torch.tensor(1.0, dtype=torch.double)}
     )
-    parameters = core.as_param()
+    cache = core = component.get_cache(numbers)
+    parameters = core.param
     positions = torch.tensor(
         [[0.0, 0.0, 0.0], [45.0, 0.0, 0.0], [22.5, 38.97114317, 0.0]],
         dtype=torch.double,
@@ -132,18 +132,12 @@ def _component(numbers: torch.Tensor):
     return component
 
 
-def _core(numbers: torch.Tensor, setup_numbers: torch.Tensor | None = None):
+def _setup(numbers: torch.Tensor, setup_numbers: torch.Tensor | None = None):
     component = _component(numbers)
     gathered_numbers = numbers if setup_numbers is None else setup_numbers
-    cache = component.get_cache(gathered_numbers)
-    assert isinstance(cache, DispersionD3Cache)
-    return (
-        component,
-        cache,
-        core_dispersion_d3_setup(
-            cache, gathered_numbers, component.numbers, component.param
-        ),
-    )
+    setup = component.get_cache(gathered_numbers)
+    assert isinstance(setup, DispersionD3Setup)
+    return component, setup
 
 
 def test_duplicate_canonical_d3_labels_are_rejected() -> None:
@@ -183,68 +177,52 @@ def test_duplicate_canonical_d3_labels_are_rejected() -> None:
     assert distinct_labels.components == [first, second]
 
 
-def test_core_schema_and_pytree_roundtrip() -> None:
+def test_setup_schema_and_pytree_roundtrip() -> None:
+    """The D3 setup holds the component numbers and parameters as leaves."""
     numbers = samples["C4H5NCS"]["numbers"]
-    component, cache, core = _core(numbers)
-    assert type(core) is DispersionD3CoreSetup
-    assert core.setup_numbers is numbers
-    assert core.component_numbers is component.numbers
-    assert core.reference_cn is cache.ref.cn
-    assert core.reference_c6 is cache.ref.c6
-    for name in ("rcov", "rvdw", "r4r2", "cutoff"):
-        assert getattr(core, name) is getattr(cache, name)
-    assert tuple(name for name, _ in core.parameters) == tuple(component.param)
-    for (name, value), (_, original) in zip(
-        core.parameters, component.param.items(), strict=True
-    ):
-        assert name in component.param
-        if isinstance(value, torch.Tensor):
-            assert value is original
-        else:
-            assert value == original
+    component, setup = _setup(numbers)
+    assert torch.equal(setup.numbers, component.numbers)
+    assert tuple(setup.param) == tuple(component.param)
+    for name, value in setup.param.items():
+        assert value is not component.param[name]
+        assert torch.equal(value, component.param[name])
 
-    leaves, spec = tree_flatten(core)
+    leaves, spec = tree_flatten(setup)
     assert all(isinstance(leaf, torch.Tensor) for leaf in leaves)
-    assert any(leaf is core.setup_numbers for leaf in leaves)
-    assert any(leaf is core.component_numbers for leaf in leaves)
+    assert any(leaf is setup.numbers for leaf in leaves)
     rebuilt = tree_unflatten(leaves, spec)
-    assert type(rebuilt) is DispersionD3CoreSetup
-    assert rebuilt.counting_function is core.counting_function
-    assert rebuilt.weighting_function is core.weighting_function
-    assert rebuilt.damping_function is core.damping_function
-    for name in (
-        "setup_numbers",
-        "component_numbers",
-        "reference_cn",
-        "reference_c6",
-        "rcov",
-        "rvdw",
-        "r4r2",
-        "cutoff",
-    ):
-        assert getattr(rebuilt, name) is getattr(core, name)
+    assert type(rebuilt) is DispersionD3Setup
+    assert rebuilt.counting_function is setup.counting_function
+    assert rebuilt.weighting_function is setup.weighting_function
+    assert rebuilt.damping_function is setup.damping_function
+    for name in ("numbers", "rcov", "rvdw", "r4r2", "cutoff"):
+        assert getattr(rebuilt, name) is getattr(setup, name)
+    assert rebuilt.ref.cn is setup.ref.cn
 
 
-def test_core_conversion_and_energy_preserve_legacy_numbers_contract() -> None:
+def test_setup_gathers_tables_from_setup_numbers() -> None:
+    """Tables follow the numbers given to ``get_cache``; kernels the component's."""
     sample = samples["C4H5NCS"]
     numbers = sample["numbers"]
-    positions = sample["positions"].double()
     alternate_setup_numbers = numbers.roll(1)
-    component, legacy, core = _core(numbers, alternate_setup_numbers)
+    component, setup = _setup(numbers, alternate_setup_numbers)
 
-    assert not torch.equal(core.setup_numbers, core.component_numbers)
-    expected = component.get_energy(positions, legacy)
-    actual = dispersion_d3_energy(core, positions)
-    torch.testing.assert_close(actual, expected)
+    assert torch.equal(setup.numbers, component.numbers)
+    torch.testing.assert_close(
+        setup.rcov, radii.COV_D3(dtype=torch.double)[alternate_setup_numbers]
+    )
+    energy = dispersion_d3_energy(setup, sample["positions"].double())
+    assert torch.isfinite(energy).all()
 
 
-def test_core_dtype_conversion_and_transform_probe() -> None:
+def test_setup_dtype_conversion_and_transform_probe() -> None:
+    """Conversion casts floating leaves only; stacked setups can be vmapped."""
     numbers = samples["LiH"]["numbers"]
-    _, _, core = _core(numbers)
+    _, core = _setup(numbers)
     converted = core.to(dtype=torch.float32)
-    assert converted.component_numbers.dtype == numbers.dtype
-    assert converted.reference_cn.dtype == torch.float32
-    assert converted.reference_c6.dtype == torch.float32
+    assert converted.numbers.dtype == numbers.dtype
+    assert converted.ref.cn.dtype == torch.float32
+    assert converted.ref.c6.dtype == torch.float32
     assert converted.rcov.dtype == torch.float32
     assert converted.rvdw.dtype == torch.float32
     assert converted.r4r2.dtype == torch.float32
@@ -259,42 +237,11 @@ def test_core_dtype_conversion_and_transform_probe() -> None:
     meta = core.to(device="meta")
     meta_leaves, _ = tree_flatten(meta)
     assert all(leaf.device.type == "meta" for leaf in meta_leaves)
-    assert meta.component_numbers.dtype == numbers.dtype
+    assert meta.numbers.dtype == numbers.dtype
 
 
-def test_parameter_value_types_and_sparse_mapping_are_preserved() -> None:
-    numbers = samples["LiH"]["numbers"]
-    component = _component(numbers)
-    sparse = {"s6": torch.tensor(1.0, dtype=torch.double)}
-    cache = component.get_cache(numbers)
-    core = core_dispersion_d3_setup(cache, numbers, numbers, sparse)
-    assert tuple(name for name, _ in core.parameters) == ("s6",)
-    assert core.parameters[0][1] is sparse["s6"]
-
-    mixed = core_dispersion_d3_setup(
-        cache,
-        numbers,
-        numbers,
-        {
-            "tensor": torch.tensor(1, dtype=torch.int64),
-            "bool_tensor": torch.tensor(True),
-            "integer": 3,
-            "boolean": True,
-            "floating": 2.5,
-            "string": "kept",
-        },
-    )
-    moved = mixed.to(dtype=torch.float32)
-    values = dict(moved.parameters)
-    assert values["tensor"].dtype == torch.int64
-    assert values["bool_tensor"].dtype == torch.bool
-    assert type(values["integer"]) is int
-    assert type(values["boolean"]) is bool
-    assert type(values["floating"]) is float
-    assert type(values["string"]) is str
-
-
-def test_sparse_d3_parameters_preserve_energy() -> None:
+def test_sparse_d3_parameters_are_kept() -> None:
+    """A component with a sparse parameter mapping keeps exactly its keys."""
     numbers = samples["LiH"]["numbers"]
     positions = samples["LiH"]["positions"].double()
     sparse = {
@@ -305,16 +252,9 @@ def test_sparse_d3_parameters_preserve_energy() -> None:
     component = DispersionD3(numbers=numbers, param=sparse).to(
         dtype=torch.double
     )
-    legacy = component.get_cache(numbers)
-    core = core_dispersion_d3_setup(
-        legacy, numbers, component.numbers, component.param
-    )
-    assert tuple(name for name, _ in core.parameters) == tuple(sparse)
-    assert core.as_param().keys() == sparse.keys()
-    torch.testing.assert_close(
-        dispersion_d3_energy(core, positions),
-        component.get_energy(positions, legacy),
-    )
+    setup = component.get_cache(numbers)
+    assert setup.param.keys() == sparse.keys()
+    assert torch.isfinite(component.get_energy(positions, setup)).all()
 
 
 def test_custom_cache_callables_remain_legacy_compatible() -> None:
@@ -337,16 +277,12 @@ def test_custom_cache_callables_remain_legacy_compatible() -> None:
         weighting_function=weighting,
         damping_function=damping,
     )
-    assert isinstance(cache, DispersionD3Cache)
+    assert isinstance(cache, DispersionD3Setup)
     assert cache.counting_function is count
     assert cache.weighting_function is weighting
     assert cache.damping_function is damping
     result = component.get_energy(positions, cache)
     assert torch.isfinite(result).all()
-    with pytest.raises(TypeError, match="built-in stateless exp_count"):
-        core_dispersion_d3_setup(
-            cache, numbers, component.numbers, component.param
-        )
 
 
 def test_legacy_and_core_energy_position_and_parameter_gradients_match() -> (
@@ -360,10 +296,7 @@ def test_legacy_and_core_energy_position_and_parameter_gradients_match() -> (
     par.set_differentiable("dispersion", "d3", "s6")
     component = new_dispersion(numbers, par, dtype=torch.double)
     assert component is not None
-    legacy = component.get_cache(numbers)
-    core = core_dispersion_d3_setup(
-        legacy, numbers, component.numbers, component.param
-    )
+    legacy = core = component.get_cache(numbers)
     parameter = par.get("dispersion.d3.s6")
     p_legacy = sample["positions"].double().clone().requires_grad_(True)
     e_legacy = component.get_energy(p_legacy, legacy).sum()
@@ -400,7 +333,7 @@ def test_legacy_and_core_energy_position_and_parameter_gradients_match() -> (
         component.get_energy(sample["positions"].double(), core),
         component.get_energy(sample["positions"].double(), legacy),
     )
-    with pytest.raises(TypeError, match="DispersionD3Cache"):
+    with pytest.raises(TypeError, match="DispersionD3Setup"):
         component.get_energy(sample["positions"].double(), object())
 
 
@@ -427,7 +360,7 @@ def test_model_setup_owns_core_and_singlepoint_uses_it() -> None:
     ]
     assert len(setups) == 1
     setup = setups[0]
-    assert type(setup) is DispersionD3CoreSetup
+    assert type(setup) is DispersionD3Setup
     assert system.d3_setup is setup
     assert system.classical_cache[component.label] is setup
     result = system.singlepoint(positions)
@@ -454,12 +387,12 @@ def test_system_d3_setup_preserves_parameter_graph_and_snapshot() -> None:
     (gradient,) = torch.autograd.grad(before, leaf, retain_graph=True)
     assert torch.isfinite(gradient)
 
-    original = setup.as_param()["s6"]
+    original = setup.param["s6"]
     component.param["s6"] = torch.full_like(original, 0.25)
     component = component.replace(numbers=torch.ones_like(component.numbers))
     after = dispersion_d3_energy(setup, positions).sum()
     torch.testing.assert_close(after, before)
-    assert setup.as_param()["s6"] is not component.param["s6"]
+    assert setup.param["s6"] is not component.param["s6"]
 
 
 def test_system_d3_geometry_history_is_independent() -> None:
@@ -509,7 +442,7 @@ def test_classical_list_evaluates_system_owned_d3_core() -> None:
         if type(component) is DispersionD3
     )
     core = system.classical_cache[d3_component.label]
-    assert type(core) is DispersionD3CoreSetup
+    assert type(core) is DispersionD3Setup
 
     charge = torch.tensor(0.0, dtype=torch.double)
     contributions = system.classicals.get_energy(
@@ -526,37 +459,6 @@ def test_classical_list_evaluates_system_owned_d3_core() -> None:
     torch.testing.assert_close(
         d3_component.get_energy(positions, core),
         dispersion_d3_energy(core, positions),
-    )
-
-
-def test_core_cache_snapshot_and_legacy_component_ownership_diverge() -> None:
-    """Verify core cache authority survives component mutation."""
-    sample = samples["LiH"]
-    numbers = sample["numbers"]
-    positions = sample["positions"].double()
-    from dxtb.config import Config
-
-    system = Model(
-        par=ParamModule(GFN1_XTB, dtype=torch.double),
-        config=Config.create(exclude="scf"),
-    ).setup(numbers)
-    component, core = system.d3_setups[0]
-    legacy = component.get_cache(numbers)
-    cache = system.classical_cache
-    before_core = system.classicals.get_energy(positions, cache)[
-        component.label
-    ]
-    before_legacy = component.get_energy(positions, legacy)
-
-    component.param["s6"] = torch.full_like(component.param["s6"], 0.25)
-    component = component.replace(numbers=numbers.flip(0))
-
-    after_core = system.classicals.get_energy(positions, cache)[component.label]
-    after_legacy = component.get_energy(positions, legacy)
-    torch.testing.assert_close(after_core, before_core)
-    assert not torch.allclose(after_legacy, before_legacy)
-    torch.testing.assert_close(
-        after_core, dispersion_d3_energy(core, positions)
     )
 
 
@@ -619,8 +521,8 @@ def test_legacy_cache_api_and_distinct_custom_labels() -> None:
     second = second.replace(label="D3:second")
     classicals = ClassicalList(first, second)
     caches = classicals.get_cache(numbers, None)  # type: ignore[arg-type]
-    assert isinstance(caches[first.label], DispersionD3Cache)
-    assert isinstance(caches[second.label], DispersionD3Cache)
+    assert isinstance(caches[first.label], DispersionD3Setup)
+    assert isinstance(caches[second.label], DispersionD3Setup)
 
 
 def test_exact_custom_d3_replacement_is_captured() -> None:
@@ -641,7 +543,7 @@ def test_exact_custom_d3_replacement_is_captured() -> None:
     assert len(system.d3_setups) == 1
     selected, setup = system.d3_setups[0]
     assert selected is replacement
-    assert setup.as_param()["s6"].item() == pytest.approx(0.3)
+    assert setup.param["s6"].item() == pytest.approx(0.3)
     result = system.singlepoint(positions)
     contribution = dict(result.classical)[replacement.label]
     torch.testing.assert_close(
@@ -726,7 +628,7 @@ def test_d3_subclass_evaluates_via_custom_classical_path() -> None:
     ).setup(numbers)
     assert system.d3_setups == ()
     assert isinstance(
-        system.classical_cache[extension.label], DispersionD3Cache
+        system.classical_cache[extension.label], DispersionD3Setup
     )
     system.singlepoint(positions)
     assert len(energy_calls) == 1

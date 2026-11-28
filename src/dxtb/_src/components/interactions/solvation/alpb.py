@@ -57,8 +57,6 @@ Example
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import torch
 from tad_mctc import storch
 from tad_mctc.batch import real_pairs
@@ -92,11 +90,9 @@ DEFAULT_BORN_OFFSET = 0.0
 
 __all__ = [
     "GeneralizedBorn",
-    "GeneralizedBornCoreSetup",
     "GeneralizedBornSetup",
     "LABEL_GENERALIZED_BORN",
-    "build_generalized_born_data",
-    "core_generalized_born_setup",
+    "build_generalized_born_cache",
     "new_solvation",
     "setup_generalized_born",
 ]
@@ -206,25 +202,8 @@ class GeneralizedBornCache(InteractionCache):
     """Coulomb matrix."""
 
 
-@dataclass(frozen=True, eq=False)
-class GeneralizedBornSetup:
+class GeneralizedBornSetup(Node):
     """Static solvent configuration for one System."""
-
-    numbers: Tensor
-    kernel: str
-    alpbet: Tensor
-    keps: Tensor
-    rvdw: Tensor
-    born_scale: Tensor | float | int
-    born_offset: Tensor | float | int
-    cutoff: Tensor
-    descreening: Tensor | float | int
-    obc: Tensor
-    apply_alpb_shape_correction: bool
-
-
-class GeneralizedBornCoreSetup(Node):
-    """Immutable Node values used by single-System GeneralizedBorn evaluation."""
 
     numbers: Tensor = child(keep_dtype=True)
     kernel: str = context()
@@ -239,6 +218,16 @@ class GeneralizedBornCoreSetup(Node):
     descreening: Tensor | float | int = child(keep_dtype=True)
     obc: Tensor = child()
     apply_alpb_shape_correction: bool = context()
+
+    def _normalize(self) -> dict[str, Any]:
+        device = self.keps.device
+        updates = {}
+        for name in ("born_scale", "born_offset"):
+            value = getattr(self, name)
+            moved = _normalize_born_scalar(value, device)
+            if moved is not value:
+                updates[name] = moved
+        return updates
 
     def _convert_child(
         self,
@@ -255,30 +244,10 @@ class GeneralizedBornCoreSetup(Node):
         return super()._convert_child(name, value, device, dtype)
 
 
-def core_generalized_born_setup(
-    setup: GeneralizedBornSetup,
-) -> GeneralizedBornCoreSetup:
-    """Convert a component setup to the immutable core value."""
-    device = setup.keps.device
-    return GeneralizedBornCoreSetup(
-        numbers=setup.numbers,
-        kernel=setup.kernel,
-        alpbet=setup.alpbet,
-        keps=setup.keps,
-        rvdw=setup.rvdw,
-        born_scale=_normalize_core_born_scalar(setup.born_scale, device),
-        born_offset=_normalize_core_born_scalar(setup.born_offset, device),
-        cutoff=setup.cutoff,
-        descreening=setup.descreening,
-        obc=setup.obc,
-        apply_alpb_shape_correction=setup.apply_alpb_shape_correction,
-    )
-
-
-def _normalize_core_born_scalar(
+def _normalize_born_scalar(
     value: Tensor | float | int, device: torch.device
 ) -> Tensor | float | int:
-    """Move only supported CPU tensor scalars to the core setup device."""
+    """Move only supported CPU tensor scalars to the setup device."""
     if (
         isinstance(value, Tensor)
         and value.ndim == 0
@@ -317,8 +286,8 @@ def setup_generalized_born(
     )
 
 
-def build_generalized_born_data(
-    setup: GeneralizedBornSetup | GeneralizedBornCoreSetup, positions: Tensor
+def build_generalized_born_cache(
+    setup: GeneralizedBornSetup, positions: Tensor
 ) -> GeneralizedBornCache:
     """Build fresh geometry-dependent data for one solvation evaluation."""
     born = get_born_radii(
@@ -443,7 +412,7 @@ class GeneralizedBorn(Interaction):
         if positions is None:
             raise ValueError("Atomic positions are required for cache.")
 
-        return build_generalized_born_data(
+        return build_generalized_born_cache(
             setup_generalized_born(self, numbers), positions
         )
 

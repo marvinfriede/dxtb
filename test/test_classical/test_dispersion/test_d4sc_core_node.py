@@ -18,8 +18,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError, fields, replace
-from typing import Any
+from dataclasses import FrozenInstanceError, fields
 
 import pytest
 import torch
@@ -32,16 +31,9 @@ from dxtb._src.calculators.singlepoint import _interaction_data
 from dxtb._src.components.classicals.dispersion import _d4_adapter as d4
 from dxtb._src.components.interactions import InteractionList
 from dxtb._src.components.interactions.dispersion.d4sc import (
-    D4SCCoreSetup,
     D4SCSetup,
     DispersionD4SC,
-    _build_d4sc_model,
-    _extra_model_state,
-    _restore_static,
-    _StaticList,
-    _StaticMapping,
-    build_d4sc_data,
-    core_d4sc_setup,
+    build_d4sc_cache,
     new_d4sc,
     setup_d4sc,
 )
@@ -75,224 +67,85 @@ def _model() -> Model:
     )
 
 
-def _tensor_occurrences(value: Any) -> list[Tensor]:
-    if isinstance(value, Tensor):
-        return [value]
-    if isinstance(value, _StaticMapping):
-        return [
-            tensor
-            for key, item in value.items
-            for tensor in (_tensor_occurrences(key) + _tensor_occurrences(item))
-        ]
-    if isinstance(value, _StaticList):
-        return [
-            tensor
-            for item in value.items
-            for tensor in _tensor_occurrences(item)
-        ]
-    if isinstance(value, (tuple, list)):
-        return [
-            tensor for item in value for tensor in _tensor_occurrences(item)
-        ]
-    return []
-
-
-def _core_tensor_values(value: Any) -> list[Tensor]:
-    if isinstance(value, Tensor):
-        return [value]
-    if isinstance(value, (tuple, list)):
-        return [
-            tensor for item in value for tensor in _core_tensor_values(item)
-        ]
-    if isinstance(value, dict):
-        return [
-            tensor
-            for item in value.values()
-            for tensor in _core_tensor_values(item)
-        ]
-    if isinstance(value, _StaticMapping):
-        return [
-            tensor
-            for key, item in value.items
-            for tensor in (_core_tensor_values(key) + _core_tensor_values(item))
-        ]
-    if isinstance(value, _StaticList):
-        return [
-            tensor
-            for item in value.items
-            for tensor in _core_tensor_values(item)
-        ]
-    return []
-
-
 def _setup_tensors(setup: D4SCSetup) -> list[Tensor]:
     return [
         setup.numbers,
-        *_tensor_occurrences(setup.parameters),
+        *setup.param.values(),
         setup.rcov,
         setup.r4r2,
         setup.cn_cutoff,
         setup.pair_weight,
-        setup.model_wf,
-        setup.model_rc6,
-        *_tensor_occurrences(setup.model_extra),
+        setup.model.numbers,
+        setup.model.wf,
+        setup.model.rc6,
     ]
 
 
-def test_core_node_roundtrip_has_complete_dynamic_tensor_leaves() -> None:
-    """D4SC core round-trips every tensor as one dynamic leaf."""
+def test_setup_roundtrip_has_complete_dynamic_tensor_leaves() -> None:
+    """The D4SC setup round-trips every tensor as one dynamic leaf."""
     numbers, _ = _sample()
-    legacy = setup_d4sc(_interaction(numbers), numbers)
-    core = core_d4sc_setup(legacy)
+    setup = setup_d4sc(_interaction(numbers), numbers)
 
-    assert isinstance(core, Node)
-    assert type(core) is D4SCCoreSetup
-    assert [field.name for field in fields(core)] == [
+    assert isinstance(setup, Node)
+    assert [field.name for field in fields(setup)] == [
         "numbers",
-        "parameter_entries",
+        "param",
         "rcov",
         "r4r2",
         "cn_cutoff",
         "pair_weight",
+        "model",
         "counting_function",
-        "model_type",
-        "model_ga",
-        "model_gc",
-        "model_wf",
-        "model_ref_charges",
-        "model_rc6",
-        "model_extra_entries",
     ]
 
-    leaves, spec = _pytree.tree_flatten(core)
+    leaves, spec = _pytree.tree_flatten(setup)
     rebuilt = _pytree.tree_unflatten(leaves, spec)
-    assert type(rebuilt) is D4SCCoreSetup
+    assert type(rebuilt) is D4SCSetup
     assert all(isinstance(leaf, Tensor) for leaf in leaves)
-    assert len(leaves) == len(_setup_tensors(legacy))
-    assert all(new is old for new, old in zip(leaves, _setup_tensors(legacy)))
-    path_leaves, path_spec = _pytree.tree_flatten_with_path(core)
-    repeat_paths, repeat_spec = _pytree.tree_flatten_with_path(core)
-    assert path_spec == repeat_spec
-    assert [path for path, _ in path_leaves] == [
-        path for path, _ in repeat_paths
+    assert len(leaves) == len(_setup_tensors(setup))
+    assert all(new is old for new, old in zip(leaves, _setup_tensors(setup)))
+    rendered_paths = [
+        str(path) for path, _ in _pytree.tree_flatten_with_path(setup)[0]
     ]
-    rendered_paths = [str(path) for path, _ in path_leaves]
-    assert any("numbers" in path for path in rendered_paths)
-    assert any("rcov" in path for path in rendered_paths)
-    assert any("model_wf" in path for path in rendered_paths)
-    assert any("parameter_entries" in path for path in rendered_paths)
-    assert rebuilt.parameters == core.parameters
-    assert rebuilt.model_extra == core.model_extra
-    assert rebuilt.counting_function is legacy.counting_function
-    assert rebuilt.model_type is legacy.model_type
-    assert rebuilt.model_ga == legacy.model_ga
-    assert rebuilt.model_gc == legacy.model_gc
-    assert rebuilt.model_ref_charges == legacy.model_ref_charges
-    assert core.to() is core
-    assert not any(
-        isinstance(getattr(core, field.name), (D4SCSetup, DispersionD4SC))
-        for field in fields(core)
-    )
+    assert any("param" in path for path in rendered_paths)
+    assert any("model" in path for path in rendered_paths)
+    assert rebuilt.counting_function is setup.counting_function
+    assert type(rebuilt.model) is type(setup.model)
+    assert rebuilt.model.ga == setup.model.ga
+    assert setup.to() is setup
 
 
-def test_sparse_parameters_roundtrip_without_filling_missing_values() -> None:
+def test_sparse_parameters_are_not_filled() -> None:
     """Sparse D4 parameter mappings retain their exact ordered keys."""
     numbers, _ = _sample()
-    legacy = setup_d4sc(_interaction(numbers), numbers)
+    setup = setup_d4sc(_interaction(numbers), numbers)
     for omitted in ("s9", "s10"):
-        sparse = replace(
-            legacy,
-            parameters=tuple(
-                (name, value)
-                for name, value in legacy.parameters
-                if name != omitted
-            ),
-        )
-        core = core_d4sc_setup(sparse)
-        assert tuple(name for name, _ in core.parameters) == tuple(
-            name for name, _ in sparse.parameters
-        )
-        assert tuple(core.as_param().keys()) == tuple(
-            name for name, _ in sparse.as_param().items()
-        )
-        rebuilt_params = dict(core.as_param().items())
-        original_params = dict(sparse.as_param().items())
-        for name, value in original_params.items():
-            rebuilt_value = rebuilt_params[name]
-            if isinstance(value, Tensor):
-                torch.testing.assert_close(rebuilt_value, value)
-            else:
-                assert type(rebuilt_value) is type(value)
-                assert rebuilt_value == value
-        for (core_name, core_value), (old_name, old_value) in zip(
-            core.parameters, sparse.parameters
-        ):
-            assert core_name == old_name
-            if isinstance(old_value, Tensor):
-                assert core_value is old_value
-            else:
-                assert type(core_value) is type(old_value)
-                assert core_value == old_value
+        param = {k: v for k, v in setup.param.items() if k != omitted}
+        sparse = setup.replace(param=param)
+        assert tuple(sparse.param) == tuple(param)
 
 
-def test_mixed_parameter_dtype_is_preserved_until_explicit_conversion() -> None:
-    """Mixed-dtype setup tensors remain dynamic without implicit casting."""
-    numbers, _ = _sample()
-    legacy = setup_d4sc(_interaction(numbers), numbers)
-    parameters = tuple(
-        (
-            name,
-            (
-                value.to(dtype=torch.float32)
-                if name == "a1" and isinstance(value, Tensor)
-                else value
-            ),
-        )
-        for name, value in legacy.parameters
-    )
-    mixed = replace(legacy, parameters=parameters)
-    core = core_d4sc_setup(mixed)
-    values = dict(core.parameters)
-    assert values["a1"].dtype == torch.float32
-    assert values["a2"].dtype == torch.float64
-    assert core.to() is core
-    converted = core.to(dtype=torch.float32)
-    assert all(
-        not isinstance(value, Tensor) or value.dtype == torch.float32
-        for _, value in converted.parameters
-    )
-
-
-def test_core_node_conversion_and_compatible_stack_vmap() -> None:
-    """Core values convert dtype/device and map over matching structures."""
+def test_setup_conversion_and_compatible_stack_vmap() -> None:
+    """Setup values convert dtype/device and map over matching structures."""
     numbers_a, _ = _sample("LiH")
-    first = core_d4sc_setup(setup_d4sc(_interaction(numbers_a), numbers_a))
+    first = setup_d4sc(_interaction(numbers_a), numbers_a)
     second = first.replace(numbers=torch.tensor([11, 1]))
 
     converted = first.to(dtype=torch.float32)
     assert converted.numbers.dtype == first.numbers.dtype
     assert converted.rcov.dtype == torch.float32
-    assert all(
-        not isinstance(value, Tensor) or value.dtype == torch.float32
-        for _, value in converted.parameters
-    )
-    assert converted.model_type is first.model_type
+    assert converted.model.rc6.dtype == torch.float32
+    assert all(v.dtype == torch.float32 for v in converted.param.values())
     assert converted.counting_function is first.counting_function
     meta = first.to(device="meta")
     assert meta.numbers.device.type == "meta"
-    assert meta.model_rc6.device.type == "meta"
-    assert all(
-        value.device.type == "meta"
-        for _, value in meta.parameters
-        if isinstance(value, Tensor)
-    )
+    assert meta.model.rc6.device.type == "meta"
+    assert all(v.device.type == "meta" for v in meta.param.values())
     with pytest.raises(FrozenInstanceError):
         first.rcov = torch.ones_like(first.rcov)  # type: ignore[misc]
-    with pytest.raises(FrozenInstanceError):
-        first.model_type = d4.model.D4Model  # type: ignore[misc]
 
     stacked = stack((first, second))
-    assert type(stacked) is D4SCCoreSetup
+    assert type(stacked) is D4SCSetup
     assert stacked.numbers.shape[0] == 2
     assert stacked.rcov.shape[0] == 2
     torch.testing.assert_close(
@@ -305,15 +158,15 @@ def test_system_owns_core_node_and_core_builder_matches_legacy() -> None:
     """Model setup stores one Node and both setup forms share D4 physics."""
     numbers, positions = _sample()
     system = _model().setup(numbers)
-    assert type(system.d4sc_setup) is D4SCCoreSetup
+    assert type(system.d4sc_setup) is D4SCSetup
     assert system.d4sc_interaction is not None
     setup = system.d4sc_setup
     assert setup is not None
     legacy = setup_d4sc(system.d4sc_interaction, numbers)
-    assert setup.parameters == legacy.parameters
-    assert setup.model_type is legacy.model_type
-    legacy_data = build_d4sc_data(legacy, positions)
-    core_data = build_d4sc_data(setup, positions)
+    assert setup.param.keys() == legacy.param.keys()
+    assert type(setup.model) is type(legacy.model)
+    legacy_data = build_d4sc_cache(legacy, positions)
+    core_data = build_d4sc_cache(setup, positions)
     torch.testing.assert_close(core_data.cn, legacy_data.cn)
     torch.testing.assert_close(core_data.dispmat, legacy_data.dispmat)
     torch.testing.assert_close(core_data.model.rc6, legacy_data.model.rc6)

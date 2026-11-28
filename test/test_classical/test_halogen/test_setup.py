@@ -30,7 +30,6 @@ from dxtb import GFN1_XTB, Calculator, ParamModule
 from dxtb._src.calculators.model import Model
 from dxtb._src.components.classicals import (
     Halogen,
-    HalogenCoreSetup,
     HalogenSetup,
     halogen_energy,
     new_halogen,
@@ -85,7 +84,7 @@ def test_setup_is_frozen_and_contains_only_structural_values() -> None:
     system = _model(get_param_module("gfn1", **DD)).setup(numbers)
     setup = system.halogen_setup
 
-    assert type(setup) is HalogenCoreSetup
+    assert type(setup) is HalogenSetup
     assert system.halogen_classical is not None
     assert {field.name for field in fields(setup)} == {
         "numbers",
@@ -131,7 +130,7 @@ def test_setup_is_frozen_and_contains_only_structural_values() -> None:
     assert isinstance(setup, Node)
     leaves, spec = _pytree.tree_flatten(setup)
     rebuilt = _pytree.tree_unflatten(leaves, spec)
-    assert type(rebuilt) is HalogenCoreSetup
+    assert type(rebuilt) is HalogenSetup
     assert all(a is b for a, b in zip(leaves, _pytree.tree_leaves(rebuilt)))
     converted = setup.to(dtype=torch.float32)
     assert converted.xbond.dtype == torch.float32
@@ -141,7 +140,7 @@ def test_setup_is_frozen_and_contains_only_structural_values() -> None:
     assert meta.numbers.device.type == "meta"
     assert meta.halogen_mask.dtype == torch.bool
     stacked = stack((setup, setup))
-    assert type(stacked) is HalogenCoreSetup
+    assert type(stacked) is HalogenSetup
     assert stacked.xbond.shape[0] == 2
 
 
@@ -192,7 +191,7 @@ def test_setup_honors_component_species_lists_and_freezes_them() -> None:
         config=Config.create(exclude=(*_EXCLUDE, "hal")),
         classical=(custom,),
     ).setup(numbers)
-    assert type(custom_system.halogen_setup) is HalogenCoreSetup
+    assert type(custom_system.halogen_setup) is HalogenSetup
     assert (
         custom_system.classical_cache["Halogen"] is custom_system.halogen_setup
     )
@@ -547,7 +546,7 @@ def test_exact_user_halogen_replaces_excluded_builtin() -> None:
     ).setup(numbers)
     default_system = _model(par).setup(numbers)
     assert custom_system.halogen_classical is custom
-    assert type(custom_system.halogen_setup) is HalogenCoreSetup
+    assert type(custom_system.halogen_setup) is HalogenSetup
     assert (
         custom_system.classical_cache["Halogen"] is custom_system.halogen_setup
     )

@@ -59,9 +59,7 @@ from .factory import new_halogen
 from .hal import (
     LABEL_HALOGEN,
     Halogen,
-    HalogenCoreSetup,
     HalogenSetup,
-    core_halogen_setup,
     halogen_energy,
     setup_halogen,
 )
@@ -69,10 +67,8 @@ from .hal import (
 __all__ = [
     "new_halogen",
     "Halogen",
-    "HalogenCoreSetup",
     "HalogenSetup",
     "LABEL_HALOGEN",
-    "core_halogen_setup",
     "halogen_energy",
     "setup_halogen",
 ]

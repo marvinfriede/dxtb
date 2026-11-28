@@ -51,8 +51,6 @@ Example
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import torch
 from tad_mctc.exceptions import DeviceError
 from tad_mctc.tree import Node, child, context
@@ -66,10 +64,9 @@ from ..base import Interaction, InteractionCache
 
 __all__ = [
     "ES3",
-    "ES3CoreSetup",
     "ES3Setup",
     "LABEL_ES3",
-    "core_es3_setup",
+    "build_es3_cache",
     "new_es3",
     "setup_es3",
 ]
@@ -79,27 +76,11 @@ LABEL_ES3 = "ES3"
 """Label for the :class:`.ES3` interaction, coinciding with the class name."""
 
 
-@dataclass(frozen=True, eq=False)
-class ES3Setup:
+class ES3Setup(Node):
     """Numbers-only parameter data for one ES3 evaluation."""
-
-    hubbard_derivs: Tensor
-    shell_resolved: bool
-
-
-class ES3CoreSetup(Node):
-    """Immutable Node values used by single-System ES3 evaluation."""
 
     hubbard_derivs: Tensor = child()
     shell_resolved: bool = context()
-
-
-def core_es3_setup(setup: ES3Setup) -> ES3CoreSetup:
-    """Convert a component setup to immutable core value fields."""
-    return ES3CoreSetup(
-        hubbard_derivs=setup.hubbard_derivs,
-        shell_resolved=setup.shell_resolved,
-    )
 
 
 class ES3Cache(InteractionCache):
@@ -172,9 +153,7 @@ class ES3(Interaction):
         setup = setup_es3(
             self.hubbard_derivs, ihelp, shell_scale=self.shell_scale
         )
-        return ES3Cache(
-            hd=setup.hubbard_derivs, shell_resolved=setup.shell_resolved
-        )
+        return build_es3_cache(setup)
 
     @override
     def get_monopole_atom_energy(
@@ -303,7 +282,16 @@ def setup_es3(
         scale = ihelp.spread_ushell_to_shell(shell_scale[ihelp.unique_angular])
         resolved = ihelp.spread_uspecies_to_shell(hubbard_derivs) * scale
 
-    return ES3Setup(resolved, shell_resolved=shell_scale is not None)
+    return ES3Setup(
+        hubbard_derivs=resolved, shell_resolved=shell_scale is not None
+    )
+
+
+def build_es3_cache(setup: ES3Setup) -> ES3Cache:
+    """Build the ES3 cache; it does not depend on the geometry."""
+    return ES3Cache(
+        hd=setup.hubbard_derivs, shell_resolved=setup.shell_resolved
+    )
 
 
 def new_es3(

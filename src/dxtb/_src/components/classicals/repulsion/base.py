@@ -55,7 +55,6 @@ Example
 from __future__ import annotations
 
 from abc import abstractmethod
-from dataclasses import dataclass
 
 import torch
 from tad_mctc import storch
@@ -71,56 +70,32 @@ from ..base import Classical
 
 __all__ = [
     "BaseRepulsion",
-    "RepulsionCoreSetup",
     "RepulsionSetup",
-    "core_repulsion_setup",
     "repulsion_energy",
     "setup_repulsion",
 ]
 
 
-@dataclass(frozen=True, eq=False)
-class RepulsionSetup:
+class RepulsionSetup(Node):
     """Numbers-only, parameter-derived values for repulsion evaluation."""
 
-    arep: Tensor
+    arep: Tensor = child()
     """Pair-specific screening parameters."""
 
-    zeff: Tensor
+    zeff: Tensor = child()
     """Pair-specific effective nuclear-charge products."""
 
-    kexp: Tensor
+    kexp: Tensor = child()
     """
     Scaling of the interatomic distance in the exponential damping function
     of the repulsion energy.
     """
 
-    mask: Tensor
+    mask: Tensor = child(keep_dtype=True)
     """Mask for real atom pairs, excluding padding and the diagonal."""
 
-    cutoff: Tensor
-    """Real-space cutoff captured at setup."""
-
-
-class RepulsionCoreSetup(Node):
-    """Immutable tensor values for single-System repulsion evaluation."""
-
-    arep: Tensor = child()
-    zeff: Tensor = child()
-    kexp: Tensor = child()
-    mask: Tensor = child(keep_dtype=True)
     cutoff: Tensor = child()
-
-
-def core_repulsion_setup(setup: RepulsionSetup) -> RepulsionCoreSetup:
-    """Convert component setup values without copying their tensors."""
-    return RepulsionCoreSetup(
-        arep=setup.arep,
-        zeff=setup.zeff,
-        kexp=setup.kexp,
-        mask=setup.mask,
-        cutoff=setup.cutoff,
-    )
+    """Real-space cutoff captured at setup."""
 
 
 def setup_repulsion(
@@ -166,9 +141,14 @@ def setup_repulsion(
         light_mask = ~real_pairs(numbers <= 2)
         pair_kexp = torch.where(light_mask, pair_kexp, klight) * mask
 
-    # Keep the component setup's mutable cutoff tensor from aliasing
-    # System setup while preserving a possible autograd edge.
-    return RepulsionSetup(pair_arep, pair_zeff, pair_kexp, mask, cutoff.clone())
+    # copy the cutoff (keeping its autograd edge) so the setup owns its tensors
+    return RepulsionSetup(
+        arep=pair_arep,
+        zeff=pair_zeff,
+        kexp=pair_kexp,
+        mask=mask,
+        cutoff=cutoff.clone(),
+    )
 
 
 class BaseRepulsion(Classical):
@@ -258,7 +238,7 @@ class BaseRepulsion(Classical):
     def get_energy(
         self,
         positions: Tensor,
-        cache: RepulsionSetup | RepulsionCoreSetup,
+        cache: RepulsionSetup,
         **kwargs: Any,
     ) -> Tensor:
         """

@@ -103,7 +103,6 @@ def _repulsion(method: str, wrt: str) -> Target:
     def build():
         # pylint: disable=import-outside-toplevel
         from dxtb._src.components.classicals import (
-            RepulsionSetup,
             new_repulsion,
         )
 
@@ -124,14 +123,7 @@ def _repulsion(method: str, wrt: str) -> Target:
         arep0 = cache.arep.detach().clone()
 
         def f(arep: Tensor) -> Tensor:
-            setup = RepulsionSetup(
-                arep,
-                cache.zeff,
-                cache.kexp,
-                cache.mask,
-                cache.cutoff,
-            )
-            return rep.get_energy(positions, setup)
+            return rep.get_energy(positions, cache.replace(arep=arep))
 
         return f, _leaf(arep0)
 
@@ -357,7 +349,7 @@ def _aes2_positions() -> Target:
     def build():
         from dxtb._src.components.interactions.container import Charges
         from dxtb._src.components.interactions.coulomb import (
-            build_aes2_data,
+            build_aes2_cache,
             new_aes2,
             setup_aes2,
         )
@@ -377,7 +369,7 @@ def _aes2_positions() -> Target:
         )
 
         def f(pos: Tensor) -> Tensor:
-            data = build_aes2_data(setup, pos)
+            data = build_aes2_cache(setup, pos)
             return interaction.get_energy(data, charges, ihelp).sum()
 
         return f, _leaf(positions)
@@ -390,7 +382,7 @@ def _d4sc_positions() -> Target:
 
     def build():
         from dxtb._src.components.interactions.dispersion.d4sc import (
-            build_d4sc_data,
+            build_d4sc_cache,
             new_d4sc,
             setup_d4sc,
         )
@@ -403,7 +395,7 @@ def _d4sc_positions() -> Target:
         charges = 0.05 * torch.arange(1, len(numbers) + 1, **DD)
 
         def f(x: Tensor) -> Tensor:
-            data = build_d4sc_data(setup, x)
+            data = build_d4sc_cache(setup, x)
             return interaction.get_monopole_atom_energy(data, charges)
 
         return f, _leaf(positions)
@@ -417,7 +409,7 @@ def _alpb_positions() -> Target:
     def build():
         from dxtb._src.components.interactions.solvation.alpb import (
             GeneralizedBorn,
-            build_generalized_born_data,
+            build_generalized_born_cache,
             setup_generalized_born,
         )
 
@@ -429,7 +421,7 @@ def _alpb_positions() -> Target:
         charges = torch.tensor([0.2, -0.1, -0.1], **DD)
 
         def f(pos: Tensor) -> Tensor:
-            data = build_generalized_born_data(setup, pos)
+            data = build_generalized_born_cache(setup, pos)
             return interaction.get_monopole_atom_energy(data, charges).sum()
 
         return f, _leaf(positions)
